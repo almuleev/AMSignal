@@ -7,10 +7,8 @@
 
 namespace gui {
 
-std::vector<COLORREF> g_channel_colors;
-
 COLORREF channel_color(std::size_t i) {
-    if (i < g_channel_colors.size()) return g_channel_colors[i];
+    if (i < g.channel_colors.size()) return g.channel_colors[i];
     return kPalette[i % (sizeof(kPalette) / sizeof(kPalette[0]))];
 }
 

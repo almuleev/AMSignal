@@ -6,6 +6,7 @@
 #include "gui_ids.hpp"
 #include "gui_layout.hpp"
 #include "gui_loading.hpp"
+#include "gui_documents.hpp"
 #include "gui_loading_drop.hpp"
 #include "gui_settings.hpp"
 #include "gui_side_panel.hpp"
@@ -385,9 +386,7 @@ LRESULT CALLBACK WelcomeRecentPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 if (index < g.recent_files.size()) {
                     const std::wstring path = g.recent_files[index];
                     hide_welcome_recent_files_panel();
-                    if (!load_path_interactive(path) && !g.last_error.empty()) {
-                        MessageBoxW(GetParent(hwnd), to_w(g.last_error).c_str(), g_str->msg_read_err, MB_ICONERROR | MB_OK);
-                    }
+                    queue_open_paths({path});
                 }
                 return 0;
             }

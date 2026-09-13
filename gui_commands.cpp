@@ -11,6 +11,7 @@
 #include "gui_settings_window.hpp"
 #include "gui_export.hpp"
 #include "gui_dialogs.hpp"
+#include "gui_documents.hpp"
 #include "gui_ids.hpp"
 #include "gui_input.hpp"
 #include "gui_layout.hpp"
@@ -44,13 +45,24 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COMMAND: {
             g_filter_slider_before.reset();
             const int id = LOWORD(wp);
+            if (id == IDC_DOCUMENT_SELECTOR && HIWORD(wp) == CBN_SELCHANGE) {
+                const int selected = static_cast<int>(SendMessageW(g.document_selector, CB_GETCURSEL, 0, 0));
+                if (selected >= 0) switch_to_document(static_cast<std::size_t>(selected));
+                return 0;
+            }
+            if (id >= IDM_OPEN_DOCUMENT_BASE && id < IDM_CLOSE_DOCUMENT) {
+                switch_to_document(static_cast<std::size_t>(id - IDM_OPEN_DOCUMENT_BASE));
+                return 0;
+            }
+            if (id == IDM_CLOSE_DOCUMENT || id == IDC_CLOSE_DOCUMENT) {
+                close_active_document();
+                return 0;
+            }
             if (g.mode == AnalysisMode::FRF && !frf_command_supported(id)) return 0;
             if (id >= IDM_RECENT_FILE_BASE &&
                 id < IDM_RECENT_FILE_BASE + static_cast<int>(g.recent_files.size())) {
                 const std::wstring path = g.recent_files[static_cast<std::size_t>(id - IDM_RECENT_FILE_BASE)];
-                if (!load_path_interactive(path) && !g.last_error.empty()) {
-                    MessageBoxW(hwnd, to_w(g.last_error).c_str(), g_str->msg_read_err, MB_ICONERROR | MB_OK);
-                }
+                queue_open_paths({path});
                 return 0;
             }
             switch (id) {
@@ -162,10 +174,10 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         cc.Flags = CC_FULLOPEN | CC_RGBINIT;
                         if (ChooseColorW(&cc)) {
                             const SettingsSnapshot before = capture_settings_snapshot();
-                            if (static_cast<std::size_t>(g.side_selected_channel) >= g_channel_colors.size()) {
-                                g_channel_colors.resize(g.ds.channel_count());
+                            if (static_cast<std::size_t>(g.side_selected_channel) >= g.channel_colors.size()) {
+                                g.channel_colors.resize(g.ds.channel_count());
                             }
-                            g_channel_colors[static_cast<std::size_t>(g.side_selected_channel)] = cc.rgbResult;
+                            g.channel_colors[static_cast<std::size_t>(g.side_selected_channel)] = cc.rgbResult;
                             record_settings_change(before);
                             refresh_settings_controls();
                             refresh_side_panel_controls();

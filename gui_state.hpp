@@ -76,9 +76,13 @@ struct FrfState {
     std::wstring processing_description;
 };
 
-struct App {
+// State which belongs to exactly one opened source.  App inherits this type so
+// the established g.ds / g.frf access pattern stays intact for the active
+// document; inactive documents own the same state in App::inactive_documents.
+struct DocumentState {
     lvm::Dataset ds;
     std::vector<char> visible;
+    std::vector<COLORREF> channel_colors;
     std::vector<MinMaxIndex> envelopes;
     std::vector<unsigned long long> envelope_serial;
     std::vector<std::wstring> channel_labels;  // user-editable display names
@@ -186,7 +190,6 @@ struct App {
     unsigned long long plot_analysis_serial = 1;
     bool pending_marker = false;
     int active_marker = -1;
-    bool light_mode = false;
     bool show_gap_markers = true;
     bool stitch_time_gaps = false;
     bool stitched_time_ready = false;
@@ -202,6 +205,18 @@ struct App {
     long long gap_details_missing_samples = 0;
     double gap_details_reference_step = 0.0;
     bool current_file_partial = false;
+    std::wstring source_path;
+    std::wstring file_name;
+    // Empty until the document has been saved as, or opened from, an AMSignal project.
+    std::wstring project_path;
+};
+
+struct App : DocumentState {
+    // Only one loader runs at a time.  Multi-select and multi-file drops are
+    // queued here; each result is moved into a separate DocumentState.
+    std::vector<DocumentState> inactive_documents;
+    std::vector<std::wstring> pending_open_paths;
+    bool light_mode = false;
     double light_mode_open_start = 0.0;
     double light_mode_open_end = 10.0;
     AsyncLoadStage async_load_stage = AsyncLoadStage::None;
@@ -212,15 +227,12 @@ struct App {
     double cached_scan_end = 0.0;
     bool cached_scan_valid = false;
     std::shared_ptr<const lvm::ScanIndex> cached_scan_index;
-
-    std::wstring file_name;
-    // Empty until the document has been saved as, or opened from, an AMSignal project.
-    std::wstring project_path;
     std::vector<std::wstring> recent_files;
     std::string last_error;
 
     HWND main = nullptr;
     HWND open = nullptr, savepng = nullptr, savecsv = nullptr;
+    HWND document_selector = nullptr, document_close = nullptr;
     HWND mode_time = nullptr, mode_freq = nullptr, mode_frf = nullptr;
     HWND frf_panel = nullptr;
     HWND play = nullptr, measure = nullptr, marker_btn = nullptr;

@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.15.0
+
+- Добавлена одновременная работа с несколькими исходными файлами. Диалог
+  открытия принимает множественный выбор, а drag-and-drop добавляет все
+  переданные файлы; один фоновый загрузчик обрабатывает их последовательно.
+- Каждый файл теперь является самостоятельным документом: отдельно хранятся
+  каналы и их цвета, формулы и фильтрация, временное выделение, режим
+  Time/FFT/FRF, кэши спектра и АЧХ, точки, линии и параметры отображения.
+  Переключение между документами не копирует большие массивы измерений:
+  состояния перемещаются между активным и неактивными слотами.
+- В верхнюю панель добавлен заметный селектор `Файлы (N): <имя>` для быстрого
+  перехода к любому открытому источнику и соседняя кнопка закрытия текущего
+  файла. Запасной список сохранён в `Файл → Открытые файлы`.
+- При переключении отменяются только незавершённые FFT/FRF-задачи; готовые
+  результаты и отдельные параметры каждого документа сохраняются. Добавлены
+  регрессионные проверки переключения и закрытия файлов.
+- Added concurrent work with multiple source files. The Open dialog supports
+  multi-select, drag-and-drop adds every supplied file, and one background
+  loader processes them sequentially.
+- Each file is now an independent document with its own channels and colors,
+  formulas and filtering, time selection, Time/FFT/FRF mode, spectrum and FRF
+  caches, measurement annotations, and display settings. Switching documents
+  moves state between active and inactive slots without copying large sample
+  arrays.
+- Added a prominent top-bar `Files (N): <name>` selector for fast document
+  switching and an adjacent Close button. `File → Open files` remains as an
+  alternative list.
+- Switching cancels only unfinished FFT/FRF tasks; completed results and each
+  document's settings remain available. Added regression coverage for document
+  switching and closing.
+
 ## v0.14.0
 
 - Полностью переработано «Сохранить как»: теперь оно явно разделяет проект,

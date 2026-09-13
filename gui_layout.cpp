@@ -33,6 +33,8 @@ void layout() {
     // Row 1: frequent global actions
     x = 8;
     place(g.open, text_button_width(g.open, 94, 32), 8);
+    place(g.document_selector, min(320, text_button_width(g.document_selector, 190, 46)), 8);
+    place(g.document_close, text_button_width(g.document_close, 72, 28), 8);
     sep();
     place(g.mode_time, text_button_width(g.mode_time, 72, 28), 8);
     place(g.mode_freq, text_button_width(g.mode_freq, 82, 28), 8);

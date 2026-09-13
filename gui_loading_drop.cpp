@@ -4,6 +4,7 @@
 #include "gui_dialogs.hpp"
 #include "gui_ids.hpp"
 #include "gui_loading.hpp"
+#include "gui_documents.hpp"
 #include "gui_state.hpp"
 #include "gui_text.hpp"
 #include "gui_theme.hpp"
@@ -170,14 +171,17 @@ void enable_file_drop_support(HWND hwnd) {
 void handle_file_drop(HWND hwnd, HDROP hDrop) {
     UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
     if (count > 0) {
-        UINT len = DragQueryFileW(hDrop, 0, nullptr, 0);
-        if (len > 0) {
+        std::vector<std::wstring> paths;
+        paths.reserve(count);
+        for (UINT i = 0; i < count; ++i) {
+            const UINT len = DragQueryFileW(hDrop, i, nullptr, 0);
+            if (len == 0) continue;
             std::vector<wchar_t> path(static_cast<std::size_t>(len) + 1, L'\0');
-            if (DragQueryFileW(hDrop, 0, path.data(), static_cast<UINT>(path.size()))) {
-                if (!load_path_interactive(path.data()) && !g.last_error.empty())
-                    MessageBoxW(hwnd, to_w(g.last_error).c_str(), g_str->msg_read_err, MB_ICONERROR | MB_OK);
+            if (DragQueryFileW(hDrop, i, path.data(), static_cast<UINT>(path.size()))) {
+                paths.emplace_back(path.data());
             }
         }
+        queue_open_paths(std::move(paths));
     }
     DragFinish(hDrop);
 }

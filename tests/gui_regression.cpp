@@ -13,6 +13,7 @@
 #include "../gui_export_metadata.hpp"
 #include "../gui_ids.hpp"
 #include "../gui_loading.hpp"
+#include "../gui_documents.hpp"
 #include "../gui_main.hpp"
 #include "../gui_processing.hpp"
 #include "../gui_render.hpp"
@@ -52,7 +53,7 @@ void reset_document(const std::vector<std::string>& names, const std::vector<dou
     g_config_path = (test_dir / "settings.ini").wstring();
     g.ds.ok = true; g.ds.names = names; g.ds.time = time; g.ds.raw_time = time; g.ds.channels = channels;
     g.visible.assign(names.size(), 1);
-    g_channel_colors.clear();
+    g.channel_colors.clear();
     for (const auto& name : names) g.channel_labels.push_back(to_w(name));
     g.data_t0 = g.win_start = time.front(); g.data_t1 = g.win_end = time.back();
     g.channel_formulas.assign(names.size(), L"x");
@@ -850,12 +851,49 @@ void point_display_defaults() {
     require(!display.number && display.x && !display.y && display.dx && !display.dy && display.inv_dt && display.dist,
             "first point group inherits display choices set before any point exists");
 }
+
+void multiple_open_documents() {
+    reset_document({"first"}, {0, 1, 2}, {{1, 2, 3}});
+    g.file_name = L"first.lvm";
+    g.source_path = L"C:\\data\\first.lvm";
+    g.win_start = .5; g.win_end = 1.5;
+    g.mode = AnalysisMode::FFT;
+    g.channel_colors = {RGB(1, 2, 3)};
+
+    DocumentState second;
+    second.ds.ok = true;
+    second.ds.names = {"second"};
+    second.ds.time = {10, 11, 12};
+    second.ds.raw_time = second.ds.time;
+    second.ds.channels = {{7, 8, 9}};
+    second.visible = {1};
+    second.channel_labels = {L"second"};
+    second.channel_colors = {RGB(9, 8, 7)};
+    second.data_t0 = second.win_start = 10;
+    second.data_t1 = second.win_end = 12;
+    second.file_name = L"second.lvm";
+    second.source_path = L"C:\\data\\second.lvm";
+    second.mode = AnalysisMode::FRF;
+    g.inactive_documents.push_back(std::move(second));
+
+    require(open_document_count() == 2, "two datasets are tracked as independent open documents");
+    require(switch_to_document(1), "switches to an inactive document");
+    require(g.file_name == L"second.lvm" && g.mode == AnalysisMode::FRF && g.win_start == 10,
+            "switch restores the selected document's analysis state and time range");
+    require(g.channel_colors == std::vector<COLORREF>{RGB(9, 8, 7)},
+            "switch restores per-document channel presentation without duplicating samples");
+    require(switch_to_document(1), "switches back to the original document");
+    require(g.file_name == L"first.lvm" && g.mode == AnalysisMode::FFT && g.win_start == .5,
+            "original signal and FFT state survive a document round trip");
+    require(close_active_document() && open_document_count() == 1 && g.file_name == L"second.lvm",
+            "closing one file keeps the remaining document open");
+}
 }
 
 int main() {
     std::filesystem::create_directories(test_dir);
     try {
-        exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); processing(); fft_recording_recovery();
+        exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); multiple_open_documents(); processing(); fft_recording_recovery();
         light_mode_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
         light_mode_fft_visibility();
         routed_window_messages();

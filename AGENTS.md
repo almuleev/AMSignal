@@ -22,6 +22,10 @@
 
 - CLI: `main.cpp`; GUI: `gui_main`, `gui_window`, `gui_commands`, `gui_input`.
 - Данные: `lvm_parser`, `data_io`; загрузка GUI: `gui_loading`, `gui_loading_drop`.
+  Несколько открытых источников координирует `gui_documents`: активное
+  документное состояние доступно как `g.*`, неактивные слоты перемещаются без
+  копирования `Dataset`; верхний селектор файлов показывает текущий источник,
+  переключает документы, а соседняя кнопка закрывает активный.
 - FFT: `analysis`, `fft`, `sampling.hpp`, `spectrum_worker`, `gui_spectrum`.
 - FRF / АЧХ: `frf_analysis` (численное ядро без GUI, среднее опор до H1,
   отдельный результат каждого отклика), `frf_worker` (пакет массивов),

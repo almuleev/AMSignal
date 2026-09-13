@@ -9,8 +9,6 @@ inline const COLORREF kPalette[] = {
     RGB(188, 189, 34), RGB(23, 190, 207),
 };
 
-extern std::vector<COLORREF> g_channel_colors;
-
 COLORREF channel_color(std::size_t i);
 
 struct Theme {

@@ -6,6 +6,7 @@
 #include "gui_controls.hpp"
 #include "gui_ids.hpp"
 #include "gui_layout.hpp"
+#include "gui_documents.hpp"
 #include "gui_loading.hpp"
 #include "gui_loading_drop.hpp"
 #include "gui_playback.hpp"
@@ -29,6 +30,8 @@ void rebuild_ui() {
 
     // Update buttons
     SetWindowTextW(g.open, g_str->btn_open);
+    SetWindowTextW(g.document_close, g_str == &kEn ? L"Close" : L"Закрыть");
+    refresh_open_document_selector();
     SetWindowTextW(g.savepng, g_str->btn_png);
     SetWindowTextW(g.savecsv, g_str->btn_csv);
     SetWindowTextW(g.mode_time, g_str->st_time);
@@ -119,6 +122,15 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return b;
             };
             g.open = mk(g_str->btn_open, IDC_OPEN, 0);
+            g.document_selector = CreateWindowExW(0, L"COMBOBOX", L"",
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | CBS_DROPDOWNLIST |
+                CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_BORDER,
+                0, 0, 10, 10, hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_DOCUMENT_SELECTOR)), inst, nullptr);
+            SendMessageW(g.document_selector, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            install_themed_combo(g.document_selector);
+            g.document_close = mk(g_str == &kEn ? L"Close" : L"Закрыть", IDC_CLOSE_DOCUMENT, 0);
+            refresh_open_document_selector();
             g.savepng = mk(g_str->btn_png, IDC_SAVEPNG, 0, false);
             g.savecsv = mk(g_str->btn_csv, IDC_SAVECSV, 0, false);
             g.mode_time = mk(g_str->st_time, IDM_MODE_TIME, 0);

@@ -517,10 +517,10 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
             }
             COLORREF color = channel_color(static_cast<std::size_t>(channel_index));
             if (parse_color_triplet(color_text, color)) {
-                if (static_cast<std::size_t>(channel_index) >= g_channel_colors.size()) {
-                    g_channel_colors.resize(g.ds.channel_count());
+                if (static_cast<std::size_t>(channel_index) >= g.channel_colors.size()) {
+                    g.channel_colors.resize(g.ds.channel_count());
                 }
-                g_channel_colors[static_cast<std::size_t>(channel_index)] = color;
+                g.channel_colors[static_cast<std::size_t>(channel_index)] = color;
             }
             continue;
         }

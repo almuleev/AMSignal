@@ -7,6 +7,7 @@
 #include "gui_theme.hpp"
 #include "gui_text.hpp"
 #include "gui_ids.hpp"
+#include "gui_documents.hpp"
 #include "gui_playback.hpp"
 #include "gui_side_panel.hpp"
 #include "gui_settings.hpp"
@@ -298,6 +299,23 @@ HMENU make_menu() {
         }
     }
     append_menu_popup_owner_draw(file, recent, text(L"Recent files", L"Недавние файлы"), false);
+    const HMENU documents = CreatePopupMenu();
+    const std::size_t document_count = open_document_count();
+    if (document_count == 0) {
+        append_menu_item_owner_draw(documents, IDM_OPEN_DOCUMENT_BASE,
+                                    text(L"No open files", L"Нет открытых файлов"));
+        EnableMenuItem(documents, IDM_OPEN_DOCUMENT_BASE, MF_BYCOMMAND | MF_GRAYED);
+    } else {
+        const std::size_t max_documents = static_cast<std::size_t>(IDM_CLOSE_DOCUMENT - IDM_OPEN_DOCUMENT_BASE);
+        for (std::size_t i = 0; i < document_count && i < max_documents; ++i) {
+            append_menu_item_owner_draw(documents, IDM_OPEN_DOCUMENT_BASE + static_cast<int>(i),
+                                        open_document_label(i, true));
+        }
+        AppendMenuW(documents, MF_SEPARATOR, 0, nullptr);
+        append_menu_item_owner_draw(documents, IDM_CLOSE_DOCUMENT,
+                                    text(L"Close current file", L"Закрыть текущий файл"));
+    }
+    append_menu_popup_owner_draw(file, documents, text(L"Open files", L"Открытые файлы"), false);
     append_menu_item_owner_draw(file, IDC_SAVEPNG, save_png_text);
     append_menu_item_owner_draw(file, IDC_SAVECSV, save_as_text);
     AppendMenuW(file, MF_SEPARATOR, 0, nullptr);

@@ -323,7 +323,7 @@ SettingsSnapshot capture_settings_snapshot() {
     SettingsSnapshot snapshot;
     snapshot.visible = g.visible;
     snapshot.channel_labels = g.channel_labels;
-    snapshot.channel_colors = g_channel_colors;
+    snapshot.channel_colors = g.channel_colors;
     snapshot.global_formula = g.global_formula;
     snapshot.channel_formulas = g.channel_formulas;
     snapshot.snap_to_data = g.snap_to_data;
@@ -470,7 +470,7 @@ void apply_settings_snapshot(const SettingsSnapshot& snapshot) {
     if (g.channel_edit) finish_channel_rename(false);
     g.visible = snapshot.visible;
     g.channel_labels = snapshot.channel_labels;
-    g_channel_colors = snapshot.channel_colors;
+    g.channel_colors = snapshot.channel_colors;
     g.global_formula = snapshot.global_formula;
     g.channel_formulas = snapshot.channel_formulas;
     rebuild_formula_cache_from_state();

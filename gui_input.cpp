@@ -366,8 +366,8 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         cc.Flags = CC_FULLOPEN | CC_RGBINIT;
                         if (ChooseColorW(&cc)) {
                             const SettingsSnapshot before = capture_settings_snapshot();
-                            if (i >= g_channel_colors.size()) g_channel_colors.resize(g.ds.channel_count());
-                            g_channel_colors[i] = cc.rgbResult;
+                            if (i >= g.channel_colors.size()) g.channel_colors.resize(g.ds.channel_count());
+                            g.channel_colors[i] = cc.rgbResult;
                             record_settings_change(before);
                             InvalidateRect(hwnd, nullptr, FALSE);
                         }

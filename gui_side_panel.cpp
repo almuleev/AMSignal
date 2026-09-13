@@ -231,6 +231,7 @@ void hide_ui_controls() {
         DrawMenuBar(g.main);
     }
     if (g.frf_panel) ShowWindow(g.frf_panel, SW_HIDE);
+    if (g.document_selector) ShowWindow(g.document_selector, SW_HIDE);
     for (HWND b : g.buttons) ShowWindow(b, SW_HIDE);
     for (HWND c : g.checks) ShowWindow(c, SW_HIDE);
     for (HWND c : g.check_labels) ShowWindow(c, SW_HIDE);
@@ -248,6 +249,7 @@ void show_ui_controls() {
         DrawMenuBar(g.main);
     }
     for (HWND b : g.buttons) ShowWindow(b, SW_SHOW);
+    if (g.document_selector) ShowWindow(g.document_selector, SW_SHOW);
     apply_side_panel_visibility();
     if (g.channel_edit && g.side_panel_visible && g.side_panel_tab == 0) ShowWindow(g.channel_edit, SW_SHOW);
     // The native STATIC control only retains text for accessibility; the

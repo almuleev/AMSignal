@@ -8,6 +8,7 @@
 #include "gui_settings_window.hpp"
 #include "gui_export_metadata.hpp"
 #include "gui_dialogs.hpp"
+#include "gui_documents.hpp"
 #include "gui_ids.hpp"
 #include "gui_layout.hpp"
 #include "gui_loading_drop.hpp"
@@ -93,6 +94,7 @@ void apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
         return;
     }
 
+    begin_loaded_document();
     g.current_file_partial = requested_time_window || ds.partial;
     g_filter_slider_before.reset();
     g.ds = std::move(ds);
@@ -108,9 +110,9 @@ void apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
             g.channel_labels[i] = std::wstring(L"Channel_") + std::to_wstring(i + 1);
         }
     }
-    g_channel_colors.clear();
-    g_channel_colors.reserve(g.ds.channel_count());
-    for (std::size_t i = 0; i < g.ds.channel_count(); ++i) g_channel_colors.push_back(kPalette[i % (sizeof(kPalette) / sizeof(kPalette[0]))]);
+    g.channel_colors.clear();
+    g.channel_colors.reserve(g.ds.channel_count());
+    for (std::size_t i = 0; i < g.ds.channel_count(); ++i) g.channel_colors.push_back(kPalette[i % (sizeof(kPalette) / sizeof(kPalette[0]))]);
     g.side_selected_channel = g.ds.channel_count() > 0 ? 0 : -1;
     g.side_scroll_y = 0;
     g.channel_formulas.assign(g.ds.channel_count(), default_channel_formula_text());
@@ -186,14 +188,17 @@ void apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
     const wchar_t* base = wcsrchr(wpath.c_str(), L'\\');
     g.file_name = base ? base + 1 : wpath;
     const std::filesystem::path source_path(wpath);
+    g.source_path = wpath;
     g.project_path = lstrcmpiW(source_path.extension().c_str(), kProjectExtension) == 0 ? wpath : L"";
     SetWindowTextW(g.main, (std::wstring(g_str->app_title) + L" — " + g.file_name).c_str());
     add_recent_file(wpath);
     if (g.welcome_wnd) { ShowWindow(g.welcome_wnd, SW_HIDE); show_ui_controls(); }
 
     rebuild_checks();
+    refresh_open_document_selector();
     refresh_side_panel_controls();
     refresh_frf_controls(true);
+    rebuild_menu_bar();
     sync_menu();
     refresh_settings_controls();
     layout();
@@ -338,17 +343,28 @@ bool load_path_interactive(const std::wstring& wpath) {
 }
 
 void open_file() {
-    wchar_t file[2048] = L"";
+    std::vector<wchar_t> file(65536, L'\0');
     OPENFILENAMEW ofn = {};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = g.main;
     ofn.lpstrFilter = g_str->filter_open;
-    ofn.lpstrFile = file;
-    ofn.nMaxFile = 2048;
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrFile = file.data();
+    ofn.nMaxFile = static_cast<DWORD>(file.size());
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_ALLOWMULTISELECT | OFN_EXPLORER;
     if (!GetOpenFileNameW(&ofn)) return;
-    if (!load_path_interactive(file) && !g.last_error.empty())
-        MessageBoxW(g.main, to_w(g.last_error).c_str(), g_str->msg_read_err, MB_ICONERROR | MB_OK);
+    std::vector<std::wstring> paths;
+    const wchar_t* first = file.data();
+    const wchar_t* next = first + lstrlenW(first) + 1;
+    if (*next == L'\0') {
+        paths.emplace_back(first);
+    } else {
+        const std::wstring folder(first);
+        while (*next != L'\0') {
+            paths.push_back((std::filesystem::path(folder) / next).wstring());
+            next += lstrlenW(next) + 1;
+        }
+    }
+    queue_open_paths(std::move(paths));
 }
 
 void show_recent_files_menu(HWND owner) {
@@ -373,11 +389,13 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             hide_loading();
             if (result->cancelled) {
                 g.last_error.clear();
+                clear_open_queue();
                 return 0;
             }
             if (!result->ok) {
                 g.last_error = result->error;
                 MessageBoxW(hwnd, to_w(g.last_error).c_str(), g_str->msg_read_err, MB_ICONERROR | MB_OK);
+                continue_open_queue();
                 return 0;
             }
             g.cached_scan_path = result->path;
@@ -407,16 +425,19 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             hide_loading();
             if (result->cancelled) {
                 g.last_error.clear();
+                clear_open_queue();
                 return 0;
             }
             if (!result->ok) {
                 g.last_error = result->error;
                 MessageBoxW(hwnd, to_w(g.last_error).c_str(), g_str->msg_read_err, MB_ICONERROR | MB_OK);
+                continue_open_queue();
                 return 0;
             }
             apply_loaded_dataset(std::move(result->ds), result->path, result->hide_channels,
                                  result->requested_time_window, result->cached_global_gap_step,
                                  result->cached_global_gap_step_ready);
+            continue_open_queue();
             return 0;
         }
         case WM_DROPFILES: {
