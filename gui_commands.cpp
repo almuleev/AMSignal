@@ -45,9 +45,17 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COMMAND: {
             g_filter_slider_before.reset();
             const int id = LOWORD(wp);
-            if (id == IDC_DOCUMENT_SELECTOR && HIWORD(wp) == CBN_SELCHANGE) {
-                const int selected = static_cast<int>(SendMessageW(g.document_selector, CB_GETCURSEL, 0, 0));
-                if (selected >= 0) switch_to_document(static_cast<std::size_t>(selected));
+            if (id == IDC_DOCUMENT_SELECTOR) {
+                if (HIWORD(wp) == CBN_DROPDOWN) {
+                    // The toolbar layout keeps the closed ComboBox compact. Give
+                    // its native list an explicit height when it opens.
+                    expand_combo_dropdown(g.document_selector);
+                    return 0;
+                }
+                if (HIWORD(wp) == CBN_SELCHANGE) {
+                    const int selected = static_cast<int>(SendMessageW(g.document_selector, CB_GETCURSEL, 0, 0));
+                    if (selected >= 0) switch_to_document(static_cast<std::size_t>(selected));
+                }
                 return 0;
             }
             if (id >= IDM_OPEN_DOCUMENT_BASE && id < IDM_CLOSE_DOCUMENT) {
@@ -78,6 +86,31 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     set_mode(AnalysisMode::FFT);
                     return 0;
                 case IDM_MODE_FRF: set_mode(AnalysisMode::FRF); return 0;
+                case IDC_CURSOR_TOOL:
+                    g.measure_mode = false;
+                    g.pending_marker = false;
+                    g.pending_line = 0;
+                    SendMessageW(g.measure, BM_SETCHECK, BST_UNCHECKED, 0);
+                    sync_menu();
+                    set_status();
+                    redraw_window_with_children(hwnd);
+                    return 0;
+                case IDC_LINE_MENU: {
+                    HMENU menu = CreatePopupMenu();
+                    OwnerDrawMenuEntry vertical{g_str == &kEn ? L"Vertical line" : L"Вертикальная линия", L""};
+                    OwnerDrawMenuEntry horizontal{g_str == &kEn ? L"Horizontal line" : L"Горизонтальная линия", L""};
+                    AppendMenuW(menu, MF_OWNERDRAW | (g.pending_line == 1 ? MF_CHECKED : 0),
+                        IDM_ADD_VLINE, reinterpret_cast<LPCWSTR>(&vertical));
+                    AppendMenuW(menu, MF_OWNERDRAW | (g.pending_line == 2 ? MF_CHECKED : 0),
+                        IDM_ADD_HLINE, reinterpret_cast<LPCWSTR>(&horizontal));
+                    RECT r{};
+                    GetWindowRect(g.line_menu_btn, &r);
+                    const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                        r.left, r.bottom, 0, hwnd, nullptr);
+                    DestroyMenu(menu);
+                    if (command) SendMessageW(hwnd, WM_COMMAND, command, 0);
+                    return 0;
+                }
                 case IDC_PLAY: toggle_play(); return 0;
                 case IDC_SHOW_ALL:
                 {

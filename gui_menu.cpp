@@ -258,6 +258,7 @@ void sync_menu() {
     chk(IDM_VISMOOTH, g.visual_smooth);
     chk(IDM_VPAN, g.vertical_pan);
     chk(IDC_MEASURE, g.measure_mode);
+    chk(IDC_CURSOR_TOOL, !g.measure_mode && !g.pending_marker && g.pending_line == 0);
     chk(IDM_ADD_MARKER, g.pending_marker);
     chk(IDM_ADD_VLINE, g.pending_line == 1);
     chk(IDM_ADD_HLINE, g.pending_line == 2);
@@ -336,7 +337,7 @@ HMENU make_menu() {
     const std::wstring autoy_text = menu_text(text(L"Auto zoom", L"Автомасштабирование"), IDC_AUTOY);
     const std::wstring smooth_text = menu_text(text(L"Smoothing", L"Сглаживание"), IDM_VISMOOTH);
     const std::wstring vpan_text = menu_text(text(L"Vertical pan", L"Вертикальное панорамирование"), IDM_VPAN);
-    const std::wstring play_text = menu_text(text(L"Play / Pause", L"Старт/стоп"), IDC_PLAY);
+    const std::wstring play_text = menu_text(text(L"Play / Pause signal", L"Воспроизведение / пауза сигнала"), IDC_PLAY);
     const std::wstring theme_text = menu_text(text(L"Dark theme", L"Тёмная тема"), IDM_THEME);
     append_menu_item_owner_draw(view, IDM_MODE_TIME, mode_time_text);
     append_menu_item_owner_draw(view, IDM_MODE_FREQ, mode_freq_text);
@@ -357,6 +358,7 @@ HMENU make_menu() {
     append_menu_popup_owner_draw(bar, view, text(L"View", L"Вид"));
 
     const HMENU tools = CreatePopupMenu();
+    append_menu_item_owner_draw(tools, IDC_CURSOR_TOOL, text(L"Cursor", L"Курсор"));
     const std::wstring measure_text = menu_text(text(L"Points", L"Точки"), IDC_MEASURE);
     const std::wstring marker_text = menu_text(text(L"Marker", L"Маркер"), IDM_ADD_MARKER);
     const std::wstring vline_text = menu_text(text(L"Vertical line", L"Вертикальная линия"), IDM_ADD_VLINE);

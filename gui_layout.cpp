@@ -15,7 +15,7 @@ void layout() {
     g.toolbar_seps.clear();
     int x = 8;
     auto place = [&](HWND h, int w, int row_y) { MoveWindow(h, x, row_y, w, 28, TRUE); x += w + 4; };
-    auto sep = [&]() { g.toolbar_seps.push_back(x + 2); x += 8; };
+    auto sep = [&]() { x += 20; };
     auto text_button_width = [&](HWND h, int min_w, int pad) {
         if (!h) return min_w;
         wchar_t text[128]{};
@@ -30,28 +30,33 @@ void layout() {
         return max(min_w, static_cast<int>(sz.cx) + pad);
     };
 
-    // Row 1: frequent global actions
+    // Row 1: source, then a tightly grouped analysis-mode selector.
     x = 8;
     place(g.open, text_button_width(g.open, 94, 32), 8);
-    place(g.document_selector, min(320, text_button_width(g.document_selector, 190, 46)), 8);
-    place(g.document_close, text_button_width(g.document_close, 72, 28), 8);
+    place(g.document_selector, max(140, min(320, cw - 460)), 8);
+    SetWindowTextW(g.document_close, L"×");
+    place(g.document_close, 28, 8);
     sep();
     place(g.mode_time, text_button_width(g.mode_time, 72, 28), 8);
+    x -= 3;
     place(g.mode_freq, text_button_width(g.mode_freq, 82, 28), 8);
+    x -= 3;
     place(g.mode_frf, text_button_width(g.mode_frf, 90, 28), 8);
-    place(g.play, text_button_width(g.play, 88, 30), 8);
-    sep();
-    place(g.reset, text_button_width(g.reset, 76, 28), 8);
-    place(g.autoy, text_button_width(g.autoy, 108, 34), 8);
+    // Playback and reset remain accessible through View and their hotkeys.
+    for (HWND h : {g.play, g.reset, g.vline_btn, g.hline_btn}) ShowWindow(h, SW_HIDE);
 
     // Row 2: graph tools and side panel
     x = 8;
+    place(g.cursor_btn, text_button_width(g.cursor_btn, 76, 24), 40);
     place(g.measure, text_button_width(g.measure, 72, 28), 40);
     place(g.marker_btn, text_button_width(g.marker_btn, 72, 30), 40);
-    place(g.vline_btn, text_button_width(g.vline_btn, 78, 30), 40);
-    place(g.hline_btn, text_button_width(g.hline_btn, 84, 30), 40);
-    sep();
-    place(g.sidepanel_btn, text_button_width(g.sidepanel_btn, 92, 32), 40);
+    place(g.line_menu_btn, text_button_width(g.line_menu_btn, 90, 28), 40);
+    const int auto_w = text_button_width(g.autoy, 108, 34);
+    const int side_w = text_button_width(g.sidepanel_btn, 92, 32);
+    x = max(x + 20, cw - auto_w - side_w - 20);
+    place(g.autoy, auto_w, 40);
+    x += 4;
+    place(g.sidepanel_btn, side_w, 40);
 
     const int panel_w = side_panel_width();
     const int panel_left = cw - panel_w;

@@ -3,6 +3,7 @@
 #include "gui_state.hpp"
 #include "gui_theme.hpp"
 #include "gui_ids.hpp"
+#include "gui_text.hpp"
 
 namespace gui {
 
@@ -64,6 +65,10 @@ std::wstring combo_selection_text(HWND combo) {
     return text;
 }
 
+std::wstring themed_combo_closed_text(HWND combo) {
+    return combo_selection_text(combo);
+}
+
 void paint_themed_combo(HWND combo) {
     RECT window{};
     GetWindowRect(combo, &window);
@@ -101,7 +106,7 @@ void paint_themed_combo(HWND combo) {
     SelectObject(dc, old_pen);
     DeleteObject(arrow_pen);
 
-    const std::wstring text = combo_selection_text(combo);
+    const std::wstring text = themed_combo_closed_text(combo);
     RECT text_rect = {r.left + 9, r.top + 1, r.right - arrow_width - 7, r.bottom - 1};
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, enabled ? g_theme->text_primary : g_theme->text_secondary);

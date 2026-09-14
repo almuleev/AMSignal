@@ -30,7 +30,9 @@ void rebuild_ui() {
 
     // Update buttons
     SetWindowTextW(g.open, g_str->btn_open);
-    SetWindowTextW(g.document_close, g_str == &kEn ? L"Close" : L"Закрыть");
+    SetWindowTextW(g.document_close, L"×");
+    SetWindowTextW(g.cursor_btn, g_str == &kEn ? L"Cursor" : L"Курсор");
+    SetWindowTextW(g.line_menu_btn, g_str == &kEn ? L"Line ▾" : L"Линия ▾");
     refresh_open_document_selector();
     SetWindowTextW(g.savepng, g_str->btn_png);
     SetWindowTextW(g.savecsv, g_str->btn_csv);
@@ -124,7 +126,7 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.open = mk(g_str->btn_open, IDC_OPEN, 0);
             g.document_selector = CreateWindowExW(0, L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | CBS_DROPDOWNLIST |
-                CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_BORDER,
+                CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_BORDER,
                 0, 0, 10, 10, hwnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_DOCUMENT_SELECTOR)), inst, nullptr);
             SendMessageW(g.document_selector, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -139,6 +141,8 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             create_frf_panel(hwnd, inst);
             g.play = mk(g_str->btn_play, IDC_PLAY, 0);
             g.measure = mk(g_str->btn_measure, IDC_MEASURE, 0);
+            g.cursor_btn = mk(g_str == &kEn ? L"Cursor" : L"Курсор", IDC_CURSOR_TOOL, 0);
+            g.line_menu_btn = mk(g_str == &kEn ? L"Line ▾" : L"Линия ▾", IDC_LINE_MENU, 0);
             g.marker_btn = mk(g_str == &kEn ? L"Marker" : L"Маркер", IDM_ADD_MARKER, 0);
             g.vline_btn = mk(g_str == &kEn ? L"V-Line" : L"V-линия", IDM_ADD_VLINE, 0);
             g.hline_btn = mk(g_str == &kEn ? L"H-Line" : L"H-линия", IDM_ADD_HLINE, 0);
@@ -342,7 +346,11 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             RECT r = dis->rcItem;
             bool pressed = (dis->itemState & ODS_SELECTED) != 0;
             bool active = false;
-            if (btn == g.measure) {
+            if (btn == g.cursor_btn) {
+                active = !g.measure_mode && !g.pending_marker && g.pending_line == 0;
+            } else if (btn == g.line_menu_btn) {
+                active = g.pending_line != 0;
+            } else if (btn == g.measure) {
                 active = g.measure_mode;
             } else if (btn == g.autoy) {
                 active = g.mode == AnalysisMode::FRF ? g.frf.auto_y : g.auto_y;

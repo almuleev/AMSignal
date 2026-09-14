@@ -249,6 +249,7 @@ void show_ui_controls() {
         DrawMenuBar(g.main);
     }
     for (HWND b : g.buttons) ShowWindow(b, SW_SHOW);
+    for (HWND b : {g.play, g.reset, g.vline_btn, g.hline_btn}) ShowWindow(b, SW_HIDE);
     if (g.document_selector) ShowWindow(g.document_selector, SW_SHOW);
     apply_side_panel_visibility();
     if (g.channel_edit && g.side_panel_visible && g.side_panel_tab == 0) ShowWindow(g.channel_edit, SW_SHOW);

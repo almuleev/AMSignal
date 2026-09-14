@@ -119,8 +119,11 @@ void set_status() {
 }
 
 std::wstring toolbar_hover_text(HWND btn) {
+    if (btn == g.cursor_btn) return g_str == &kEn ? L"Cursor: navigate and select the graph" : L"Курсор: навигация и выделение на графике";
+    if (btn == g.line_menu_btn) return g_str == &kEn ? L"Choose a vertical or horizontal guide line" : L"Выбрать вертикальную или горизонтальную линию";
     const bool en = (g_str == &kEn);
     if (btn == g.open) return g_str->hover_open;
+    if (btn == g.document_close) return en ? L"Close the active file" : L"Закрыть активный файл";
     if (btn == g.play) return g.playing ? g_str->hover_pause : g_str->hover_play;
     if (btn == g.measure) return g_str->hover_measure;
     if (btn == g.reset) return g_str->hover_reset;

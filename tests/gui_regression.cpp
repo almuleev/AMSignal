@@ -371,6 +371,12 @@ void routed_window_messages() {
     require(g.pending_marker, "command routing arms marker placement");
     WndProc(g.main, WM_KEYDOWN, VK_ESCAPE, 0);
     require(!g.pending_marker, "input routing cancels pending marker placement");
+    for (int command : {IDC_MEASURE, IDM_ADD_MARKER, IDM_ADD_VLINE, IDM_ADD_HLINE}) {
+        WndProc(g.main, WM_COMMAND, command, 0);
+        WndProc(g.main, WM_COMMAND, IDC_CURSOR_TOOL, 0);
+        require(!g.measure_mode && !g.pending_marker && g.pending_line == 0,
+                "cursor tool cancels every annotation placement mode");
+    }
     MINMAXINFO limits{};
     WndProc(g.main, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&limits));
     require(limits.ptMinTrackSize.x == 980 && limits.ptMinTrackSize.y == 560,

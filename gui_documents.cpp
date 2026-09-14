@@ -113,10 +113,7 @@ void refresh_open_document_selector() {
     SendMessageW(g.document_selector, CB_RESETCONTENT, 0, 0);
     const std::size_t count = open_document_count();
     for (std::size_t i = 0; i < count; ++i) {
-        std::wstring label = open_document_label(i);
-        if (i == 0) {
-            label = (g_str == &kEn ? L"Files (" : L"Файлы (") + std::to_wstring(count) + L"): " + label;
-        }
+        const std::wstring label = open_document_label(i);
         SendMessageW(g.document_selector, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
     }
     if (count != 0) SendMessageW(g.document_selector, CB_SETCURSEL, 0, 0);

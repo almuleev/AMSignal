@@ -237,6 +237,7 @@ struct App : DocumentState {
     HWND frf_panel = nullptr;
     HWND play = nullptr, measure = nullptr, marker_btn = nullptr;
     HWND vline_btn = nullptr, hline_btn = nullptr;
+    HWND cursor_btn = nullptr, line_menu_btn = nullptr;
     HWND reset = nullptr, autoy = nullptr, sidepanel_btn = nullptr;
     HWND show_all_btn = nullptr, hide_all_btn = nullptr;
     HWND status = nullptr;

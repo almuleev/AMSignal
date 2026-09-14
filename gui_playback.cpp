@@ -87,6 +87,7 @@ LRESULT handle_playback_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ScreenToClient(hwnd, &pt);
                 HWND new_hover = nullptr;
                 for (HWND h : g.buttons) {
+                    if (!IsWindowVisible(h)) continue;
                     RECT r;
                     GetWindowRect(h, &r);
                     MapWindowPoints(nullptr, hwnd, (LPPOINT)&r, 2);

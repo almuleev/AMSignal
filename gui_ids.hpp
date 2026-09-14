@@ -37,6 +37,8 @@ enum {
     IDC_SAVE_PROJECT,
     IDC_DOCUMENT_SELECTOR,
     IDC_CLOSE_DOCUMENT,
+    IDC_CURSOR_TOOL,
+    IDC_LINE_MENU,
 
     // Menu-only commands (no toolbar button).
     IDM_EXIT = 1100,
