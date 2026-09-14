@@ -51,12 +51,11 @@ void layout() {
     place(g.measure, text_button_width(g.measure, 72, 28), 40);
     place(g.marker_btn, text_button_width(g.marker_btn, 72, 30), 40);
     place(g.line_menu_btn, text_button_width(g.line_menu_btn, 90, 28), 40);
+    // View controls share the right edge as a vertical pair.
     const int auto_w = text_button_width(g.autoy, 108, 34);
     const int side_w = text_button_width(g.sidepanel_btn, 92, 32);
-    x = max(x + 20, cw - auto_w - side_w - 20);
-    place(g.autoy, auto_w, 40);
-    x += 4;
-    place(g.sidepanel_btn, side_w, 40);
+    MoveWindow(g.autoy, cw - auto_w - 8, 8, auto_w, 28, TRUE);
+    MoveWindow(g.sidepanel_btn, cw - side_w - 8, 40, side_w, 28, TRUE);
 
     const int panel_w = side_panel_width();
     const int panel_left = cw - panel_w;
