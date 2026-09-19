@@ -105,9 +105,16 @@ double frf_frequency_fraction(double f) {
     return (std::log10(f) - g.frf.log_start) / (g.frf.log_end - g.frf.log_start);
 }
 void frf_y_range(double& low, double& high) {
-    low = g.frf.y_min; high = g.frf.y_max;
-    if (!g.frf.auto_y) return;
-    low = std::numeric_limits<double>::infinity(); high = -low;
+    // KD is a linear amplitude ratio. Keep its baseline at zero in automatic
+    // and manual views; a shifted baseline exaggerates small differences and
+    // makes the graph look logarithmic even though the values are not dB.
+    low = 0.0;
+    high = g.frf.y_max;
+    if (!g.frf.auto_y) {
+        if (!(high>0) || !std::isfinite(high)) high=1.0;
+        return;
+    }
+    high = 0.0;
     const double a = frf_frequency_at_fraction(0), b = frf_frequency_at_fraction(1);
     for (const auto& r:g.frf.result.responses) {
         if (!r.ok) continue;
@@ -116,12 +123,34 @@ void frf_y_range(double& low, double& high) {
             if (r.frequencies[k] < a || r.frequencies[k] > b) continue;
             const double value = values[k];
             if (!std::isfinite(value)) continue;
-            low = std::min(low, value); high = std::max(high, value);
+            high = std::max(high, value);
         }
     }
-    if (!std::isfinite(low)) { low = 0; high = 1; return; }
-    const double pad = std::max(0.05, (high - low) * 0.08);
-    low = std::max(0.0, low - pad); high += pad;
+    if (!(high>0) || !std::isfinite(high)) { high = 1; return; }
+    high *= 1.08;
+}
+
+namespace {
+int frf_legend_height() {
+    if (!g.distinguish_curves || g.frf.result.responses.size()<2) return 0;
+    return 4+20*static_cast<int>((g.frf.result.responses.size()+2)/3);
+}
+}
+
+RECT frf_coefficient_plot_rect(const RECT& full) {
+    RECT coefficient=full;
+    coefficient.top+=frf_legend_height();
+    const int available=std::max(1L,coefficient.bottom-coefficient.top);
+    const int gap=26;
+    int reference_height=std::clamp(available/4,60,140);
+    if (available-reference_height-gap<70) reference_height=std::max(40,available-70-gap);
+    coefficient.bottom=std::max(coefficient.top+1,coefficient.bottom-reference_height-gap);
+    return coefficient;
+}
+
+RECT frf_reference_plot_rect(const RECT& full) {
+    const RECT coefficient=frf_coefficient_plot_rect(full);
+    return RECT{full.left,coefficient.bottom+26,full.right,full.bottom};
 }
 
 void draw_frf(HDC dc, const RECT& p) {
@@ -140,13 +169,53 @@ void draw_frf(HDC dc, const RECT& p) {
         SelectObject(dc, font); g.vvalid = false; return;
     }
     double low, high; frf_y_range(low, high);
-    const int width = p.right - p.left, height = p.bottom - p.top;
-    if (width <= 0 || height <= 0 || !(high > low)) { SelectObject(dc, font); return; }
+    const RECT coefficient_plot=frf_coefficient_plot_rect(p);
+    const RECT reference_plot=frf_reference_plot_rect(p);
+    const int width = coefficient_plot.right - coefficient_plot.left;
+    const int height = coefficient_plot.bottom - coefficient_plot.top;
+    if (width <= 0 || height <= 0 || reference_plot.bottom<=reference_plot.top || !(high > low)) {
+        SelectObject(dc, font); return;
+    }
     const auto mapx = [&](double f) { return p.left + static_cast<int>(std::clamp(frf_frequency_fraction(f), -1.0, 2.0) * width); };
-    const auto mapy = [&](double v) { return p.bottom - static_cast<int>(std::clamp((v - low) / (high - low), -1.0, 2.0) * height); };
+    const auto mapy = [&](double v) { return coefficient_plot.bottom - static_cast<int>(std::clamp((v - low) / (high - low), -1.0, 2.0) * height); };
+    const auto& common=g.frf.result.common();
+    const double f0 = frf_frequency_at_fraction(0), f1 = frf_frequency_at_fraction(1);
+    double reference_high=0;
+    for (std::size_t k=1;k<common.frequencies.size() && k<common.reference_amplitude.size();++k) {
+        if (common.frequencies[k]<f0 || common.frequencies[k]>f1 ||
+            k>=common.reference_amplitude_valid.size() || !common.reference_amplitude_valid[k]) continue;
+        reference_high=std::max(reference_high,common.reference_amplitude[k]);
+    }
+    if (!(reference_high>0) || !std::isfinite(reference_high)) reference_high=1;
+    reference_high*=1.08;
+    const int reference_height=reference_plot.bottom-reference_plot.top;
+    const auto map_reference_y=[&](double value) {
+        return reference_plot.bottom-static_cast<int>(std::clamp(value/reference_high,-1.0,2.0)*reference_height);
+    };
+
+    // In grayscale mode the response-to-symbol mapping lives in its own band,
+    // not over the data. Three compact columns keep the graph readable.
+    if (g.distinguish_curves && g.frf.result.responses.size()>1) {
+        const int columns=3;
+        const int column_width=std::max(1,width/columns);
+        for (std::size_t i=0;i<g.frf.result.responses.size();++i) {
+            const int column=static_cast<int>(i%columns), row=static_cast<int>(i/columns);
+            const int x=p.left+column*column_width+4, y=p.top+4+row*20;
+            const COLORREF color=i<g.frf.outputs.size() ? channel_color(g.frf.outputs[i]) : g_theme->axis_text;
+            HPEN sample_pen=CreatePen(curve_pen_style(i),1,color);
+            HGDIOBJ old_sample_pen=SelectObject(dc,sample_pen);
+            MoveToEx(dc,x,y+6,nullptr); LineTo(dc,x+22,y+6);
+            SelectObject(dc,old_sample_pen); DeleteObject(sample_pen);
+            draw_curve_symbol(dc,x+11,y+6,i,color,3);
+            const std::wstring label_text=frf_curve_label(i);
+            RECT label_rect{x+28,y,p.left+(column+1)*column_width-4,y+18};
+            SetTextColor(dc,g_theme->axis_text);
+            DrawTextW(dc,label_text.c_str(),-1,&label_rect,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+        }
+    }
+
     HPEN grid = CreatePen(PS_SOLID, 1, g_theme->grid);
     HGDIOBJ old_pen = SelectObject(dc, grid);
-    const double f0 = frf_frequency_at_fraction(0), f1 = frf_frequency_at_fraction(1);
     // Decades with 2/5 subdivisions; labels adapt to the visible span.
     int previous_label_x = -10000;
     for (int decade = static_cast<int>(std::floor(g.frf.log_start)); decade <= static_cast<int>(std::ceil(g.frf.log_end)); ++decade) {
@@ -154,10 +223,12 @@ void draw_frf(HDC dc, const RECT& p) {
         for (double multiple : {1.0, 2.0, 5.0}) {
             const double f = base * multiple;
             if (f < f0 || f > f1) continue;
-            const int x = mapx(f); line(dc, x, p.top, x, p.bottom);
+            const int x = mapx(f);
+            line(dc, x, coefficient_plot.top, x, coefficient_plot.bottom);
+            line(dc, x, reference_plot.top, x, reference_plot.bottom);
             if (x - previous_label_x >= 54) {
                 wchar_t text[48]; swprintf(text, 48, L"%.5g", f);
-                RECT label{x-36, p.bottom+4, x+36, p.bottom+23};
+                RECT label{x-36, reference_plot.bottom+4, x+36, reference_plot.bottom+23};
                 DrawTextW(dc, text, -1, &label, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
                 previous_label_x = x;
             }
@@ -167,9 +238,11 @@ void draw_frf(HDC dc, const RECT& p) {
     if (previous_label_x == -10000) {
         for (int i = 0; i <= 4; ++i) {
             const double f = frf_frequency_at_fraction(i / 4.0);
-            const int x = mapx(f); line(dc, x, p.top, x, p.bottom);
+            const int x = mapx(f);
+            line(dc, x, coefficient_plot.top, x, coefficient_plot.bottom);
+            line(dc, x, reference_plot.top, x, reference_plot.bottom);
             wchar_t text[48]; swprintf(text, 48, L"%.5g", f);
-            RECT label{x-36, p.bottom+4, x+36, p.bottom+23};
+            RECT label{x-36, reference_plot.bottom+4, x+36, reference_plot.bottom+23};
             DrawTextW(dc, text, -1, &label, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
     }
@@ -178,25 +251,39 @@ void draw_frf(HDC dc, const RECT& p) {
     const double ratio = raw_step / base;
     const double step = base * (ratio <= 1 ? 1 : ratio <= 2 ? 2 : ratio <= 5 ? 5 : 10);
     for (double v = std::ceil(low / step) * step; v <= high; v += step) {
-        const int y = mapy(v); line(dc, p.left, y, p.right, y);
+        const int y = mapy(v); line(dc, coefficient_plot.left, y, coefficient_plot.right, y);
         wchar_t text[48]; swprintf(text, 48, L"%.5g", v);
-        RECT label{0, y-10, p.left-8, y+10};
+        RECT label{0, y-10, coefficient_plot.left-8, y+10};
         DrawTextW(dc, text, -1, &label, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    }
+    const double reference_raw_step=reference_high/3;
+    const double reference_base=std::pow(10.0,std::floor(std::log10(reference_raw_step)));
+    const double reference_ratio=reference_raw_step/reference_base;
+    const double reference_step=reference_base*(reference_ratio<=1 ? 1 : reference_ratio<=2 ? 2 : reference_ratio<=5 ? 5 : 10);
+    for (double value=0;value<=reference_high;value+=reference_step) {
+        const int y=map_reference_y(value);
+        line(dc,reference_plot.left,y,reference_plot.right,y);
+        wchar_t text[48]; swprintf(text,48,L"%.5g",value);
+        RECT label{0,y-10,reference_plot.left-8,y+10};
+        DrawTextW(dc,text,-1,&label,DT_RIGHT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
     }
     SelectObject(dc, old_pen); DeleteObject(grid);
     HPEN frame = CreatePen(PS_SOLID, 1, g_theme->frame);
     old_pen = SelectObject(dc, frame);
-    line(dc, p.left, p.top, p.left, p.bottom);
-    line(dc, p.left, p.bottom, p.right, p.bottom);
+    HGDIOBJ old_brush=SelectObject(dc,GetStockObject(NULL_BRUSH));
+    Rectangle(dc,coefficient_plot.left,coefficient_plot.top,coefficient_plot.right,coefficient_plot.bottom);
+    Rectangle(dc,reference_plot.left,reference_plot.top,reference_plot.right,reference_plot.bottom);
+    SelectObject(dc,old_brush);
     SelectObject(dc, old_pen); DeleteObject(frame);
 
     const int saved = SaveDC(dc);
-    IntersectClipRect(dc, p.left+1, p.top+1, p.right, p.bottom);
+    IntersectClipRect(dc, coefficient_plot.left+1, coefficient_plot.top+1,
+                      coefficient_plot.right, coefficient_plot.bottom);
     for (std::size_t response=0;response<g.frf.result.responses.size();++response) {
         const auto& r=g.frf.result.responses[response];
         if (!r.ok) continue;
         const COLORREF color=channel_color(g.frf.outputs[response]);
-        HPEN curve = CreatePen(PS_SOLID, 1, color);
+        HPEN curve = CreatePen(g.distinguish_curves ? curve_pen_style(response) : PS_SOLID, 1, color);
         old_pen = SelectObject(dc, curve);
         const std::size_t begin = std::max<std::size_t>(1, static_cast<std::size_t>(
             std::lower_bound(r.frequencies.begin(), r.frequencies.end(), f0) - r.frequencies.begin()));
@@ -207,10 +294,15 @@ void draw_frf(HDC dc, const RECT& p) {
         // Use one mean value per screen column instead of a min/max whisker.
         // Invalid bins still break the curve rather than being joined across.
         int column = -1; double sum_y=0; std::size_t count_y=0;
+        int last_symbol_x=std::numeric_limits<int>::min()/2;
         auto flush = [&] {
             if (column < 0) return;
             const int y=static_cast<int>(std::lround(sum_y/count_y));
             if (started) LineTo(dc,column,y); else MoveToEx(dc,column,y,nullptr);
+            if (g.distinguish_curves && column-last_symbol_x>=52) {
+                draw_curve_symbol(dc,column,y,response,color);
+                last_symbol_x=column;
+            }
             started = true;
         };
         for (std::size_t k = begin; k < end; ++k) {
@@ -224,20 +316,71 @@ void draw_frf(HDC dc, const RECT& p) {
         SelectObject(dc, old_pen); DeleteObject(curve);
     }
     RestoreDC(dc, saved);
-    RECT xlabel{p.left, p.bottom+23, p.right, p.bottom+42};
-    DrawTextW(dc, L"Frequency, Hz (log)", -1, &xlabel, DT_CENTER | DT_SINGLELINE);
-    RECT ylabel{4, p.top+2, 34, p.top+22};
-    DrawTextW(dc, L"КД", -1, &ylabel, DT_LEFT | DT_SINGLELINE);
+
+    // The averaged reference is intentionally a separate plot: its physical
+    // amplitude must never share the dimensionless KD scale.
+    const int reference_saved=SaveDC(dc);
+    IntersectClipRect(dc,reference_plot.left+1,reference_plot.top+1,
+                      reference_plot.right,reference_plot.bottom);
+    const COLORREF reference_color=!g.frf.inputs.empty() ? channel_color(g.frf.inputs.front()) : g_theme->accent;
+    const std::size_t reference_style=g.frf.result.responses.size();
+    HPEN reference_pen=CreatePen(g.distinguish_curves ? curve_pen_style(reference_style) : PS_SOLID,1,reference_color);
+    old_pen=SelectObject(dc,reference_pen);
+    bool reference_started=false;
+    int reference_column=-1,reference_last_symbol=std::numeric_limits<int>::min()/2;
+    double reference_sum_y=0; std::size_t reference_count_y=0;
+    auto flush_reference=[&] {
+        if (reference_column<0) return;
+        const int y=static_cast<int>(std::lround(reference_sum_y/reference_count_y));
+        if (reference_started) LineTo(dc,reference_column,y); else MoveToEx(dc,reference_column,y,nullptr);
+        if (g.distinguish_curves && reference_column-reference_last_symbol>=52) {
+            draw_curve_symbol(dc,reference_column,y,reference_style,reference_color);
+            reference_last_symbol=reference_column;
+        }
+        reference_started=true;
+    };
+    const std::size_t reference_begin=std::max<std::size_t>(1,static_cast<std::size_t>(
+        std::lower_bound(common.frequencies.begin(),common.frequencies.end(),f0)-common.frequencies.begin()));
+    const std::size_t reference_end=static_cast<std::size_t>(
+        std::upper_bound(common.frequencies.begin(),common.frequencies.end(),f1)-common.frequencies.begin());
+    for (std::size_t k=reference_begin;k<reference_end;++k) {
+        const bool valid=k<common.reference_amplitude_valid.size() && common.reference_amplitude_valid[k] &&
+            k<common.reference_amplitude.size() && std::isfinite(common.reference_amplitude[k]);
+        if (!valid) { flush_reference(); reference_column=-1; reference_started=false; continue; }
+        const int x=mapx(common.frequencies[k]), y=map_reference_y(common.reference_amplitude[k]);
+        if (x!=reference_column) {
+            flush_reference(); reference_column=x; reference_sum_y=y; reference_count_y=1;
+        } else {
+            reference_sum_y+=y; ++reference_count_y;
+        }
+    }
+    flush_reference();
+    SelectObject(dc,old_pen); DeleteObject(reference_pen);
+    RestoreDC(dc,reference_saved);
+
+    RECT reference_title{reference_plot.left,coefficient_plot.bottom+4,reference_plot.right,reference_plot.top-3};
+    const std::wstring reference_text=(g_str==&kEn ? L"Average Reference amplitude: " : L"Амплитуда средней опоры: ")+g.frf.input_name;
+    SetTextColor(dc,g_theme->axis_text);
+    DrawTextW(dc,reference_text.c_str(),-1,&reference_title,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+    RECT xlabel{reference_plot.left, reference_plot.bottom+23, reference_plot.right, reference_plot.bottom+42};
+    DrawTextW(dc, g_str==&kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (логарифмическая шкала)",
+              -1, &xlabel, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
+    RECT ylabel{4, coefficient_plot.top+2, coefficient_plot.left-8, coefficient_plot.top+24};
+    DrawTextW(dc, g_str==&kEn ? L"KD |H|" : L"КД |H|",
+              -1, &ylabel, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    RECT reference_ylabel{4,reference_plot.top+2,reference_plot.left-8,reference_plot.top+24};
+    DrawTextW(dc,g_str==&kEn ? L"AVG Ref." : L"Ср. опора",-1,&reference_ylabel,
+              DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     SelectObject(dc, font);
     g.vx0 = g.frf.log_start; g.vx1 = g.frf.log_end;
-    g.vy0 = low; g.vy1 = high; g.vrect = p; g.vvalid = true;
+    g.vy0 = low; g.vy1 = high; g.vrect = coefficient_plot; g.vvalid = true;
     draw_guides(dc);
     draw_markers(dc);
     draw_measure(dc);
 }
 
 LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    const RECT p = plot_rect();
+    const RECT p = frf_coefficient_plot_rect(plot_rect());
     const auto inside = [&](int x, int y) { return x >= p.left && x <= p.right && y >= p.top && y <= p.bottom; };
     switch (msg) {
         case WM_MOUSEWHEEL: {
@@ -299,7 +442,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 clamp_range(*lo, *hi, minb, maxb, minw);
                 if (g.vertical_pan) {
                     const double dy = static_cast<double>(GET_Y_LPARAM(lp)-g.drag_y)/(p.bottom-p.top)*(g.drag_y_hi-g.drag_y_lo);
-                    g.frf.y_min = g.drag_y_lo+dy; g.frf.y_max = g.drag_y_hi+dy; g.frf.auto_y = false;
+                    g.frf.y_min = 0.0; g.frf.y_max = std::max(1e-6,g.drag_y_hi+dy); g.frf.auto_y = false;
                 }
                 changed();
             } else if (g.frf.result.ok && inside(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) {

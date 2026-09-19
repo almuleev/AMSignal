@@ -633,7 +633,7 @@ bool write_frf_csv(std::ofstream& out) {
     write_frf_metadata(out);
     const bool multi=g.frf.outputs.size()>1;
     if (multi) out << "response_index,response_name,";
-    out << "frequency_hz,dynamic_coefficient,h_real,h_imag,valid,coherence,coherence_valid\n";
+    out << "frequency_hz,dynamic_coefficient,h_real,h_imag,valid,coherence,coherence_valid,reference_amplitude,reference_valid\n";
     for (std::size_t response=0;response<g.frf.result.responses.size();++response) {
       const auto& r=g.frf.result.responses[response];
       for (std::size_t k = 1; k < common.frequencies.size(); ++k) {
@@ -653,7 +653,10 @@ bool write_frf_csv(std::ofstream& out) {
         } else {
             out << ",,,0";
         }
-        if (k<r.coherence_valid.size() && r.coherence_valid[k]) out << ',' << numfmt(r.coherence[k]) << ",1\n";
+        if (k<r.coherence_valid.size() && r.coherence_valid[k]) out << ',' << numfmt(r.coherence[k]) << ",1";
+        else out << ",,0";
+        if (k<common.reference_amplitude_valid.size() && common.reference_amplitude_valid[k])
+            out << ',' << numfmt(common.reference_amplitude[k]) << ",1\n";
         else out << ",,0\n";
     }
     }

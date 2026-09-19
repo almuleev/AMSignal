@@ -245,7 +245,8 @@ void sync_menu() {
     if (!g.menu) return;
     EnableMenuItem(g.menu, IDM_MODE_FRF, MF_BYCOMMAND | (frf_available ? MF_ENABLED : MF_GRAYED));
     for (int id : {IDC_PLAY, IDC_MEASURE, IDM_ADD_MARKER, IDM_ADD_VLINE, IDM_ADD_HLINE,
-         IDM_ADD_VLINE_EXACT, IDM_ADD_HLINE_EXACT, IDM_CLEAR_POINTS, IDM_CLEAR_MARKERS, IDM_CLEAR_LINES, IDM_VISMOOTH})
+         IDM_ADD_VLINE_EXACT, IDM_ADD_HLINE_EXACT, IDM_CLEAR_POINTS, IDM_CLEAR_MARKERS, IDM_CLEAR_LINES,
+         IDM_VISMOOTH, IDM_CURVE_SYMBOLS})
         EnableMenuItem(g.menu, id, MF_BYCOMMAND |
             (g.mode == AnalysisMode::FRF && !frf_command_supported(id) ? MF_GRAYED : MF_ENABLED));
     EnableMenuItem(g.menu, IDM_MODE_TIME, MF_BYCOMMAND | (g.ds.frequency_axis ? MF_GRAYED : MF_ENABLED));
@@ -256,6 +257,7 @@ void sync_menu() {
     chk(IDM_MODE_FREQ, (g.mode == AnalysisMode::FFT));
     chk(IDM_MODE_FRF, g.mode == AnalysisMode::FRF);
     chk(IDM_VISMOOTH, g.visual_smooth);
+    chk(IDM_CURVE_SYMBOLS, g.distinguish_curves);
     chk(IDM_VPAN, g.vertical_pan);
     chk(IDC_MEASURE, g.measure_mode);
     chk(IDC_CURSOR_TOOL, !g.measure_mode && !g.pending_marker && g.pending_line == 0);
@@ -336,6 +338,8 @@ HMENU make_menu() {
     const std::wstring end_text = menu_text(text(L"Go to end", L"В конец"), IDC_GOTO_END);
     const std::wstring autoy_text = menu_text(text(L"Auto zoom", L"Автомасштабирование"), IDC_AUTOY);
     const std::wstring smooth_text = menu_text(text(L"Smoothing", L"Сглаживание"), IDM_VISMOOTH);
+    const std::wstring curve_symbols_text = menu_text(
+        text(L"Curve symbols for grayscale", L"Фигуры кривых для Ч/Б"), IDM_CURVE_SYMBOLS);
     const std::wstring vpan_text = menu_text(text(L"Vertical pan", L"Вертикальное панорамирование"), IDM_VPAN);
     const std::wstring play_text = menu_text(text(L"Play / Pause signal", L"Воспроизведение / пауза сигнала"), IDC_PLAY);
     const std::wstring theme_text = menu_text(text(L"Dark theme", L"Тёмная тема"), IDM_THEME);
@@ -351,6 +355,7 @@ HMENU make_menu() {
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
     append_menu_item_owner_draw(view, IDC_AUTOY, autoy_text);
     append_menu_item_owner_draw(view, IDM_VISMOOTH, smooth_text);
+    append_menu_item_owner_draw(view, IDM_CURVE_SYMBOLS, curve_symbols_text);
     append_menu_item_owner_draw(view, IDM_VPAN, vpan_text);
     append_menu_item_owner_draw(view, IDC_PLAY, play_text);
     append_menu_item_owner_draw(view, IDM_SPEED_CUSTOM, speed_menu_text());

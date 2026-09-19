@@ -66,9 +66,9 @@ void zoom_at(double center_frac, double factor) {
 void zoom_y_at(double center_frac, double factor) {
     if (g.mode == AnalysisMode::FRF) {
         double lo, hi; frf_y_range(lo, hi);
-        const double c = lo + (hi-lo)*center_frac;
-        const double width = std::clamp((hi-lo)*factor, 1e-6, 1e6);
-        g.frf.y_min = c-width*center_frac; g.frf.y_max = g.frf.y_min+width;
+        (void)center_frac;
+        const double width = std::clamp(hi*factor, 1e-6, 1e6);
+        g.frf.y_min = 0.0; g.frf.y_max = width;
         g.frf.auto_y = false; set_status(); invalidate_plot(); return;
     }
     if (!has_data()) return;
@@ -151,8 +151,8 @@ bool prepare_plot_drag(int mx, int my) {
 void pan_y_by(double frac) {
     if (g.mode == AnalysisMode::FRF) {
         double lo, hi; frf_y_range(lo, hi);
-        const double shift = (hi-lo)*frac;
-        g.frf.y_min = lo+shift; g.frf.y_max = hi+shift; g.frf.auto_y = false;
+        const double shift = hi*frac;
+        g.frf.y_min = 0.0; g.frf.y_max = std::max(1e-6,hi+shift); g.frf.auto_y = false;
         set_status(); invalidate_plot(); return;
     }
     if ((g.mode == AnalysisMode::FFT)) {

@@ -660,8 +660,8 @@ void refresh_frf_controls(bool repopulate) {
     } else label(Method,g.frf.pending ? tr(L"Calculating…",L"Вычисление…") : L"Hann · L/K/Δf: —");
     EnableWindow(control(Length),g.frf.options.estimator==lvm::FrfEstimator::H1);
     label(Calculate, tr(L"Calculate", L"Рассчитать")); label(Csv, L"CSV"); label(Png, L"PNG");
-    label(Hint, tr(L"KD = Response / average Support. CSV contains raw values.\nSelect the time interval in Signal mode.",
-                   L"КД = отклик / средняя опора. CSV содержит исходные значения.\nУчасток выделяется в режиме времени."));
+    label(Hint, tr(L"KD = |Response / average Reference|, linear (not dB).\nA filter attenuates beyond cutoff; equal processing can cancel in the ratio.",
+                   L"КД = |отклик / средняя опора|, натуральная величина (не dB).\nФильтр ослабляет частоты за срезом; одинаковая обработка может сократиться в отношении."));
     if (repopulate) {
         SendMessageW(control(Estimator),CB_SETCURSEL,g.frf.options.estimator==lvm::FrfEstimator::H1 ? 0 : 1,0);
         SendMessageW(control(Smoothing),CB_SETCURSEL,smoothing_choice(g.frf.display_smoothing_octaves),0);

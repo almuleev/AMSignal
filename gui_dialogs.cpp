@@ -1,6 +1,7 @@
 // Dialogs: native viewer implementation.
 #include "gui_dialogs.hpp"
 #include "gui_analysis_source.hpp"
+#include "gui_frf_render.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_controls.hpp"
 #include "gui_ids.hpp"
@@ -223,6 +224,14 @@ const wchar_t* guide_prompt_title_text(bool vertical) {
 }
 
 const wchar_t* guide_prompt_label_text(bool vertical) {
+    if (g.mode == AnalysisMode::FRF) {
+        if (g_str == &kEn) return vertical ? L"Enter frequency, Hz:" : L"Enter linear KD = |H|:";
+        return vertical ? L"Введите частоту, Гц:" : L"Введите КД = |H| в натуральной величине:";
+    }
+    if (g.mode == AnalysisMode::FFT) {
+        if (g_str == &kEn) return vertical ? L"Enter frequency, Hz:" : L"Enter amplitude:";
+        return vertical ? L"Введите частоту, Гц:" : L"Введите амплитуду:";
+    }
     if (g_str == &kEn) {
         return vertical ? L"Enter the exact X-axis value:" : L"Enter the exact Y-axis value:";
     }
@@ -1216,7 +1225,9 @@ bool prompt_exact_guide_value(bool vertical, double& out_value) {
                         (g.mode == AnalysisMode::FFT) ? 0.5 * (g.freq_start + g.freq_end)
                                     : 0.5 * (g.win_start + g.win_end);
     } else if ((g.mode == AnalysisMode::FRF)) {
-        default_value=0.5*(g.frf.y_min+g.frf.y_max);
+        double ymin=0.0,ymax=1.0;
+        frf_y_range(ymin,ymax);
+        default_value=0.5*(ymin+ymax);
     } else if ((g.mode == AnalysisMode::FFT)) {
         double ymin = 0.0, ymax = 0.0;
         if (!current_freq_yrange(ymin, ymax)) {

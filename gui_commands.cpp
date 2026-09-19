@@ -298,6 +298,16 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     set_status();
                     InvalidateRect(hwnd, nullptr, TRUE);
                     return 0;
+                case IDM_CURVE_SYMBOLS: {
+                    const SettingsSnapshot before = capture_settings_snapshot();
+                    g.distinguish_curves = !g.distinguish_curves;
+                    record_settings_change(before);
+                    save_runtime_settings();
+                    sync_menu();
+                    set_status();
+                    InvalidateRect(hwnd, nullptr, TRUE);
+                    return 0;
+                }
                 case IDM_VPAN:
                     g.vertical_pan = !g.vertical_pan;
                     save_runtime_settings();

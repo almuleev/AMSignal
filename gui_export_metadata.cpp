@@ -120,6 +120,7 @@ void write_export_metadata(std::ofstream& out,
         write_export_key_value(out, L"axis_y_label", export_metadata_text(g.axis_y_label), line_end);
         write_export_key_value(out, L"marker_color", export_color_triplet(g.marker_color), line_end);
         write_export_key_value(out, L"smoothing", g.visual_smooth ? L"1" : L"0", line_end);
+        write_export_key_value(out, L"distinguish_curves", g.distinguish_curves ? L"1" : L"0", line_end);
         write_export_key_value(out, L"vertical_pan", g.vertical_pan ? L"1" : L"0", line_end);
         write_export_key_value(out, L"snap_to_data", g.snap_to_data ? L"1" : L"0", line_end);
         write_export_key_value(out, L"show_gap_markers", g.show_gap_markers ? L"1" : L"0", line_end);
@@ -449,6 +450,8 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 parse_color_triplet(value, g.marker_color);
             } else if (key == "smoothing") {
                 parse_bool(value, g.visual_smooth);
+            } else if (key == "distinguish_curves") {
+                parse_bool(value, g.distinguish_curves);
             } else if (key == "vertical_pan") {
                 parse_bool(value, g.vertical_pan);
             } else if (key == "snap_to_data") {
@@ -710,7 +713,8 @@ void write_frf_metadata(std::ofstream& out) {
     write_export_key_value(out, L"resampled", L"0", nl);
     write_export_key_value(out, L"gaps_ignored", r.gaps_ignored ? L"1" : L"0", nl);
     write_export_key_value(out, L"reference_threshold", to_w(numfmt(r.options.reference_threshold)), nl);
-    write_export_key_value(out, L"db_reference_output_per_input", L"1", nl);
+    write_export_key_value(out, L"dynamic_coefficient_scale", L"linear_abs_h", nl);
+    write_export_key_value(out, L"reference_amplitude_scale", L"linear_one_sided", nl);
     write_export_key_value(out, L"frequency_min", to_w(numfmt(std::pow(10.0, s.log_start))), nl);
     write_export_key_value(out, L"frequency_max", to_w(numfmt(std::pow(10.0, s.log_end))), nl);
     write_export_comment(out, L"", nl);

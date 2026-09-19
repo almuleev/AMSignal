@@ -99,6 +99,8 @@ FrfResult compute_frf(const FrfSamples& s, const FrfOptions& options, const std:
         if ((j & 0xffff)==0) check_cancel(cancel);
         window[j]=.5-.5*std::cos(2*std::acos(-1.0)*j/L);
     }
+    long double window_sum=0;
+    for (double value:window) window_sum+=value;
     for (std::size_t at=0; n-at>=L; at+=hop) {
         check_cancel(cancel);
         long double sx=0, sy=0;
@@ -128,11 +130,20 @@ FrfResult compute_frf(const FrfSamples& s, const FrfOptions& options, const std:
     const long double roundoff=static_cast<long double>(peak)*32*std::numeric_limits<double>::epsilon()*L;
     const long double threshold=std::max(roundoff*roundoff*r.averages,maximum*options.reference_threshold*options.reference_threshold);
     r.frequencies.resize(bins); r.transfer.resize(bins); r.valid.assign(bins,0);
+    r.reference_amplitude.assign(bins,std::numeric_limits<double>::quiet_NaN());
+    r.reference_amplitude_valid.assign(bins,0);
     r.coherence.assign(bins,std::numeric_limits<double>::quiet_NaN()); r.coherence_valid.assign(bins,0);
     bool any=false;
     for (std::size_t k=0;k<bins;++k) {
         if ((k & 0xffff)==0) check_cancel(cancel);
         r.frequencies[k]=(static_cast<double>(k)/L)/s.sample_dt;
+        if (k && window_sum>0 && xx[k]>=0) {
+            const long double amplitude=2*std::sqrt(xx[k]/r.averages)/window_sum;
+            if (std::isfinite(amplitude)) {
+                r.reference_amplitude[k]=static_cast<double>(amplitude);
+                r.reference_amplitude_valid[k]=1;
+            }
+        }
         if (!k || xx[k]<=threshold) continue;
         const auto h=xy[k]/xx[k];
         const std::complex<double> value{static_cast<double>(h.real()),static_cast<double>(h.imag())};

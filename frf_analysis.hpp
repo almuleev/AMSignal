@@ -42,6 +42,11 @@ struct FrfResult {
     std::vector<double> frequencies;
     std::vector<std::complex<double>> transfer;
     std::vector<unsigned char> valid;
+    // One-sided linear amplitude spectrum of the (possibly averaged)
+    // reference used by this result. It is kept separately from |H| so the
+    // GUI can show the actual excitation without mixing units with KD.
+    std::vector<double> reference_amplitude;
+    std::vector<unsigned char> reference_amplitude_valid;
     std::vector<double> coherence;
     std::vector<unsigned char> coherence_valid;
     FrfOptions options;

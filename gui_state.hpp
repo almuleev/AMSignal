@@ -59,7 +59,9 @@ enum class AsyncLoadStage : unsigned char {
 
 struct FrfState {
     std::vector<int> inputs, outputs;
-    bool apply_processing = false;
+    // FRF follows the processed Time/FFT views by default. The user can still
+    // explicitly switch to raw channels in the FRF panel.
+    bool apply_processing = true;
     lvm::FrfOptions options;
     lvm::FrfBatchResult result;
     bool pending = false, attempted = false;
@@ -125,6 +127,9 @@ struct DocumentState {
     bool cached_global_gap_step_ready = false;
 
     bool visual_smooth = false;  // Catmull-Rom spline rendering (data unchanged)
+    // Add per-curve line patterns and symbols so plots remain identifiable in
+    // grayscale screenshots and printed exports.
+    bool distinguish_curves = false;
 
     bool auto_y = true;            // auto-fit vertical scale (true=auto, false=fixed)
     double y_lock_min = -1.0, y_lock_max = 1.0;

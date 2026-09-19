@@ -152,6 +152,7 @@ std::wstring command_name(int command) {
         case IDM_ADD_HLINE_EXACT: return en ? L"Horizontal line (exact)" : L"Горизонтальная линия (точно)";
         case IDC_AUTOY: return en ? L"Auto zoom" : L"Автомасштабирование";
         case IDM_VISMOOTH: return en ? L"Smoothing" : L"Сглаживание";
+        case IDM_CURVE_SYMBOLS: return en ? L"Curve symbols for grayscale" : L"Фигуры кривых для Ч/Б";
         case IDM_VPAN: return en ? L"Vertical pan" : L"Вертикальное панорамирование";
         case IDM_THEME: return en ? L"Dark theme" : L"Тёмная тема";
         case IDC_PLAY: return en ? L"Play / Pause" : L"Старт/стоп";
@@ -173,7 +174,7 @@ std::vector<int> hotkey_command_order() {
     return {
         IDC_OPEN, IDC_SAVEPNG, IDC_SAVECSV, IDC_SAVE_PROJECT, IDM_UNDO, IDM_REDO,
         IDM_MODE_TIME, IDM_MODE_FREQ, IDM_MODE_FRF, IDC_MEASURE, IDM_ADD_MARKER,
-        IDM_ADD_VLINE, IDM_ADD_HLINE, IDC_AUTOY, IDM_VISMOOTH,
+        IDM_ADD_VLINE, IDM_ADD_HLINE, IDC_AUTOY, IDM_VISMOOTH, IDM_CURVE_SYMBOLS,
         IDM_VPAN, IDM_THEME, IDC_PLAY, IDC_ZOOMIN, IDC_ZOOMOUT,
         IDC_PANLEFT, IDC_PANRIGHT, IDC_RESET, IDC_GOTO_START,
         IDC_GOTO_END, IDM_CLEAR_POINTS, IDM_HOTKEYS
@@ -213,6 +214,7 @@ std::wstring hotkeys_body_text() {
     out += en ? L"View\n" : L"Вид\n";
     append_hotkey_line(out, IDC_AUTOY);
     append_hotkey_line(out, IDM_VISMOOTH);
+    append_hotkey_line(out, IDM_CURVE_SYMBOLS);
     append_hotkey_line(out, IDM_VPAN);
     append_hotkey_line(out, IDM_THEME);
     append_hotkey_line(out, IDC_PLAY);

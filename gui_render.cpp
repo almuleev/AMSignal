@@ -48,6 +48,52 @@ void draw_text(HDC dc, int x, int y, const wchar_t* s, UINT align) {
     TextOutW(dc, x, y, s, lstrlenW(s));
 }
 
+int curve_pen_style(std::size_t curve_index) {
+    static constexpr int styles[] = {PS_SOLID, PS_DASH, PS_DOT, PS_DASHDOT, PS_DASHDOTDOT};
+    return styles[curve_index % (sizeof(styles) / sizeof(styles[0]))];
+}
+
+void draw_curve_symbol(HDC dc, int x, int y, std::size_t curve_index, COLORREF color, int radius) {
+    radius = std::max(2, radius);
+    POINT previous_position{};
+    const BOOL had_position=GetCurrentPositionEx(dc,&previous_position);
+    HPEN pen = CreatePen(PS_SOLID, 1, color);
+    HBRUSH brush = CreateSolidBrush(g_theme->bg_plot);
+    HGDIOBJ old_pen = SelectObject(dc, pen);
+    HGDIOBJ old_brush = SelectObject(dc, brush);
+    switch (curve_index % 6) {
+        case 0:
+            Ellipse(dc, x-radius, y-radius, x+radius+1, y+radius+1);
+            break;
+        case 1:
+            Rectangle(dc, x-radius, y-radius, x+radius+1, y+radius+1);
+            break;
+        case 2: {
+            POINT points[3]={{x,y-radius-1},{x-radius,y+radius},{x+radius,y+radius}};
+            Polygon(dc,points,3);
+            break;
+        }
+        case 3: {
+            POINT points[4]={{x,y-radius-1},{x-radius-1,y},{x,y+radius+1},{x+radius+1,y}};
+            Polygon(dc,points,4);
+            break;
+        }
+        case 4:
+            MoveToEx(dc,x-radius,y-radius,nullptr); LineTo(dc,x+radius+1,y+radius+1);
+            MoveToEx(dc,x-radius,y+radius,nullptr); LineTo(dc,x+radius+1,y-radius-1);
+            break;
+        default:
+            MoveToEx(dc,x-radius,y,nullptr); LineTo(dc,x+radius+1,y);
+            MoveToEx(dc,x,y-radius,nullptr); LineTo(dc,x,y+radius+1);
+            break;
+    }
+    SelectObject(dc,old_brush);
+    SelectObject(dc,old_pen);
+    if (had_position) MoveToEx(dc,previous_position.x,previous_position.y,nullptr);
+    DeleteObject(brush);
+    DeleteObject(pen);
+}
+
 void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1,
                const wchar_t* xlabel) {
     HBRUSH plot_bg = CreateSolidBrush(g_theme->bg_plot);
@@ -183,13 +229,21 @@ void draw_legend(HDC dc, const RECT& p) {
     for (int i = 0; i < ch_count; ++i) {
         bool vis = g.visible[i];
         COLORREF col = channel_color(i);
-        HBRUSH cb = CreateSolidBrush(col);
-        HGDIOBJ old_b = SelectObject(dc, cb);
-        HGDIOBJ old_p = SelectObject(dc, GetStockObject(NULL_PEN));
-        RoundRect(dc, box_x + pad, y + 6, box_x + pad + 14, y + 6 + 3, 2, 2);
-        SelectObject(dc, old_p);
-        SelectObject(dc, old_b);
-        DeleteObject(cb);
+        if (g.distinguish_curves) {
+            HPEN sample_pen=CreatePen(curve_pen_style(static_cast<std::size_t>(i)),1,col);
+            HGDIOBJ old_sample_pen=SelectObject(dc,sample_pen);
+            MoveToEx(dc,box_x+pad,y+8,nullptr); LineTo(dc,box_x+pad+14,y+8);
+            SelectObject(dc,old_sample_pen); DeleteObject(sample_pen);
+            draw_curve_symbol(dc,box_x+pad+7,y+8,static_cast<std::size_t>(i),col,3);
+        } else {
+            HBRUSH cb = CreateSolidBrush(col);
+            HGDIOBJ old_b = SelectObject(dc, cb);
+            HGDIOBJ old_p = SelectObject(dc, GetStockObject(NULL_PEN));
+            RoundRect(dc, box_x + pad, y + 6, box_x + pad + 14, y + 6 + 3, 2, 2);
+            SelectObject(dc, old_p);
+            SelectObject(dc, old_b);
+            DeleteObject(cb);
+        }
 
         SetTextColor(dc, vis ? g_theme->text_primary : g_theme->text_secondary);
         SetTextAlign(dc, TA_LEFT | TA_TOP);
@@ -221,7 +275,8 @@ void draw_guides(HDC dc) {
     if (g.guides.empty() || !g.vvalid) return;
     const RECT& p = g.vrect;
     if (g.vx1 <= g.vx0 || g.vy1 <= g.vy0) return;
-    auto mx = [&](double dx) {
+    auto mx = [&](double dx) -> int {
+        if (g.mode == AnalysisMode::FRF && !(dx > 0)) return std::numeric_limits<int>::min();
         const double displayed_x = (g.mode == AnalysisMode::FRF) ? std::log10(dx) :
             (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
         return p.left + static_cast<int>((displayed_x - g.vx0) / (g.vx1 - g.vx0) * (p.right - p.left));
@@ -260,7 +315,8 @@ void draw_guides(HDC dc) {
             const int Y = my(gl.value);
             if (Y < p.top || Y > p.bottom) continue;
             MoveToEx(dc, p.left, Y, nullptr); LineTo(dc, p.right, Y);
-            swprintf(b, 48, g_str->fmt_y, gl.value);
+            if (g.mode==AnalysisMode::FRF) swprintf(b,48,L"КД=%.5g",gl.value);
+            else swprintf(b, 48, g_str->fmt_y, gl.value);
             SetTextAlign(dc, TA_LEFT | TA_BOTTOM);
             SIZE ts;
             GetTextExtentPoint32W(dc, b, lstrlenW(b), &ts);
@@ -283,7 +339,8 @@ void draw_markers(HDC dc) {
     if (g.markers.empty() || !g.vvalid) return;
     const RECT& p = g.vrect;
     if (g.vx1 <= g.vx0) return;
-    auto mx = [&](double dx) {
+    auto mx = [&](double dx) -> int {
+        if (g.mode == AnalysisMode::FRF && !(dx > 0)) return std::numeric_limits<int>::min();
         const double displayed_x = (g.mode == AnalysisMode::FRF) ? std::log10(dx) :
             (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
         return p.left + static_cast<int>((displayed_x - g.vx0) / (g.vx1 - g.vx0) * (p.right - p.left));
@@ -315,7 +372,7 @@ void draw_markers(HDC dc) {
             txt = m.label.c_str();
             tlen = static_cast<int>(m.label.size());
         } else {
-            swprintf(b, 48, (g.mode == AnalysisMode::FFT) ? g_str->fmt_hz : g_str->fmt_sec, m.x);
+            swprintf(b, 48, (g.mode == AnalysisMode::FFT || g.mode == AnalysisMode::FRF) ? g_str->fmt_hz : g_str->fmt_sec, m.x);
             txt = b;
             tlen = lstrlenW(b);
         }
@@ -357,7 +414,8 @@ void draw_measure(HDC dc) {
     if (!has_measure_points() || !g.vvalid) return;
     const RECT& p = g.vrect;
     if (g.vx1 <= g.vx0 || g.vy1 <= g.vy0) return;
-    auto mx = [&](double dx) {
+    auto mx = [&](double dx) -> int {
+        if (g.mode == AnalysisMode::FRF && !(dx > 0)) return std::numeric_limits<int>::min();
         const double displayed_x = (g.mode == AnalysisMode::FRF) ? std::log10(dx) :
             (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
         return p.left + static_cast<int>((displayed_x - g.vx0) / (g.vx1 - g.vx0) * (p.right - p.left));
@@ -380,8 +438,11 @@ void draw_measure(HDC dc) {
     HGDIOBJ prev_brush = SelectObject(dc, wb);
     for (const auto& group : g.point_groups) {
         if (!group.visible || group.points.empty() || !point_group_matches_mode(group, current_point_group_mode())) continue;
-        const std::wstring x_axis_label = L"X";
-        const std::wstring y_axis_label = L"Y";
+        const std::wstring x_axis_label = g.mode == AnalysisMode::FRF ? L"f" :
+            (g.mode == AnalysisMode::FFT ? L"f" : normalize_axis_label_text(g.axis_x_label,L"X"));
+        const std::wstring y_axis_label = g.mode == AnalysisMode::FRF ? L"КД" :
+            (g.mode == AnalysisMode::FFT ? (g_str == &kEn ? L"Amplitude" : L"Амплитуда") :
+             normalize_axis_label_text(g.axis_y_label,L"Y"));
 
         HPEN seg = CreatePen(PS_DASH, 1, group.color);
         HGDIOBJ old_seg = SelectObject(dc, seg);
@@ -437,7 +498,11 @@ void draw_measure(HDC dc) {
                 const double dy = group.points[i].second - group.points[i - 1].second;
                 std::wstring dl;
                 if (group.display.dx) { swprintf(b, 96, g_str->fmt_pt_dx, dx); dl += b; dl += xunit; dl += L" "; }
-                if (group.display.dy) { swprintf(b, 96, g_str->fmt_pt_dy, dy); dl += b; }
+                if (group.display.dy) {
+                    if (g.mode==AnalysisMode::FRF) swprintf(b,96,L"ΔКД=%.5g",dy);
+                    else swprintf(b, 96, g_str->fmt_pt_dy, dy);
+                    dl += b;
+                }
                 if (group.display.inv_dt) {
                     const double inv = (dx != 0.0) ? 1.0 / dx : 0.0;
                     if ((g.mode == AnalysisMode::FFT) || (g.mode == AnalysisMode::FRF)) {
@@ -705,8 +770,9 @@ void draw_time(HDC dc, const RECT& p) {
     for (std::size_t c = 0; c < g.ds.channel_count(); ++c) {
         if (!g.visible[c]) continue;
         const ChannelRenderView view = make_channel_render_view(c);
-        HPEN pen = CreatePen(PS_SOLID, 1, channel_color(c));
+        HPEN pen = CreatePen(g.distinguish_curves ? curve_pen_style(c) : PS_SOLID, 1, channel_color(c));
         HGDIOBJ old = SelectObject(dc, pen);
+        int last_symbol_x=std::numeric_limits<int>::min()/2;
 
         if (sparse) {
             // Collect contiguous (non-NaN) runs, then draw each as straight
@@ -720,6 +786,13 @@ void draw_time(HDC dc, const RECT& p) {
                     for (std::size_t k = 0; k < run.size(); ++k) {
                         if (k == 0) MoveToEx(dc, run[k].x, run[k].y, nullptr);
                         else LineTo(dc, run[k].x, run[k].y);
+                    }
+                }
+                if (g.distinguish_curves) {
+                    for (const auto& point:run) {
+                        if (point.x-last_symbol_x<52) continue;
+                        draw_curve_symbol(dc,point.x,point.y,c,channel_color(c));
+                        last_symbol_x=point.x;
                     }
                 }
                 run.clear();
@@ -737,7 +810,7 @@ void draw_time(HDC dc, const RECT& p) {
 
             // With visual smoothing on and few points in view, mark the real
             // samples so it's clear the curve only interpolates between them.
-            if (allow_smoothing && (hi - lo) <= 400) {
+            if (!g.distinguish_curves && allow_smoothing && (hi - lo) <= 400) {
                 HBRUSH dot = CreateSolidBrush(channel_color(c));
                 HGDIOBJ ob = SelectObject(dc, dot);
                 HGDIOBJ opn = SelectObject(dc, GetStockObject(NULL_PEN));
@@ -781,6 +854,10 @@ void draw_time(HDC dc, const RECT& p) {
                 if (prev_x >= 0 && x - prev_x <= 2) {
                     MoveToEx(dc, prev_x, prev_y, nullptr);
                     LineTo(dc, x, (yhi + ylo) / 2);
+                }
+                if (g.distinguish_curves && x-last_symbol_x>=52) {
+                    draw_curve_symbol(dc,x,(yhi+ylo)/2,c,channel_color(c));
+                    last_symbol_x=x;
                 }
                 prev_x = x; prev_y = (yhi + ylo) / 2;
             }
@@ -1055,9 +1132,10 @@ void draw_freq(HDC dc, const RECT& p) {
     for (std::size_t j = 0; j < g.spec.amp.size(); ++j) {
         const int ci = (j < g.spec_channel_indices.size()) ? g.spec_channel_indices[j] : -1;
         if (ci < 0 || !g.visible[ci]) continue;
-        HPEN pen = CreatePen(PS_SOLID, 1, channel_color(ci));
+        HPEN pen = CreatePen(g.distinguish_curves ? curve_pen_style(static_cast<std::size_t>(ci)) : PS_SOLID, 1, channel_color(ci));
         HGDIOBJ old = SelectObject(dc, pen);
         const auto& a = g.spec.amp[j];
+        int last_symbol_x=std::numeric_limits<int>::min()/2;
         if (sparse) {
             if (allow_smoothing) {
                 std::vector<POINT> pts;
@@ -1067,7 +1145,7 @@ void draw_freq(HDC dc, const RECT& p) {
                 }
                 draw_catmull_rom(dc, pts);
                 // Mark real samples when few are visible.
-                if (pts.size() <= 400) {
+                if (!g.distinguish_curves && pts.size() <= 400) {
                     HBRUSH dot = CreateSolidBrush(channel_color(ci));
                     HGDIOBJ ob = SelectObject(dc, dot);
                     HGDIOBJ opn = SelectObject(dc, GetStockObject(NULL_PEN));
@@ -1088,6 +1166,14 @@ void draw_freq(HDC dc, const RECT& p) {
                     } else {
                         LineTo(dc, x, y);
                     }
+                }
+            }
+            if (g.distinguish_curves) {
+                for (std::size_t k=klo;k<khi;++k) {
+                    const int x=mapx(f[k]);
+                    if (x-last_symbol_x<52) continue;
+                    draw_curve_symbol(dc,x,mapy(a[k]),static_cast<std::size_t>(ci),channel_color(ci));
+                    last_symbol_x=x;
                 }
             }
         } else {
@@ -1115,6 +1201,10 @@ void draw_freq(HDC dc, const RECT& p) {
                 if (prev_x >= 0 && x - prev_x <= 2) {
                     MoveToEx(dc, prev_x, prev_y, nullptr);
                     LineTo(dc, x, (yhi + ylo) / 2);
+                }
+                if (g.distinguish_curves && x-last_symbol_x>=52) {
+                    draw_curve_symbol(dc,x,(yhi+ylo)/2,static_cast<std::size_t>(ci),channel_color(ci));
+                    last_symbol_x=x;
                 }
                 prev_x = x;
                 prev_y = (yhi + ylo) / 2;

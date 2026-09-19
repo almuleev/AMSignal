@@ -115,6 +115,7 @@ void save_runtime_settings_now() {
 
     WritePrivateProfileStringW(L"ui", L"language", (g_str == &kEn) ? L"en" : L"ru", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"smoothing", g.visual_smooth ? L"1" : L"0", g_config_path.c_str());
+    WritePrivateProfileStringW(L"ui", L"curve_symbols", g.distinguish_curves ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"vertical_pan", g.vertical_pan ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"snap_to_data", g.snap_to_data ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"light_mode", g.light_mode ? L"1" : L"0", g_config_path.c_str());
@@ -302,6 +303,7 @@ void load_runtime_settings() {
     g_str = (lstrcmpiW(lang_buf, L"en") == 0) ? &kEn : &kRu;
 
     g.visual_smooth = read_ini_int(L"ui", L"smoothing", g.visual_smooth ? 1 : 0) != 0;
+    g.distinguish_curves = read_ini_int(L"ui", L"curve_symbols", g.distinguish_curves ? 1 : 0) != 0;
     g.vertical_pan = read_ini_int(L"ui", L"vertical_pan", g.vertical_pan ? 1 : 0) != 0;
     g.snap_to_data = read_ini_int(L"ui", L"snap_to_data", g.snap_to_data ? 1 : 0) != 0;
     g.show_gap_markers = read_ini_int(L"ui", L"show_gap_markers", g.show_gap_markers ? 1 : 0) != 0;

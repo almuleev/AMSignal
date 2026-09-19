@@ -13,6 +13,10 @@ void invalidate_plot();
 
 void draw_text(HDC dc, int x, int y, const wchar_t* s, UINT align);
 
+int curve_pen_style(std::size_t curve_index);
+
+void draw_curve_symbol(HDC dc, int x, int y, std::size_t curve_index, COLORREF color, int radius = 4);
+
 void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1,
                const wchar_t* xlabel);
 

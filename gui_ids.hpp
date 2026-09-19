@@ -56,6 +56,7 @@ enum {
     IDM_ABOUT,
     IDM_SETTINGS,
     IDW_START = 1114,   // welcome screen: start working
+    IDM_CURVE_SYMBOLS = 1115,
 
     // Playback speed menu items.
     IDM_SPEED_00001 = 1300,

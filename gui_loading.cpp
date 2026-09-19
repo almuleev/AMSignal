@@ -137,7 +137,7 @@ void apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
     g.markers.clear();
     g.active_marker = -1;
     invalidate_frf(true);
-    g.frf.inputs.clear(); g.frf.outputs.clear(); g.frf.apply_processing = false;
+    g.frf.inputs.clear(); g.frf.outputs.clear(); g.frf.apply_processing = true;
     clear_fft_window();
     g.fft_selecting = false;
     g.spec_source_valid = false;

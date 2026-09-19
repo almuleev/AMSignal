@@ -658,6 +658,8 @@ void test_frf_multi() {
     const auto r=lvm::analyze_frf_batch(batch,options);
     check(r.ok && r.responses.size()==3,"multi-reference produces one FRF per response");
     check_near(lvm::frf_dynamic_coefficient(r.responses[0],13),3,1e-9,"sample mean of x and 3x gives reference 2x before H1");
+    check(r.common().reference_amplitude_valid[13],"averaged Reference amplitude is available at the excited bin");
+    check_near(r.common().reference_amplitude[13],2,1e-9,"averaged Reference has its own linear amplitude spectrum");
     check_near(std::abs(r.responses[1].transfer[13]+1.0),0,1e-9,"second response retains signed complex gain");
     check_near(std::abs(r.responses[2].transfer[13]-std::polar(5.0,.4)),0,1e-9,"third response preserves its own gain and phase");
     for (std::size_t i=0;i<3;++i) {
@@ -667,6 +669,12 @@ void test_frf_multi() {
         check(max_error<1e-10 && expected.valid==r.responses[i].valid,"batch agrees with independent pair using pre-averaged reference");
         check(r.responses[i].sample_dt==r.common().sample_dt && r.responses[i].segment_length==256 &&
               r.responses[i].averages==31 && r.responses[i].overlap_samples==128,"all responses share Fs, L, K and overlap");
+        bool same_reference_amplitude=r.responses[i].reference_amplitude_valid==r.common().reference_amplitude_valid;
+        for (std::size_t k=0;k<r.common().reference_amplitude.size() && same_reference_amplitude;++k) {
+            if (r.common().reference_amplitude_valid[k] &&
+                r.responses[i].reference_amplitude[k]!=r.common().reference_amplitude[k]) same_reference_amplitude=false;
+        }
+        check(same_reference_amplitude,"all responses retain the same averaged Reference graph");
         check_near(r.responses[i].coherence[13],1,1e-10,"coherence belongs to each response against averaged reference");
     }
     lvm::FrfBatchInput single{batch.time,{batch.references[0]},{batch.responses[0]}};
@@ -727,6 +735,8 @@ void test_frf() {
     check(r.valid[13] && !r.valid[100] && !r.valid[0],"H1 masks unexcited input and DC");
     check_near(r.frequencies[13],52,1e-10,"H1 frequency uses Fs/L");
     check_near(lvm::frf_dynamic_coefficient(r,13),2,1e-9,"H1 dynamic coefficient preserves gain");
+    check(r.reference_amplitude_valid[13],"H1 exposes the linear Reference amplitude separately");
+    check_near(r.reference_amplitude[13],1,1e-9,"one-sided Hann normalization preserves Reference sine amplitude");
     check_near(std::arg(r.transfer[13]),.7,1e-9,"H1 preserves known positive phase shift");
     check_near(std::abs(r.transfer[13]-std::polar(2.0,.7)),0,1e-9,"H1 stores known complex gain");
     check(r.coherence_valid[13],"coherence is available after averaging");

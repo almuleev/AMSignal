@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.15.2
+
+- АЧХ теперь показывает натуральный коэффициент `|H|` без dB с вертикальной
+  шкалой от нуля. Под ним добавлен отдельный линейный амплитудный график
+  арифметически усреднённой опоры; те же значения доступны в FRF CSV.
+- Исправлены единицы и подписи вертикальных/горизонтальных линий и измерительных
+  точек в режиме АЧХ. Обработка каналов включена для новых FRF-документов по
+  умолчанию, а панель поясняет спад фильтра и сокращение одинаковой обработки
+  Reference/Response в коэффициенте передачи.
+- В меню «Вид» добавлены фигуры кривых для Ч/Б-печати. Режим сочетает разные
+  штрихи и маркеры на Time, FFT, FRF и PNG, поддерживает Undo/Redo и сохраняется
+  в проекте.
+- FRF now displays the natural `|H|` ratio without dB and keeps the vertical
+  scale anchored at zero. A separate linear amplitude plot for the
+  arithmetically averaged Reference is shown below and exported to FRF CSV.
+- Corrected FRF units and labels for guide lines and measurement points.
+  Channel processing is enabled by default for new FRF documents, and the
+  panel explains filter roll-off and cancellation of equal Reference/Response
+  processing in the transfer ratio.
+- Added a View option for grayscale curve identification. Distinct dash and
+  marker combinations apply to Time, FFT, FRF, and PNG, participate in
+  Undo/Redo, and persist in project files.
+
 ## v0.15.0
 
 - Добавлена одновременная работа с несколькими исходными файлами. Диалог

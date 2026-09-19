@@ -126,6 +126,7 @@ void exports() {
     g.visible = {1, 0};
     g.global_formula = L"2*x"; g.channel_formulas = {L"x+1", L"x-1"};
     g.noise_threshold_enabled = true; g.noise_threshold_min = 0.25; g.noise_threshold_max = 0.75;
+    g.distinguish_curves = true;
     rebuild_formula_cache_from_state();
     const auto project_path = test_dir / "roundtrip.AMSig";
     require(save_project_file(project_path.wstring()), "project export");
@@ -136,6 +137,7 @@ void exports() {
     require(g.global_formula == L"2*x" && g.channel_formulas[0] == L"x+1",
             "project restores formulas without baking them into data");
     require(g.noise_threshold_enabled, "project restores filter settings");
+    require(g.distinguish_curves, "project restores grayscale curve symbols");
 
     opts.format = ExportFileFormat::Csv; opts.selected_range = ExportRangeMode::Visible;
     { std::ofstream out(path); out << "KEEP THIS FILE"; }
@@ -168,6 +170,36 @@ void processing() {
     g.noise_threshold_enabled=false;
     g.global_formula=L"sqrt(x)";rebuild_formula_cache_from_state();
     require(std::isnan(transform_channel_value(0,-1)),"domain error does not silently restore input");
+
+    constexpr std::size_t count=4096;
+    constexpr double sample_rate=16384.0;
+    constexpr double pi=3.14159265358979323846;
+    std::vector<double> filter_time(count),mixed(count),response(count);
+    for (std::size_t i=0;i<count;++i) {
+        filter_time[i]=i/sample_rate;
+        mixed[i]=std::sin(2*pi*1000*filter_time[i])+std::sin(2*pi*4000*filter_time[i]);
+        response[i]=2*mixed[i];
+    }
+    reset_document({"Reference","Response"},filter_time,{mixed,response});
+    compute_spectrum_for_window(filter_time.front(),filter_time.back(),false);
+    const double raw_low=g.spec.amp[0][250],raw_high=g.spec.amp[0][1000];
+    g.noise_threshold_enabled=true;
+    g.noise_threshold_mode=FilterModeLowPass;
+    g.noise_threshold_min=0;
+    g.noise_threshold_max=2000;
+    invalidate_filtered_channel_cache();
+    compute_spectrum_for_window(filter_time.front(),filter_time.back(),false);
+    require(g.spec.amp[0][250]>raw_low*.7,"2 kHz low-pass keeps the 1 kHz FFT component");
+    require(g.spec.amp[0][1000]<raw_high*.3,"2 kHz low-pass attenuates, rather than removes, the 4 kHz FFT component");
+    require(rendered_channel_sample(0,10)!=g.ds.channels[0][10],"Time view reads the filtered channel cache");
+    require(g.frf.apply_processing,"new FRF documents apply active processing by default");
+    require(set_frf_channels({0},{1}),"processed FRF test selects Reference and Response");
+    g.frf.options.estimator=lvm::FrfEstimator::Direct;
+    set_mode(AnalysisMode::FRF);
+    require(g.frf.result.ok,"processed FRF is calculated");
+    near(lvm::frf_dynamic_coefficient(g.frf.result.common(),250),2,"equal filtering of Reference and Response cancels in linear KD");
+    require(g.frf.result.common().reference_amplitude[1000] < g.frf.result.common().reference_amplitude[250]*.3,
+            "separate averaged Reference graph shows low-pass attenuation");
 }
 
 void fft_recording_recovery() {
@@ -471,6 +503,8 @@ void frf_integration() {
     require(g.frf.result.common().sample_count==512 && g.frf.from_selection, "FRF uses one shared selected interval");
     near(lvm::frf_dynamic_coefficient(g.frf.result.common(),8),2,"selected FRF excludes the different response outside the selection");
     require(g.frf.result.common().valid[8] && !g.frf.result.common().valid[80], "weak input bins are masked in GUI result");
+    require(g.frf.result.common().reference_amplitude_valid[8] &&
+            g.frf.result.common().reference_amplitude[8]>0,"GUI receives the averaged Reference amplitude graph");
     require(set_frf_frequency_range(4,64),"valid FRF frequency limits accepted");
     near(frf_frequency_at_fraction(.5),16,"log-frequency midpoint is geometric");
     near(frf_frequency_fraction(16),.5,"frequency-to-pixel inverse matches log mapping");
@@ -651,7 +685,9 @@ void frf_integration() {
         require(h1_text.find("estimator=h1_welch")!=std::string::npos &&
                 h1_text.find("segment_length=128")!=std::string::npos && h1_text.find("averages=7")!=std::string::npos &&
                 h1_text.find("valid,coherence,coherence_valid")!=std::string::npos &&
-                h1_text.find("db_reference_output_per_input=1")!=std::string::npos,"H1 CSV records estimator, actual parameters and coherence");
+                h1_text.find("dynamic_coefficient_scale=linear_abs_h")!=std::string::npos &&
+                h1_text.find("reference_amplitude_scale=linear_one_sided")!=std::string::npos,
+                "H1 CSV records estimator, actual parameters, linear KD, Reference amplitude, and coherence");
         require(save_png((test_dir/"frf_h1.png").wstring()),"H1 graph reuses PNG export");
         Gdiplus::GdiplusShutdown(token);
     }
@@ -699,7 +735,19 @@ void frf_multi_channels() {
             csv_text.find("2,\"Y, one\",")!=std::string::npos && csv_text.find("4,\"Y three\",")!=std::string::npos,
             "CSV contains all series and complete reference membership with quoted names");
     double low,high; frf_y_range(low,high);
-    require(low>=0 && high>5,"Auto Y includes every dynamic-coefficient curve");
+    require(low==0 && high>5,"Auto Y starts at zero and includes every linear dynamic-coefficient curve");
+    const RECT full_plot{70,72,900,560};
+    const RECT coefficient_plot=frf_coefficient_plot_rect(full_plot);
+    const RECT reference_plot=frf_reference_plot_rect(full_plot);
+    require(coefficient_plot.bottom<reference_plot.top && reference_plot.bottom==full_plot.bottom,
+            "averaged Reference uses a separate graph below KD");
+    const SettingsSnapshot before_symbols=capture_settings_snapshot();
+    g.distinguish_curves=true;
+    require(record_settings_change(before_symbols),"grayscale curve symbols participate in settings history");
+    pop_undo();
+    require(!g.distinguish_curves,"curve-symbol mode is undoable");
+    pop_redo();
+    require(g.distinguish_curves,"curve-symbol mode is redoable");
     Gdiplus::GdiplusStartupInput startup; ULONG_PTR token=0;
     require(Gdiplus::GdiplusStartup(&token,&startup,nullptr)==Gdiplus::Ok,"multi-FRF PNG startup");
     struct Window {
