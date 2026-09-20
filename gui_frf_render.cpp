@@ -440,7 +440,6 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     line.vertical=g.pending_line==1; line.value=line.vertical ? frequency : coefficient; line.mode=AnalysisMode::FRF;
                     g.guides.push_back(line);
                     UndoAction action; action.type=UndoAction::ADD_LINE; action.line=line; push_undo(action);
-                    g.pending_line=0;
                 } else if (g.pending_marker) {
                     App::Marker marker;
                     int channel=-1;
@@ -452,7 +451,6 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     g.markers.push_back(marker);
                     g.active_marker=static_cast<int>(g.markers.size())-1;
                     UndoAction action; action.type=UndoAction::ADD_MARKER; action.marker=marker; push_undo(action);
-                    g.pending_marker=false;
                 } else if (g.measure_mode) {
                     if (g.snap_to_data) snap_to_displayed_frf_curve(frequency, coefficient);
                     bool created=false;
@@ -533,7 +531,18 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (GetCapture() == hwnd) ReleaseCapture();
             return 0;
         case WM_KEYDOWN:
-            if (wp == VK_ESCAPE) { g.dragging = false; g_dragging_reference_divider=false; if (GetCapture() == hwnd) ReleaseCapture(); }
+            if (wp == VK_ESCAPE) {
+                g.dragging = false;
+                g_dragging_reference_divider = false;
+                if (GetCapture() == hwnd) ReleaseCapture();
+                if (g.pending_line || g.pending_marker) {
+                    g.pending_line = 0;
+                    g.pending_marker = false;
+                    set_status();
+                    sync_menu();
+                    invalidate_plot();
+                }
+            }
             return 0;
         case WM_RBUTTONDOWN:
             if (has_measure_points()) {

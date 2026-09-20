@@ -676,8 +676,14 @@ void frf_integration() {
         WndProc(g.main,WM_COMMAND,IDM_ADD_MARKER,0);
         require(g.pending_marker,"FRF marker command remains armed in the rendered window");
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x,point_y));
-        require(!g.markers.empty() && g.markers.back().mode==AnalysisMode::FRF && !g.pending_marker,
-                "FRF marker uses frequency and dynamic-coefficient coordinates");
+        require(!g.markers.empty() && g.markers.back().mode==AnalysisMode::FRF && g.pending_marker,
+                "FRF marker uses frequency and dynamic-coefficient coordinates and stays armed");
+        WndProc(g.main,WM_COMMAND,IDM_ADD_VLINE,0);
+        handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x,point_y));
+        require(!g.guides.empty() && g.guides.back().mode==AnalysisMode::FRF && g.pending_line==1,
+                "FRF line stays armed just like the marker tool");
+        handle_frf_input(g.main,WM_KEYDOWN,VK_ESCAPE,0);
+        require(!g.pending_marker && g.pending_line==0,"Esc exits the active FRF annotation tool");
         WndProc(g.main,WM_COMMAND,IDC_MEASURE,0);
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x,point_y));
         require(!g.point_groups.empty() && g.point_groups.back().mode==PointGroupMode::FRF &&

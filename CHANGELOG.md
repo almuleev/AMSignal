@@ -11,6 +11,12 @@
 - При возврате на вкладку FFT завершённый кэш того же участка используется без
   нового вычисления. Окно предупреждения о несохранённом проекте приведено к
   тематическому оформлению AMSignal.
+- Панель АЧХ переразмечена для русских подписей: длинные значения сглаживания
+  и частотной шкалы полностью видны, переключатель средней опоры занимает
+  всю строку, а пояснения и диапазон источника не обрезаются.
+- Маркеры, вертикальные и горизонтальные линии работают единообразно в Time,
+  FFT и АЧХ: инструмент остаётся активным после постановки нескольких
+  объектов и выключается кнопкой «Курсор» или клавишей `Esc`.
 - Added linear/logarithmic frequency-axis switching for FRF without rerunning
   the calculation, including correct coordinates for annotations, zoom, and pan.
 - The average-Reference plot can be hidden, resized with its divider, and
@@ -18,6 +24,12 @@
   settings now persist in a project.
 - Returning to FFT reuses a completed cache for the same source. The unsaved
   project prompt now uses AMSignal's themed dialog.
+- Reflowed the FRF panel for complete Russian labels: smoothing and frequency
+  axis values fit, the average-Reference toggle uses a full row, and helper
+  text and the source range are no longer clipped.
+- Markers and vertical/horizontal guide lines now behave identically in Time,
+  FFT, and FRF: the selected tool remains active for repeated placement and
+  is exited with Cursor or `Esc`.
 
 ## v0.15.2
 

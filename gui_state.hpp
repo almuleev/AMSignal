@@ -160,7 +160,7 @@ struct DocumentState {
     int frf_active_point_group = -1;
 
     std::vector<GuideLine> guides;  // vertical / horizontal reference lines
-    int pending_line = 0;           // 0 none, 1 next click = vertical, 2 = horizontal
+    int pending_line = 0;           // 0 none, 1 active vertical tool, 2 active horizontal tool
     std::vector<HotkeyBinding> hotkeys;
 
     bool playing = false;
@@ -203,7 +203,7 @@ struct DocumentState {
     std::vector<GapMarkerVisual> visible_gap_markers;
     TimeYRangeCache time_yrange_cache;
     unsigned long long plot_analysis_serial = 1;
-    bool pending_marker = false;
+    bool pending_marker = false;    // active marker tool; stays selected after placement
     int active_marker = -1;
     bool show_gap_markers = true;
     bool stitch_time_gaps = false;

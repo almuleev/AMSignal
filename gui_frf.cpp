@@ -81,11 +81,11 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             make(Estimator, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 12, 164, 130, 200);
             make(Length, L"EDIT", WS_BORDER | ES_NUMBER | WS_TABSTOP, 156, 164, 134, 24);
             make(Method, L"STATIC", SS_LEFT, 12, 194, 278, 44);
-            make(SmoothingLabel, L"STATIC", SS_LEFT, 12, 242, 130, 18);
-            make(Smoothing, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 156, 240, 134, 200);
-            make(AxisScaleLabel, L"STATIC", SS_LEFT, 12, 268, 130, 18);
-            make(AxisScale, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 12, 288, 130, 100);
-            make(Reference, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 156, 288, 134, 24);
+            make(SmoothingLabel, L"STATIC", SS_LEFT, 12, 242, 92, 18);
+            make(Smoothing, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 108, 240, 182, 200);
+            make(AxisScaleLabel, L"STATIC", SS_LEFT, 12, 268, 92, 18);
+            make(AxisScale, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 108, 266, 182, 100);
+            make(Reference, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 292, 278, 24);
             make(Source, L"STATIC", SS_LEFT, 12, 318, 278, 28);
             make(LowLabel, L"STATIC", SS_LEFT, 12, 350, 130, 18);
             make(HighLabel, L"STATIC", SS_LEFT, 156, 350, 134, 18);
@@ -665,8 +665,8 @@ void refresh_frf_controls(bool repopulate) {
     label(LowLabel, L"F min, Hz"); label(HighLabel, L"F max, Hz");
     label(ApplyRange, tr(L"Apply frequency range", L"Применить диапазон частот"));
     label(EstimatorLabel, tr(L"Estimator",L"Метод")); label(LengthLabel,L"L (0 = Auto)");
-    label(SmoothingLabel, tr(L"Display smoothing",L"Сглаживание графика"));
-    label(AxisScaleLabel, tr(L"Frequency axis",L"Шкала частоты"));
+    label(SmoothingLabel, tr(L"Smoothing",L"Сглаживание"));
+    label(AxisScaleLabel, tr(L"Frequency axis",L"Ось частоты"));
     label(Reference, tr(L"Show average Reference",L"Показывать среднюю опору"));
     const auto& r=g.frf.result.common();
     wchar_t details[192]{};
@@ -679,8 +679,8 @@ void refresh_frf_controls(bool repopulate) {
     } else label(Method,g.frf.pending ? tr(L"Calculating…",L"Вычисление…") : L"Hann · L/K/Δf: —");
     EnableWindow(control(Length),g.frf.options.estimator==lvm::FrfEstimator::H1);
     label(Calculate, tr(L"Calculate", L"Рассчитать")); label(Csv, L"CSV"); label(Png, L"PNG");
-    label(Hint, tr(L"KD = |Response / average Reference|, linear (not dB).\nA filter attenuates beyond cutoff; equal processing can cancel in the ratio.",
-                   L"КД = |отклик / средняя опора|, натуральная величина (не dB).\nФильтр ослабляет частоты за срезом; одинаковая обработка может сократиться в отношении."));
+    label(Hint, tr(L"KD = |Response / average Reference|, linear (not dB).\nA filter attenuates beyond cutoff; equal processing can cancel in KD.",
+                   L"КД = |отклик / средняя опора|, натуральная величина.\nФильтр ослабляет частоты за срезом.\nОдинаковая обработка может сократиться в КД."));
     if (repopulate) {
         SendMessageW(control(Estimator),CB_SETCURSEL,g.frf.options.estimator==lvm::FrfEstimator::H1 ? 0 : 1,0);
         SendMessageW(control(Smoothing),CB_SETCURSEL,smoothing_choice(g.frf.display_smoothing_octaves),0);
@@ -715,8 +715,8 @@ void refresh_frf_controls(bool repopulate) {
         label(High, format_edit_number(g.frf.frequency_end).c_str());
     }
     wchar_t source[192]{};
-    swprintf(source, 192, tr(L"%ls: %.6g–%.6g s", L"%ls: %.6g–%.6g с"),
-        g.frf.from_selection ? tr(L"Selection", L"Выделение") : tr(L"Time view", L"Видимый участок"),
+    swprintf(source, 192, tr(L"%ls: %.5g–%.5g s", L"%ls: %.5g–%.5g с"),
+        g.frf.from_selection ? tr(L"Selection", L"Выделение") : tr(L"View", L"Вид"),
         g.frf.source_start, g.frf.source_end);
     label(Source, source);
     const bool ready = g.frf.result.ok && !g.frf.pending;
