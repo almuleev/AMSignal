@@ -2,6 +2,7 @@
 #include "gui_state_history.hpp"
 #include "gui_frf.hpp"
 #include "gui_controls.hpp"
+#include "gui_documents.hpp"
 #include "gui_menu.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_processing.hpp"
@@ -305,7 +306,14 @@ std::size_t history_stack_bytes(const std::vector<UndoAction>& stack) {
 }
 
 void push_undo(UndoAction a) {
+    if (a.type == UndoAction::NONE) return;
     g_redo.clear(); // new action clears redo stack
+    a.before_project_revision = g.project_revision;
+    if (g.next_project_revision < g.project_revision) g.next_project_revision = g.project_revision;
+    a.after_project_revision = ++g.next_project_revision;
+    g.project_revision = a.after_project_revision;
+    g.project_dirty = g.project_revision != g.saved_project_revision;
+    refresh_active_document_title();
     const std::size_t incoming = history_action_bytes(a);
     // An oversized action is a history boundary: never allow an older snapshot
     // to undo across an operation whose inverse could not be retained.
@@ -316,6 +324,31 @@ void push_undo(UndoAction a) {
         g_undo.erase(g_undo.begin());
     }
     g_undo.push_back(std::move(a));
+}
+
+void save_active_document_history() {
+    if (g_undo.empty() && g_redo.empty() && !g_filter_slider_before) return;
+    if (!g.history) g.history = std::make_shared<DocumentHistory>();
+    g.history->undo = std::move(g_undo);
+    g.history->redo = std::move(g_redo);
+    g.history->filter_slider_before = std::move(g_filter_slider_before);
+}
+
+void restore_active_document_history() {
+    g_undo.clear();
+    g_redo.clear();
+    g_filter_slider_before.reset();
+    if (!g.history) return;
+    g_undo = std::move(g.history->undo);
+    g_redo = std::move(g.history->redo);
+    g_filter_slider_before = std::move(g.history->filter_slider_before);
+}
+
+void clear_active_document_history() {
+    g_undo.clear();
+    g_redo.clear();
+    g_filter_slider_before.reset();
+    g.history.reset();
 }
 
 SettingsSnapshot capture_settings_snapshot() {
@@ -527,6 +560,7 @@ void pop_undo() {
     if (g_undo.empty()) return;
     UndoAction a = std::move(g_undo.back());
     g_undo.pop_back();
+    bool changed = false;
     switch (a.type) {
         case UndoAction::ADD_POINT:
             if (a.point_group_index >= 0 &&
@@ -535,6 +569,7 @@ void pop_undo() {
                 if (!pts.empty()) {
                     g_redo.push_back(a);
                     pts.pop_back();
+                    changed = true;
                     if (a.point_group_created && pts.empty()) {
                         erase_point_group(static_cast<std::size_t>(a.point_group_index));
                     } else {
@@ -552,6 +587,7 @@ void pop_undo() {
             if (it != g.guides.end()) {
                 g_redo.push_back(a);
                 g.guides.erase(it);
+                changed = true;
             }
             break;
         }
@@ -562,6 +598,7 @@ void pop_undo() {
             if (it != g.markers.end()) {
                 g_redo.push_back(a);
                 g.markers.erase(it);
+                changed = true;
             }
             break;
         }
@@ -574,20 +611,29 @@ void pop_undo() {
             g.frf_active_point_group = a.saved_frf_active_point_group;
             normalize_active_point_group();
             if (PointGroup* group = active_point_group()) g.marker_color = group->color;
+            changed = true;
             break;
         case UndoAction::CLEAR_LINES:
             g_redo.push_back(a);
             g.guides = a.saved_lines;
+            changed = true;
             break;
         case UndoAction::CLEAR_MARKERS:
             g_redo.push_back(a);
             g.markers = a.saved_markers;
+            changed = true;
             break;
         case UndoAction::SETTINGS_CHANGE:
             g_redo.push_back(a);
             apply_settings_snapshot(a.before_settings);
+            changed = true;
             break;
         default: break;
+    }
+    if (changed) {
+        g.project_revision = a.before_project_revision;
+        g.project_dirty = g.project_revision != g.saved_project_revision;
+        refresh_active_document_title();
     }
     sync_point_display_from_active_group();
     refresh_side_panel_controls();
@@ -597,6 +643,7 @@ void pop_redo() {
     if (g_redo.empty()) return;
     UndoAction a = std::move(g_redo.back());
     g_redo.pop_back();
+    bool changed = false;
     switch (a.type) {
         case UndoAction::ADD_POINT:
             if (a.point_group_created) {
@@ -615,33 +662,45 @@ void pop_redo() {
                 active_point_group_index_for_mode(g.point_groups[static_cast<std::size_t>(a.point_group_index)].mode) = g.active_point_group;
                 g.marker_color = g.point_groups[static_cast<std::size_t>(a.point_group_index)].color;
                 g_undo.push_back(a);
+                changed = true;
             }
             break;
         case UndoAction::ADD_LINE:
             g.guides.push_back(a.line);
             g_undo.push_back(a);
+            changed = true;
             break;
         case UndoAction::ADD_MARKER:
             g.markers.push_back(a.marker);
             g_undo.push_back(a);
+            changed = true;
             break;
         case UndoAction::CLEAR_POINTS:
             g_undo.push_back(a);
             clear_measure_point_groups_in_mode(a.cleared_mode);
+            changed = true;
             break;
         case UndoAction::CLEAR_LINES:
             g_undo.push_back(a);
             g.guides.clear();
+            changed = true;
             break;
         case UndoAction::CLEAR_MARKERS:
             g_undo.push_back(a);
             g.markers.clear();
+            changed = true;
             break;
         case UndoAction::SETTINGS_CHANGE:
             g_undo.push_back(a);
             apply_settings_snapshot(a.after_settings);
+            changed = true;
             break;
         default: break;
+    }
+    if (changed) {
+        g.project_revision = a.after_project_revision;
+        g.project_dirty = g.project_revision != g.saved_project_revision;
+        refresh_active_document_title();
     }
     sync_point_display_from_active_group();
     refresh_side_panel_controls();

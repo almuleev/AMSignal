@@ -3,6 +3,7 @@
 namespace gui {
 double frf_frequency_at_fraction(double fraction);
 double frf_frequency_fraction(double frequency);
+double frf_reference_y_max();
 void frf_y_range(double& low, double& high);
 RECT frf_coefficient_plot_rect(const RECT& full_plot);
 RECT frf_reference_plot_rect(const RECT& full_plot);

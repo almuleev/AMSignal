@@ -3,6 +3,7 @@
 #include "gui_frf.hpp"
 #include "gui_analysis_source.hpp"
 #include "gui_export_metadata.hpp"
+#include "gui_documents.hpp"
 #include "gui_status.hpp"
 #include "gui_state.hpp"
 #include "gui_theme.hpp"
@@ -529,32 +530,37 @@ bool save_project_file(const std::wstring& path) {
     return save_lvm_export(path, project);
 }
 
-void save_current_project() {
+bool save_current_project() {
     if (!has_data()) {
         show_styled_info_prompt(g.main, g_str->msg_nodata, g_str->msg_openfirst, false);
-        return;
+        return false;
     }
     if (g.project_path.empty()) {
         const wchar_t* filter = (g_str == &kEn)
             ? L"AMSignal project\0*.AMSig\0All files\0*.*\0"
             : L"Проект AMSignal\0*.AMSig\0Все файлы\0*.*\0";
         std::wstring path;
-        if (!save_dialog(path, filter, L"AMSig", file_stem() + L".AMSig")) return;
+        if (!save_dialog(path, filter, L"AMSig", file_stem() + L".AMSig")) return false;
         if (save_project_file(path)) {
             g.project_path = path;
+            mark_active_document_saved();
             status_msg((g_str == &kEn ? L"Project saved: " : L"Проект сохранён: ") + path);
+            return true;
         } else {
             MessageBoxW(g.main, g_str == &kEn ? L"Failed to save project." : L"Не удалось сохранить проект.",
                         g_str->msg_error_title, MB_ICONERROR);
         }
-        return;
+        return false;
     }
     if (save_project_file(g.project_path)) {
+        mark_active_document_saved();
         status_msg((g_str == &kEn ? L"Project saved: " : L"Проект сохранён: ") + g.project_path);
+        return true;
     } else {
         MessageBoxW(g.main, g_str == &kEn ? L"Failed to save project." : L"Не удалось сохранить проект.",
                     g_str->msg_error_title, MB_ICONERROR);
     }
+    return false;
 }
 
 void save_as_dialog() {
@@ -583,7 +589,10 @@ void save_as_dialog() {
         : L"Проект AMSignal\0*.AMSig\0Все файлы\0*.*\0";
     if (!save_dialog(path, project ? project_filter : export_file_filter(opts.format), ext, def)) return;
     if (save_export_file(path, opts)) {
-        if (project) g.project_path = path;
+        if (project) {
+            g.project_path = path;
+            mark_active_document_saved();
+        }
         const wchar_t* b = wcsrchr(path.c_str(), L'\\');
         status_msg((project ? (g_str == &kEn ? L"Project saved: " : L"Проект сохранён: ") :
             export_status_prefix(export_file_name(opts.format), opts.selected_range, g_str == &kEn)) + (b ? b + 1 : path.c_str()));

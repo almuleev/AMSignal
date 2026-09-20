@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.15.3
+
+- В АЧХ добавлено переключение логарифмической и линейной частотной шкалы без
+  повторного расчёта. Исправлены преобразования координат для маркеров, линий,
+  точек, масштабирования и панорамирования в обоих режимах.
+- График средней опоры можно скрыть, менять его высоту перетаскиванием
+  разделителя и масштабировать по Y отдельно через Ctrl+колесо. Настройки
+  источника АЧХ, шкалы и графика опоры сохраняются в проекте.
+- При возврате на вкладку FFT завершённый кэш того же участка используется без
+  нового вычисления. Окно предупреждения о несохранённом проекте приведено к
+  тематическому оформлению AMSignal.
+- Added linear/logarithmic frequency-axis switching for FRF without rerunning
+  the calculation, including correct coordinates for annotations, zoom, and pan.
+- The average-Reference plot can be hidden, resized with its divider, and
+  independently Y-scaled with Ctrl+wheel. FRF source, axis, and Reference-view
+  settings now persist in a project.
+- Returning to FFT reuses a completed cache for the same source. The unsaved
+  project prompt now uses AMSignal's themed dialog.
+
 ## v0.15.2
 
 - АЧХ теперь показывает натуральный коэффициент `|H|` без dB с вертикальной

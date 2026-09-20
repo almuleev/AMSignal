@@ -3,6 +3,7 @@
 #include "gui_hotkeys.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_commands.hpp"
+#include "gui_documents.hpp"
 #include "gui_ids.hpp"
 #include "gui_input.hpp"
 #include "gui_loading.hpp"
@@ -32,6 +33,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_DRAWITEM:
         case WM_DESTROY:
             return handle_window_message(hwnd, msg, wp, lp);
+        case WM_CLOSE:
+            request_application_close(hwnd);
+            return 0;
         case WM_HSCROLL:
         case WM_COMMAND:
             return handle_commands_message(hwnd, msg, wp, lp);

@@ -660,6 +660,12 @@ void test_frf_multi() {
     check_near(lvm::frf_dynamic_coefficient(r.responses[0],13),3,1e-9,"sample mean of x and 3x gives reference 2x before H1");
     check(r.common().reference_amplitude_valid[13],"averaged Reference amplitude is available at the excited bin");
     check_near(r.common().reference_amplitude[13],2,1e-9,"averaged Reference has its own linear amplitude spectrum");
+    check_near(r.common().reference_amplitude[13]*lvm::frf_dynamic_coefficient(r.responses[0],13),6,1e-9,
+               "Reference amplitude times KD recovers the first Response amplitude");
+    check_near(r.common().reference_amplitude[13]*lvm::frf_dynamic_coefficient(r.responses[1],13),2,1e-9,
+               "Reference amplitude and KD use compatible linear scales for the second Response");
+    check_near(r.common().reference_amplitude[13]*lvm::frf_dynamic_coefficient(r.responses[2],13),10,1e-9,
+               "Reference amplitude times KD also preserves a phase-shifted Response magnitude");
     check_near(std::abs(r.responses[1].transfer[13]+1.0),0,1e-9,"second response retains signed complex gain");
     check_near(std::abs(r.responses[2].transfer[13]-std::polar(5.0,.4)),0,1e-9,"third response preserves its own gain and phase");
     for (std::size_t i=0;i<3;++i) {

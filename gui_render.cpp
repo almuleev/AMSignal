@@ -277,7 +277,7 @@ void draw_guides(HDC dc) {
     if (g.vx1 <= g.vx0 || g.vy1 <= g.vy0) return;
     auto mx = [&](double dx) -> int {
         if (g.mode == AnalysisMode::FRF && !(dx > 0)) return std::numeric_limits<int>::min();
-        const double displayed_x = (g.mode == AnalysisMode::FRF) ? std::log10(dx) :
+        const double displayed_x = (g.mode == AnalysisMode::FRF) ? (g.vx0+frf_frequency_fraction(dx)*(g.vx1-g.vx0)) :
             (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
         return p.left + static_cast<int>((displayed_x - g.vx0) / (g.vx1 - g.vx0) * (p.right - p.left));
     };
@@ -341,7 +341,7 @@ void draw_markers(HDC dc) {
     if (g.vx1 <= g.vx0) return;
     auto mx = [&](double dx) -> int {
         if (g.mode == AnalysisMode::FRF && !(dx > 0)) return std::numeric_limits<int>::min();
-        const double displayed_x = (g.mode == AnalysisMode::FRF) ? std::log10(dx) :
+        const double displayed_x = (g.mode == AnalysisMode::FRF) ? (g.vx0+frf_frequency_fraction(dx)*(g.vx1-g.vx0)) :
             (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
         return p.left + static_cast<int>((displayed_x - g.vx0) / (g.vx1 - g.vx0) * (p.right - p.left));
     };
@@ -416,7 +416,7 @@ void draw_measure(HDC dc) {
     if (g.vx1 <= g.vx0 || g.vy1 <= g.vy0) return;
     auto mx = [&](double dx) -> int {
         if (g.mode == AnalysisMode::FRF && !(dx > 0)) return std::numeric_limits<int>::min();
-        const double displayed_x = (g.mode == AnalysisMode::FRF) ? std::log10(dx) :
+        const double displayed_x = (g.mode == AnalysisMode::FRF) ? (g.vx0+frf_frequency_fraction(dx)*(g.vx1-g.vx0)) :
             (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
         return p.left + static_cast<int>((displayed_x - g.vx0) / (g.vx1 - g.vx0) * (p.right - p.left));
     };

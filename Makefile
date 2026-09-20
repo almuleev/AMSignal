@@ -19,6 +19,7 @@ GUI_PARTS := $(wildcard gui_*.cpp)
 GUI_SOURCES := $(GUI_PARTS) $(LIB_SRC) export_helpers.cpp formula_engine.cpp gap_details.cpp
 GUI_OBJECTS := $(patsubst %.cpp,.build/make_gui/%.o,$(GUI_SOURCES))
 GUI_TEST_OBJECT := .build/make_gui/gui_regression.o
+BENCH_BIN := tests/perf_benchmark.exe
 GUI_FLAGS := $(CPPFLAGS) $(CXXFLAGS) -DAPP_VERSION_W=L\"$(VERSION)\" -I.
 GUI_RES  := AM_logo.o
 
@@ -32,7 +33,7 @@ else
     GUI_BIN  := AMSignal-$(RELEASE_VERSION)
 endif
 
-.PHONY: all clean run test gui test-gui FORCE
+.PHONY: all clean run test gui test-gui bench FORCE
 
 all: $(BIN)
 
@@ -54,6 +55,13 @@ test: $(TEST_BIN)
 
 test-gui: tests/gui_regression.exe
 	./tests/gui_regression.exe
+
+# Manual timing tool; it reports local measurements and is intentionally not a CI gate.
+bench: $(BENCH_BIN)
+	./$(BENCH_BIN) --input lvm_files_for_tests/test.lvm
+
+$(BENCH_BIN): tests/perf_benchmark.cpp $(LIB_SRC) $(HDRS)
+	$(CXX) $(CXXFLAGS) -I. -o $@ tests/perf_benchmark.cpp $(LIB_SRC) $(LDFLAGS)
 
 tests/gui_regression.exe: $(GUI_TEST_OBJECT) $(GUI_OBJECTS)
 	$(CXX) -o $@ $^ $(LDFLAGS) -lcomdlg32 -lgdi32 -luser32 -lgdiplus -lcomctl32 -luxtheme -ladvapi32 -lshell32
@@ -86,4 +94,4 @@ $(GUI_BIN): $(GUI_OBJECTS) $(GUI_RES)
 	$(CXX) -municode -mwindows -o $@ $^ $(LDFLAGS) -lcomdlg32 -lgdi32 -luser32 -lgdiplus -lcomctl32 -luxtheme -ladvapi32 -lshell32
 
 clean:
-	rm -f $(APP_OBJ) $(BIN) $(TEST_BIN) $(GUI_BIN) $(GUI_RES) $(GUI_OBJECTS) $(GUI_OBJECTS:.o=.d) $(GUI_TEST_OBJECT) $(GUI_TEST_OBJECT:.o=.d) tests/gui_regression.exe
+	rm -f $(APP_OBJ) $(BIN) $(TEST_BIN) $(GUI_BIN) $(GUI_RES) $(GUI_OBJECTS) $(GUI_OBJECTS:.o=.d) $(GUI_TEST_OBJECT) $(GUI_TEST_OBJECT:.o=.d) $(BENCH_BIN) tests/gui_regression.exe

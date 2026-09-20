@@ -15,6 +15,7 @@
 
 namespace gui {
 namespace {
+bool g_dragging_reference_divider = false;
 double dynamic_coefficient(const lvm::FrfResult& r, std::size_t k) {
     return lvm::frf_dynamic_coefficient(r, k);
 }
@@ -98,11 +99,31 @@ void changed() {
 }
 
 double frf_frequency_at_fraction(double t) {
-    return std::pow(10.0, g.frf.log_start + t * (g.frf.log_end - g.frf.log_start));
+    if (g.frf.logarithmic_frequency_axis)
+        return std::pow(10.0, g.frf.log_start + t * (g.frf.log_end - g.frf.log_start));
+    return g.frf.frequency_start + t * (g.frf.frequency_end - g.frf.frequency_start);
 }
 double frf_frequency_fraction(double f) {
-    if (!(f > 0) || !(g.frf.log_end > g.frf.log_start)) return std::numeric_limits<double>::quiet_NaN();
-    return (std::log10(f) - g.frf.log_start) / (g.frf.log_end - g.frf.log_start);
+    if (!(f > 0)) return std::numeric_limits<double>::quiet_NaN();
+    if (g.frf.logarithmic_frequency_axis) {
+        if (!(g.frf.log_end > g.frf.log_start)) return std::numeric_limits<double>::quiet_NaN();
+        return (std::log10(f) - g.frf.log_start) / (g.frf.log_end - g.frf.log_start);
+    }
+    if (!(g.frf.frequency_end > g.frf.frequency_start)) return std::numeric_limits<double>::quiet_NaN();
+    return (f-g.frf.frequency_start)/(g.frf.frequency_end-g.frf.frequency_start);
+}
+
+double frf_reference_y_max() {
+    const auto& common=g.frf.result.common();
+    const double f0=frf_frequency_at_fraction(0), f1=frf_frequency_at_fraction(1);
+    double high=0;
+    for (std::size_t k=1;k<common.frequencies.size() && k<common.reference_amplitude.size();++k) {
+        if (common.frequencies[k]<f0 || common.frequencies[k]>f1 ||
+            k>=common.reference_amplitude_valid.size() || !common.reference_amplitude_valid[k]) continue;
+        high=std::max(high,common.reference_amplitude[k]);
+    }
+    if (!(high>0) || !std::isfinite(high)) high=1;
+    return g.frf.reference_auto_y ? high*1.08 : std::max(1e-12,g.frf.reference_y_max);
 }
 void frf_y_range(double& low, double& high) {
     // KD is a linear amplitude ratio. Keep its baseline at zero in automatic
@@ -140,15 +161,18 @@ int frf_legend_height() {
 RECT frf_coefficient_plot_rect(const RECT& full) {
     RECT coefficient=full;
     coefficient.top+=frf_legend_height();
+    if (!g.frf.show_reference_amplitude) return coefficient;
     const int available=std::max(1L,coefficient.bottom-coefficient.top);
     const int gap=26;
-    int reference_height=std::clamp(available/4,60,140);
+    int reference_height=static_cast<int>(std::lround(available*g.frf.reference_height_fraction));
+    reference_height=std::clamp(reference_height,60,140);
     if (available-reference_height-gap<70) reference_height=std::max(40,available-70-gap);
     coefficient.bottom=std::max(coefficient.top+1,coefficient.bottom-reference_height-gap);
     return coefficient;
 }
 
 RECT frf_reference_plot_rect(const RECT& full) {
+    if (!g.frf.show_reference_amplitude) return RECT{full.left,full.bottom,full.right,full.bottom};
     const RECT coefficient=frf_coefficient_plot_rect(full);
     return RECT{full.left,coefficient.bottom+26,full.right,full.bottom};
 }
@@ -160,7 +184,8 @@ void draw_frf(HDC dc, const RECT& p) {
     FillRect(dc, &p, bg); DeleteObject(bg);
     SetTextAlign(dc, TA_LEFT | TA_TOP);
     SetBkMode(dc, TRANSPARENT); SetTextColor(dc, g_theme->axis_text);
-    HGDIOBJ font = SelectObject(dc, g.ui_font ? g.ui_font : GetStockObject(DEFAULT_GUI_FONT));
+    HGDIOBJ font = SelectObject(dc, g.axis_font ? g.axis_font :
+        (g.ui_font ? g.ui_font : GetStockObject(DEFAULT_GUI_FONT)));
     if (!g.frf.result.ok || g.frf.pending) {
         RECT r = p; InflateRect(&r, -24, -24);
         std::wstring text = frf_status_text();
@@ -173,22 +198,15 @@ void draw_frf(HDC dc, const RECT& p) {
     const RECT reference_plot=frf_reference_plot_rect(p);
     const int width = coefficient_plot.right - coefficient_plot.left;
     const int height = coefficient_plot.bottom - coefficient_plot.top;
-    if (width <= 0 || height <= 0 || reference_plot.bottom<=reference_plot.top || !(high > low)) {
+    if (width <= 0 || height <= 0 || (g.frf.show_reference_amplitude && reference_plot.bottom<=reference_plot.top) || !(high > low)) {
         SelectObject(dc, font); return;
     }
     const auto mapx = [&](double f) { return p.left + static_cast<int>(std::clamp(frf_frequency_fraction(f), -1.0, 2.0) * width); };
     const auto mapy = [&](double v) { return coefficient_plot.bottom - static_cast<int>(std::clamp((v - low) / (high - low), -1.0, 2.0) * height); };
     const auto& common=g.frf.result.common();
     const double f0 = frf_frequency_at_fraction(0), f1 = frf_frequency_at_fraction(1);
-    double reference_high=0;
-    for (std::size_t k=1;k<common.frequencies.size() && k<common.reference_amplitude.size();++k) {
-        if (common.frequencies[k]<f0 || common.frequencies[k]>f1 ||
-            k>=common.reference_amplitude_valid.size() || !common.reference_amplitude_valid[k]) continue;
-        reference_high=std::max(reference_high,common.reference_amplitude[k]);
-    }
-    if (!(reference_high>0) || !std::isfinite(reference_high)) reference_high=1;
-    reference_high*=1.08;
-    const int reference_height=reference_plot.bottom-reference_plot.top;
+    const double reference_high=frf_reference_y_max();
+    const int reference_height=std::max(1L,reference_plot.bottom-reference_plot.top);
     const auto map_reference_y=[&](double value) {
         return reference_plot.bottom-static_cast<int>(std::clamp(value/reference_high,-1.0,2.0)*reference_height);
     };
@@ -216,35 +234,31 @@ void draw_frf(HDC dc, const RECT& p) {
 
     HPEN grid = CreatePen(PS_SOLID, 1, g_theme->grid);
     HGDIOBJ old_pen = SelectObject(dc, grid);
-    // Decades with 2/5 subdivisions; labels adapt to the visible span.
+    // Log mode uses decades; linear mode uses evenly spaced physical frequency.
     int previous_label_x = -10000;
-    for (int decade = static_cast<int>(std::floor(g.frf.log_start)); decade <= static_cast<int>(std::ceil(g.frf.log_end)); ++decade) {
-        const double base = std::pow(10.0, decade);
-        for (double multiple : {1.0, 2.0, 5.0}) {
-            const double f = base * multiple;
-            if (f < f0 || f > f1) continue;
+    const int tick_count=g.frf.logarithmic_frequency_axis ? 0 : 5;
+    if (g.frf.logarithmic_frequency_axis) for (int decade=static_cast<int>(std::floor(g.frf.log_start)); decade<=static_cast<int>(std::ceil(g.frf.log_end)); ++decade) {
+        const double base=std::pow(10.0,decade);
+        for (double multiple:{1.0,2.0,5.0}) {
+            const double f=base*multiple; if (f<f0 || f>f1) continue;
             const int x = mapx(f);
             line(dc, x, coefficient_plot.top, x, coefficient_plot.bottom);
-            line(dc, x, reference_plot.top, x, reference_plot.bottom);
-            if (x - previous_label_x >= 54) {
-                wchar_t text[48]; swprintf(text, 48, L"%.5g", f);
-                RECT label{x-36, reference_plot.bottom+4, x+36, reference_plot.bottom+23};
-                DrawTextW(dc, text, -1, &label, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
-                previous_label_x = x;
-            }
-        }
-    }
-    // A narrow zoom may contain no decade ticks: label the visible bounds.
-    if (previous_label_x == -10000) {
-        for (int i = 0; i <= 4; ++i) {
-            const double f = frf_frequency_at_fraction(i / 4.0);
-            const int x = mapx(f);
-            line(dc, x, coefficient_plot.top, x, coefficient_plot.bottom);
-            line(dc, x, reference_plot.top, x, reference_plot.bottom);
+            if (g.frf.show_reference_amplitude) line(dc, x, reference_plot.top, x, reference_plot.bottom);
             wchar_t text[48]; swprintf(text, 48, L"%.5g", f);
             RECT label{x-36, reference_plot.bottom+4, x+36, reference_plot.bottom+23};
             DrawTextW(dc, text, -1, &label, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
+            previous_label_x=x;
         }
+    }
+    if (!g.frf.logarithmic_frequency_axis || previous_label_x==-10000) for (int i=0;i<=(tick_count ? tick_count : 4);++i) {
+        const int divisor=tick_count ? tick_count : 4;
+        const double f=frf_frequency_at_fraction(static_cast<double>(i)/divisor);
+        const int x=mapx(f);
+        line(dc,x,coefficient_plot.top,x,coefficient_plot.bottom);
+        if (g.frf.show_reference_amplitude) line(dc,x,reference_plot.top,x,reference_plot.bottom);
+        wchar_t text[48]; swprintf(text,48,L"%.5g",f);
+        RECT label{x-36,reference_plot.bottom+4,x+36,reference_plot.bottom+23};
+        DrawTextW(dc,text,-1,&label,DT_CENTER|DT_SINGLELINE|DT_NOPREFIX);
     }
     const double raw_step = (high - low) / 6;
     const double base = std::pow(10.0, std::floor(std::log10(raw_step)));
@@ -253,26 +267,33 @@ void draw_frf(HDC dc, const RECT& p) {
     for (double v = std::ceil(low / step) * step; v <= high; v += step) {
         const int y = mapy(v); line(dc, coefficient_plot.left, y, coefficient_plot.right, y);
         wchar_t text[48]; swprintf(text, 48, L"%.5g", v);
-        RECT label{0, y-10, coefficient_plot.left-8, y+10};
-        DrawTextW(dc, text, -1, &label, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        SIZE size{}; GetTextExtentPoint32W(dc,text,lstrlenW(text),&size);
+        const int label_y=std::clamp(y-size.cy/2,coefficient_plot.top+2,
+            coefficient_plot.bottom-size.cy-2);
+        SetTextAlign(dc,TA_RIGHT|TA_TOP);
+        TextOutW(dc,coefficient_plot.left-8,label_y,text,lstrlenW(text));
     }
     const double reference_raw_step=reference_high/3;
     const double reference_base=std::pow(10.0,std::floor(std::log10(reference_raw_step)));
     const double reference_ratio=reference_raw_step/reference_base;
     const double reference_step=reference_base*(reference_ratio<=1 ? 1 : reference_ratio<=2 ? 2 : reference_ratio<=5 ? 5 : 10);
-    for (double value=0;value<=reference_high;value+=reference_step) {
+    for (double value=0;g.frf.show_reference_amplitude && value<=reference_high;value+=reference_step) {
         const int y=map_reference_y(value);
         line(dc,reference_plot.left,y,reference_plot.right,y);
         wchar_t text[48]; swprintf(text,48,L"%.5g",value);
-        RECT label{0,y-10,reference_plot.left-8,y+10};
-        DrawTextW(dc,text,-1,&label,DT_RIGHT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+        SIZE size{}; GetTextExtentPoint32W(dc,text,lstrlenW(text),&size);
+        const int label_y=std::clamp(y-size.cy/2,reference_plot.top+2,
+            reference_plot.bottom-size.cy-2);
+        SetTextAlign(dc,TA_RIGHT|TA_TOP);
+        TextOutW(dc,reference_plot.left-8,label_y,text,lstrlenW(text));
     }
     SelectObject(dc, old_pen); DeleteObject(grid);
     HPEN frame = CreatePen(PS_SOLID, 1, g_theme->frame);
     old_pen = SelectObject(dc, frame);
     HGDIOBJ old_brush=SelectObject(dc,GetStockObject(NULL_BRUSH));
     Rectangle(dc,coefficient_plot.left,coefficient_plot.top,coefficient_plot.right,coefficient_plot.bottom);
-    Rectangle(dc,reference_plot.left,reference_plot.top,reference_plot.right,reference_plot.bottom);
+    if (g.frf.show_reference_amplitude)
+        Rectangle(dc,reference_plot.left,reference_plot.top,reference_plot.right,reference_plot.bottom);
     SelectObject(dc,old_brush);
     SelectObject(dc, old_pen); DeleteObject(frame);
 
@@ -320,7 +341,7 @@ void draw_frf(HDC dc, const RECT& p) {
     // The averaged reference is intentionally a separate plot: its physical
     // amplitude must never share the dimensionless KD scale.
     const int reference_saved=SaveDC(dc);
-    IntersectClipRect(dc,reference_plot.left+1,reference_plot.top+1,
+    if (g.frf.show_reference_amplitude) IntersectClipRect(dc,reference_plot.left+1,reference_plot.top+1,
                       reference_plot.right,reference_plot.bottom);
     const COLORREF reference_color=!g.frf.inputs.empty() ? channel_color(g.frf.inputs.front()) : g_theme->accent;
     const std::size_t reference_style=g.frf.result.responses.size();
@@ -343,7 +364,7 @@ void draw_frf(HDC dc, const RECT& p) {
         std::lower_bound(common.frequencies.begin(),common.frequencies.end(),f0)-common.frequencies.begin()));
     const std::size_t reference_end=static_cast<std::size_t>(
         std::upper_bound(common.frequencies.begin(),common.frequencies.end(),f1)-common.frequencies.begin());
-    for (std::size_t k=reference_begin;k<reference_end;++k) {
+    for (std::size_t k=reference_begin;g.frf.show_reference_amplitude && k<reference_end;++k) {
         const bool valid=k<common.reference_amplitude_valid.size() && common.reference_amplitude_valid[k] &&
             k<common.reference_amplitude.size() && std::isfinite(common.reference_amplitude[k]);
         if (!valid) { flush_reference(); reference_column=-1; reference_started=false; continue; }
@@ -361,18 +382,20 @@ void draw_frf(HDC dc, const RECT& p) {
     RECT reference_title{reference_plot.left,coefficient_plot.bottom+4,reference_plot.right,reference_plot.top-3};
     const std::wstring reference_text=(g_str==&kEn ? L"Average Reference amplitude: " : L"Амплитуда средней опоры: ")+g.frf.input_name;
     SetTextColor(dc,g_theme->axis_text);
-    DrawTextW(dc,reference_text.c_str(),-1,&reference_title,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+    if (g.frf.show_reference_amplitude) DrawTextW(dc,reference_text.c_str(),-1,&reference_title,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     RECT xlabel{reference_plot.left, reference_plot.bottom+23, reference_plot.right, reference_plot.bottom+42};
-    DrawTextW(dc, g_str==&kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (логарифмическая шкала)",
+    DrawTextW(dc, g.frf.logarithmic_frequency_axis ? (g_str==&kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (логарифмическая шкала)") :
+              (g_str==&kEn ? L"Frequency, Hz (linear scale)" : L"Частота, Гц (линейная шкала)"),
               -1, &xlabel, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
     RECT ylabel{4, coefficient_plot.top+2, coefficient_plot.left-8, coefficient_plot.top+24};
     DrawTextW(dc, g_str==&kEn ? L"KD |H|" : L"КД |H|",
               -1, &ylabel, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     RECT reference_ylabel{4,reference_plot.top+2,reference_plot.left-8,reference_plot.top+24};
-    DrawTextW(dc,g_str==&kEn ? L"AVG Ref." : L"Ср. опора",-1,&reference_ylabel,
+    if (g.frf.show_reference_amplitude) DrawTextW(dc,g_str==&kEn ? L"AVG Ref." : L"Ср. опора",-1,&reference_ylabel,
               DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     SelectObject(dc, font);
-    g.vx0 = g.frf.log_start; g.vx1 = g.frf.log_end;
+    g.vx0 = g.frf.logarithmic_frequency_axis ? g.frf.log_start : g.frf.frequency_start;
+    g.vx1 = g.frf.logarithmic_frequency_axis ? g.frf.log_end : g.frf.frequency_end;
     g.vy0 = low; g.vy1 = high; g.vrect = coefficient_plot; g.vvalid = true;
     draw_guides(dc);
     draw_markers(dc);
@@ -381,20 +404,34 @@ void draw_frf(HDC dc, const RECT& p) {
 
 LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     const RECT p = frf_coefficient_plot_rect(plot_rect());
+    const RECT reference = frf_reference_plot_rect(plot_rect());
     const auto inside = [&](int x, int y) { return x >= p.left && x <= p.right && y >= p.top && y <= p.bottom; };
+    const auto inside_reference = [&](int x, int y) { return g.frf.show_reference_amplitude && x >= reference.left && x <= reference.right && y >= reference.top && y <= reference.bottom; };
+    const auto on_reference_divider = [&](int x, int y) {
+        return g.frf.show_reference_amplitude && x >= p.left && x <= p.right && y >= p.bottom && y < reference.top;
+    };
     switch (msg) {
         case WM_MOUSEWHEEL: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}; ScreenToClient(hwnd, &pt);
-            if (!inside(pt.x, pt.y) || !g.frf.result.ok) return 0;
+            if ((!inside(pt.x, pt.y) && !inside_reference(pt.x, pt.y)) || !g.frf.result.ok) return 0;
             const bool up = GET_WHEEL_DELTA_WPARAM(wp) > 0;
+            if (inside_reference(pt.x,pt.y) && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                const double current=frf_reference_y_max();
+                g.frf.reference_y_max=std::clamp(current*(up ? .85 : 1/.85),1e-12,1e100);
+                g.frf.reference_auto_y=false;
+                set_status(); invalidate_plot(); changed(); return 0;
+            }
             if (GetKeyState(VK_SHIFT) & 0x8000) pan_by(up ? -.1 : .1);
-            else if (GetKeyState(VK_CONTROL) & 0x8000) zoom_y_at(
+            else if (inside(pt.x,pt.y) && (GetKeyState(VK_CONTROL) & 0x8000)) zoom_y_at(
                 static_cast<double>(p.bottom-pt.y)/(p.bottom-p.top), up ? .85 : 1/.85);
-            else if (GetKeyState(VK_MENU) & 0x8000) pan_y_by(up ? -.1 : .1);
+            else if (inside(pt.x,pt.y) && (GetKeyState(VK_MENU) & 0x8000)) pan_y_by(up ? -.1 : .1);
             else zoom_at(static_cast<double>(pt.x-p.left)/(p.right-p.left), up ? .8 : 1.25);
             changed(); return 0;
         }
         case WM_LBUTTONDOWN:
+            if (on_reference_divider(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && g.frf.result.ok) {
+                g_dragging_reference_divider=true; SetCapture(hwnd); return 0;
+            }
             if (inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && (g.pending_line || g.pending_marker || g.measure_mode) && g.vvalid) {
                 double frequency=0, coefficient=0;
                 if (!px_to_data(GET_X_LPARAM(lp),GET_Y_LPARAM(lp),frequency,coefficient)) return 0;
@@ -434,12 +471,19 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 prepare_plot_drag(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) { g.dragging = true; SetCapture(hwnd); }
             return 0;
         case WM_MOUSEMOVE: {
-            if (g.dragging) {
+            if (g_dragging_reference_divider) {
+                const RECT full=plot_rect();
+                const int available=std::max(1L,full.bottom-full.top-frf_legend_height());
+                g.frf.reference_height_fraction=std::clamp(
+                    static_cast<double>(full.bottom-GET_Y_LPARAM(lp))/available,.12,.55);
+                invalidate_plot();
+            } else if (g.dragging) {
                 double *lo, *hi, minb, maxb, minw;
                 if (!active_axis(lo, hi, minb, maxb, minw)) return 0;
                 const double shift = static_cast<double>(GET_X_LPARAM(lp)-g.drag_x)/(p.right-p.left)*(g.drag_hi-g.drag_lo);
                 *lo = g.drag_lo-shift; *hi = g.drag_hi-shift;
                 clamp_range(*lo, *hi, minb, maxb, minw);
+                sync_frf_frequency_limits();
                 if (g.vertical_pan) {
                     const double dy = static_cast<double>(GET_Y_LPARAM(lp)-g.drag_y)/(p.bottom-p.top)*(g.drag_y_hi-g.drag_y_lo);
                     g.frf.y_min = 0.0; g.frf.y_max = std::max(1e-6,g.drag_y_hi+dy); g.frf.auto_y = false;
@@ -485,9 +529,11 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_LBUTTONUP:
         case WM_CANCELMODE:
-            g.dragging = false; if (GetCapture() == hwnd) ReleaseCapture(); return 0;
+            g.dragging = false; g_dragging_reference_divider=false;
+            if (GetCapture() == hwnd) ReleaseCapture();
+            return 0;
         case WM_KEYDOWN:
-            if (wp == VK_ESCAPE) { g.dragging = false; if (GetCapture() == hwnd) ReleaseCapture(); }
+            if (wp == VK_ESCAPE) { g.dragging = false; g_dragging_reference_divider=false; if (GetCapture() == hwnd) ReleaseCapture(); }
             return 0;
         case WM_RBUTTONDOWN:
             if (has_measure_points()) {
@@ -502,7 +548,9 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_SETCURSOR:
             if (reinterpret_cast<HWND>(wp) == hwnd && LOWORD(lp) == HTCLIENT) {
-                SetCursor(LoadCursor(nullptr, (g.pending_line || g.pending_marker || g.measure_mode) ? IDC_CROSS : IDC_HAND)); return TRUE;
+                POINT pt{}; GetCursorPos(&pt); ScreenToClient(hwnd,&pt);
+                SetCursor(LoadCursor(nullptr, on_reference_divider(pt.x,pt.y) ? IDC_SIZENS :
+                    ((g.pending_line || g.pending_marker || g.measure_mode) ? IDC_CROSS : IDC_HAND))); return TRUE;
             }
             break;
     }

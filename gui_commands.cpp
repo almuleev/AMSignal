@@ -78,7 +78,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_SAVEPNG: save_png_dialog(); return 0;
                 case IDC_SAVECSV: save_as_dialog(); return 0;
                 case IDC_SAVE_PROJECT: save_current_project(); return 0;
-                case IDM_EXIT: DestroyWindow(hwnd); return 0;
+                case IDM_EXIT: request_application_close(hwnd); return 0;
                 case IDM_MODE_TIME:
                     set_mode(AnalysisMode::Time);
                     return 0;
@@ -284,6 +284,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     }
                     g.auto_y = !g.auto_y;
                     if (!g.auto_y) current_time_yrange(g.y_lock_min, g.y_lock_max);
+                    mark_active_document_dirty();
                     SendMessageW(g.autoy, BM_SETCHECK,
                                  g.auto_y ? BST_CHECKED : BST_UNCHECKED, 0);
                     InvalidateRect(g.autoy, nullptr, FALSE);
@@ -293,6 +294,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 case IDM_VISMOOTH:
                     g.visual_smooth = !g.visual_smooth;
+                    mark_active_document_dirty();
                     save_runtime_settings();
                     sync_menu();
                     set_status();
@@ -310,6 +312,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 case IDM_VPAN:
                     g.vertical_pan = !g.vertical_pan;
+                    mark_active_document_dirty();
                     save_runtime_settings();
                     sync_menu();
                     set_status();
@@ -745,8 +748,13 @@ void set_mode(AnalysisMode mode) {
             sync_point_display_from_active_group();
         }
         if (mode == AnalysisMode::FFT) {
-            g.spec_fit_pending = true;
-            compute_spectrum_from_current_source();
+            // A ready cache for exactly this source stays valid when merely
+            // returning from Time/FRF. Recalculate only after an actual input
+            // change (selection/window/processing/visible channels in LM).
+            const bool source_changed=!spectrum_matches_current_source();
+            g.spec_fit_pending = source_changed;
+            if (source_changed) compute_spectrum_from_current_source();
+            else ensure_current_spectrum();
             g.freq_start = 0.0;
             g.freq_end = g.spec_valid ? g.spec.nyquist : 1.0;
         }

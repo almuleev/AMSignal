@@ -22,7 +22,7 @@ enum {
     InputLabel = 7100, Input, InputSummary, OutputLabel, Output, Processing,
     LowLabel, Low, HighLabel, High, ApplyRange, Method, Source,
     Calculate, Csv, Png, Hint, EstimatorLabel, Estimator, LengthLabel, Length,
-    SmoothingLabel, Smoothing
+    SmoothingLabel, Smoothing, AxisScaleLabel, AxisScale, Reference
 };
 constexpr double smoothing_choices[] = {0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0};
 int smoothing_choice(double octaves) {
@@ -83,18 +83,22 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             make(Method, L"STATIC", SS_LEFT, 12, 194, 278, 44);
             make(SmoothingLabel, L"STATIC", SS_LEFT, 12, 242, 130, 18);
             make(Smoothing, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 156, 240, 134, 200);
-            make(Source, L"STATIC", SS_LEFT, 12, 268, 278, 40);
-            make(LowLabel, L"STATIC", SS_LEFT, 12, 312, 130, 18);
-            make(HighLabel, L"STATIC", SS_LEFT, 156, 312, 134, 18);
-            make(Low, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 12, 332, 130, 24);
-            make(High, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 156, 332, 134, 24);
-            make(ApplyRange, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 362, 278, 24);
-            make(Calculate, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 392, 122, 24);
-            make(Csv, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 140, 392, 72, 24);
-            make(Png, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 218, 392, 72, 24);
-            make(Hint, L"STATIC", SS_LEFT, 12, 424, 278, 68);
+            make(AxisScaleLabel, L"STATIC", SS_LEFT, 12, 268, 130, 18);
+            make(AxisScale, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 12, 288, 130, 100);
+            make(Reference, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 156, 288, 134, 24);
+            make(Source, L"STATIC", SS_LEFT, 12, 318, 278, 28);
+            make(LowLabel, L"STATIC", SS_LEFT, 12, 350, 130, 18);
+            make(HighLabel, L"STATIC", SS_LEFT, 156, 350, 134, 18);
+            make(Low, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 12, 370, 130, 24);
+            make(High, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 156, 370, 134, 24);
+            make(ApplyRange, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 400, 278, 24);
+            make(Calculate, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 430, 122, 24);
+            make(Csv, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 140, 430, 72, 24);
+            make(Png, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 218, 430, 72, 24);
+            make(Hint, L"STATIC", SS_LEFT, 12, 462, 278, 68);
             install_themed_combo(control(Estimator));
             install_themed_combo(control(Smoothing));
+            install_themed_combo(control(AxisScale));
             for (const int id : {Length, Low, High}) {
                 if (HWND edit = control(id)) {
                     WNDPROC previous = reinterpret_cast<WNDPROC>(
@@ -109,6 +113,8 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const wchar_t* const* smoothing_text = g_str == &kEn ? smoothing_en : smoothing_ru;
             for (const wchar_t* choice : {smoothing_text[0], smoothing_text[1], smoothing_text[2], smoothing_text[3], smoothing_text[4]})
                 SendMessageW(control(Smoothing),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(choice));
+            SendMessageW(control(AxisScale),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(tr(L"Logarithmic",L"Логарифмическая")));
+            SendMessageW(control(AxisScale),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(tr(L"Linear",L"Линейная")));
             refresh_frf_controls(true);
             return 0;
         }
@@ -131,6 +137,12 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 refresh_frf_controls(); set_status(); invalidate_plot();
                 return 0;
             }
+            if (id==AxisScale && code==CBN_SELCHANGE) {
+                g.frf.logarithmic_frequency_axis=SendMessageW(control(AxisScale),CB_GETCURSEL,0,0)!=1;
+                sync_frf_frequency_limits();
+                refresh_frf_controls(); set_status(); invalidate_plot();
+                return 0;
+            }
             if ((id==Input || id==Output) && code==BN_CLICKED) {
                 show_frf_channel_menu(id==Input);
                 return 0;
@@ -140,6 +152,9 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.frf.apply_processing = !g.frf.apply_processing;
                 invalidate_frf();
                 compute_frf_from_current_source();
+            } else if (id == Reference) {
+                g.frf.show_reference_amplitude=!g.frf.show_reference_amplitude;
+                refresh_frf_controls(); invalidate_plot();
             } else if (id == Calculate) {
                 if (read_segment_length()) compute_frf_from_current_source();
             } else if (id == ApplyRange) {
@@ -161,14 +176,14 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_DRAWITEM: {
             auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
             if (!dis || !dis->hwndItem) break;
-            if (dis->CtlType == ODT_COMBOBOX && (dis->CtlID == Estimator || dis->CtlID == Smoothing)) {
+            if (dis->CtlType == ODT_COMBOBOX && (dis->CtlID == Estimator || dis->CtlID == Smoothing || dis->CtlID == AxisScale)) {
                 draw_settings_combo_item(dis);
                 return TRUE;
             }
             wchar_t text[128]{}; GetWindowTextW(dis->hwndItem, text, 128);
-            if (dis->CtlID == Processing) {
+            if (dis->CtlID == Processing || dis->CtlID == Reference) {
                 draw_themed_check_control(dis->hDC, dis->rcItem, text,
-                    g.frf.apply_processing,
+                    dis->CtlID == Processing ? g.frf.apply_processing : g.frf.show_reference_amplitude,
                     (dis->itemState & ODS_SELECTED) != 0, true, false, false);
             } else {
                 draw_themed_button(dis->hDC, dis->rcItem, text,
@@ -178,7 +193,7 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_MEASUREITEM: {
             auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
-            if (mis && mis->CtlType == ODT_COMBOBOX && (mis->CtlID == Estimator || mis->CtlID == Smoothing)) {
+            if (mis && mis->CtlType == ODT_COMBOBOX && (mis->CtlID == Estimator || mis->CtlID == Smoothing || mis->CtlID == AxisScale)) {
                 measure_settings_combo_item(mis);
                 return TRUE;
             }
@@ -577,6 +592,8 @@ void apply_frf_result(lvm::FrfBatchResult result) {
             g.frf.log_start = std::max(lo, g.frf.log_start);
             g.frf.log_end = std::min(hi, g.frf.log_end);
         }
+        g.frf.frequency_start=std::pow(10.0,g.frf.log_start);
+        g.frf.frequency_end=std::pow(10.0,g.frf.log_end);
         g.frf.view_initialized = true;
     }
     refresh_frf_controls();
@@ -601,7 +618,7 @@ std::wstring frf_status_text() {
     wchar_t buf[256]{};
     const auto& r = g.frf.result.common();
     swprintf(buf, 256, L"FRF: %.6g–%.6g Hz | N=%zu | Fs=%.6g Hz | Hann | %ls",
-        std::pow(10.0, g.frf.log_start), std::pow(10.0, g.frf.log_end),
+        g.frf.frequency_start, g.frf.frequency_end,
         r.sample_count, 1.0 / r.sample_dt,
         g.frf.apply_processing ? tr(L"Processed", L"С обработкой") : tr(L"Raw", L"Исходные"));
     std::wstring text = buf;
@@ -649,6 +666,8 @@ void refresh_frf_controls(bool repopulate) {
     label(ApplyRange, tr(L"Apply frequency range", L"Применить диапазон частот"));
     label(EstimatorLabel, tr(L"Estimator",L"Метод")); label(LengthLabel,L"L (0 = Auto)");
     label(SmoothingLabel, tr(L"Display smoothing",L"Сглаживание графика"));
+    label(AxisScaleLabel, tr(L"Frequency axis",L"Шкала частоты"));
+    label(Reference, tr(L"Show average Reference",L"Показывать среднюю опору"));
     const auto& r=g.frf.result.common();
     wchar_t details[192]{};
     if (r.segment_length && !g.frf.pending) {
@@ -665,6 +684,7 @@ void refresh_frf_controls(bool repopulate) {
     if (repopulate) {
         SendMessageW(control(Estimator),CB_SETCURSEL,g.frf.options.estimator==lvm::FrfEstimator::H1 ? 0 : 1,0);
         SendMessageW(control(Smoothing),CB_SETCURSEL,smoothing_choice(g.frf.display_smoothing_octaves),0);
+        SendMessageW(control(AxisScale),CB_SETCURSEL,g.frf.logarithmic_frequency_axis ? 0 : 1,0);
         label(Length,std::to_wstring(g.frf.options.segment_length).c_str());
     }
     const auto button_text=[&](const std::vector<int>& channels,bool reference) {
@@ -691,8 +711,8 @@ void refresh_frf_controls(bool repopulate) {
     label(InputSummary,g.frf.inputs.size()>1 ? (tr(L"AVG of ",L"Среднее из ")+std::to_wstring(g.frf.inputs.size())+
         tr(L" channels",L" каналов")).c_str() : L"");
     if (g.frf.view_initialized) {
-        label(Low, format_edit_number(std::pow(10.0, g.frf.log_start)).c_str());
-        label(High, format_edit_number(std::pow(10.0, g.frf.log_end)).c_str());
+        label(Low, format_edit_number(g.frf.frequency_start).c_str());
+        label(High, format_edit_number(g.frf.frequency_end).c_str());
     }
     wchar_t source[192]{};
     swprintf(source, 192, tr(L"%ls: %.6g–%.6g s", L"%ls: %.6g–%.6g с"),
@@ -703,6 +723,7 @@ void refresh_frf_controls(bool repopulate) {
     EnableWindow(control(Csv), ready); EnableWindow(control(Png), ready);
     EnableWindow(control(ApplyRange), ready);
     InvalidateRect(control(Processing), nullptr, TRUE);
+    InvalidateRect(control(Reference), nullptr, TRUE);
 }
 
 bool set_frf_frequency_range(double low, double high) {
@@ -711,12 +732,24 @@ bool set_frf_frequency_range(double low, double high) {
     if (low < f[1] * (1 - 1e-9) || high > f.back() * (1 + 1e-9)) return false;
     g.frf.log_start = std::log10(std::max(low, f[1]));
     g.frf.log_end = std::log10(std::min(high, f.back()));
+    g.frf.frequency_start=std::max(low,f[1]);
+    g.frf.frequency_end=std::min(high,f.back());
     refresh_frf_controls(); set_status(); if (g.main) invalidate_plot();
     return true;
+}
+void sync_frf_frequency_limits() {
+    if (g.frf.logarithmic_frequency_axis) {
+        g.frf.frequency_start=std::pow(10.0,g.frf.log_start);
+        g.frf.frequency_end=std::pow(10.0,g.frf.log_end);
+    } else {
+        g.frf.log_start=std::log10(g.frf.frequency_start);
+        g.frf.log_end=std::log10(g.frf.frequency_end);
+    }
 }
 void reset_frf_view() {
     if (!g.frf.result.ok) return;
     g.frf.auto_y = true;
+    g.frf.reference_auto_y = true;
     set_frf_frequency_range(g.frf.result.common().frequencies[1], g.frf.result.common().frequencies.back());
 }
 bool frf_command_supported(int id) {

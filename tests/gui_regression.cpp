@@ -71,6 +71,70 @@ void reopen(const std::filesystem::path& path, bool dedup = false) {
     apply_export_metadata_from_comments(comments);
 }
 
+void document_history_and_save_state() {
+    reset_document({"A"}, {0, 1, 2, 3}, {{1, 2, 3, 4}});
+    mark_active_document_saved();
+    g.visual_smooth = true;
+    mark_active_document_dirty();
+    require(active_document_has_unsaved_changes(), "project graph setting marks the document dirty without an undo action");
+    mark_active_document_saved();
+    GuideLine first;
+    first.value = 1.0;
+    g.guides.push_back(first);
+    UndoAction first_action;
+    first_action.type = UndoAction::ADD_LINE;
+    first_action.line = first;
+    push_undo(first_action);
+    require(active_document_has_unsaved_changes(), "editing a document marks its project dirty");
+    pop_undo();
+    require(!active_document_has_unsaved_changes(), "undoing to the saved revision clears the dirty state");
+    pop_redo();
+    require(active_document_has_unsaved_changes(), "redoing past the saved revision restores the dirty state");
+    pop_undo();
+    require(!active_document_has_unsaved_changes(), "undo returns to the original saved revision before branching");
+    GuideLine branch;
+    branch.value = 1.5;
+    g.guides.push_back(branch);
+    UndoAction branch_action;
+    branch_action.type = UndoAction::ADD_LINE;
+    branch_action.line = branch;
+    push_undo(branch_action);
+    require(active_document_has_unsaved_changes(), "a new branch after undo cannot reuse the saved revision");
+    mark_active_document_saved();
+    require(!active_document_has_unsaved_changes(), "successful project save records the active history revision");
+    GuideLine after_save;
+    after_save.value = 3.0;
+    g.guides.push_back(after_save);
+    UndoAction after_save_action;
+    after_save_action.type = UndoAction::ADD_LINE;
+    after_save_action.line = after_save;
+    push_undo(after_save_action);
+    require(active_document_has_unsaved_changes(), "new edit after saving marks the project dirty again");
+
+    DocumentState other = static_cast<DocumentState&>(g);
+    other.file_name = L"other.lvm";
+    other.history.reset();
+    other.project_revision = 0;
+    other.next_project_revision = 0;
+    other.saved_project_revision = 0;
+    other.project_dirty = false;
+    g.inactive_documents.push_back(std::move(other));
+    const std::size_t first_history_count = g_undo.size();
+    require(switch_to_document(1), "switches to an inactive document for independent history");
+    require(g_undo.empty(), "inactive document starts with its own empty undo history");
+    GuideLine second;
+    second.value = 2.0;
+    g.guides.push_back(second);
+    UndoAction second_action;
+    second_action.type = UndoAction::ADD_LINE;
+    second_action.line = second;
+    push_undo(second_action);
+    require(g_undo.size() == 1, "second document receives its own undo action");
+    require(switch_to_document(1), "switches back to the first document");
+    require(g_undo.size() == first_history_count, "first document restores its own undo history");
+    require(active_document_has_unsaved_changes(), "first document restores its independent dirty state");
+}
+
 void exports() {
     ExportOptions opts;
     opts.selected_range = ExportRangeMode::Whole;
@@ -127,6 +191,12 @@ void exports() {
     g.global_formula = L"2*x"; g.channel_formulas = {L"x+1", L"x-1"};
     g.noise_threshold_enabled = true; g.noise_threshold_min = 0.25; g.noise_threshold_max = 0.75;
     g.distinguish_curves = true;
+    g.frf.apply_processing = false;
+    g.frf.logarithmic_frequency_axis = false;
+    g.frf.show_reference_amplitude = false;
+    g.frf.reference_height_fraction = .42;
+    g.frf.reference_auto_y = false;
+    g.frf.reference_y_max = 7.5;
     rebuild_formula_cache_from_state();
     const auto project_path = test_dir / "roundtrip.AMSig";
     require(save_project_file(project_path.wstring()), "project export");
@@ -138,6 +208,11 @@ void exports() {
             "project restores formulas without baking them into data");
     require(g.noise_threshold_enabled, "project restores filter settings");
     require(g.distinguish_curves, "project restores grayscale curve symbols");
+    require(!g.frf.apply_processing, "project restores the FRF raw-channel choice");
+    require(!g.frf.logarithmic_frequency_axis && !g.frf.show_reference_amplitude &&
+            std::fabs(g.frf.reference_height_fraction-.42)<1e-9 && !g.frf.reference_auto_y &&
+            std::fabs(g.frf.reference_y_max-7.5)<1e-9,
+            "project restores FRF axis and Reference graph display settings");
 
     opts.format = ExportFileFormat::Csv; opts.selected_range = ExportRangeMode::Visible;
     { std::ofstream out(path); out << "KEEP THIS FILE"; }
@@ -373,6 +448,7 @@ void light_mode_fft_visibility() {
     finish();
     require(g.spec.source_channels == std::vector<std::size_t>{1,2}, "new LM request respects current visible channels");
     const auto prior_window = g.spec_generation;
+    set_fft_window(time[100], time[2000]);
     compute_spectrum_for_window(time[100], time[2000], true);
     require(g.spec_pending && g.spec_generation > prior_window, "changing the source window invalidates cached spectra");
     finish();
@@ -382,6 +458,11 @@ void light_mode_fft_visibility() {
     on_signal_transform_changed();
     require(g.spec_pending && g.spec_generation > prior_transform, "changing processing invalidates cached spectra");
     finish();
+    const auto cached_generation=g.spec_generation;
+    g.mode=AnalysisMode::Time;
+    set_mode(AnalysisMode::FFT);
+    require(g.spec_generation==cached_generation && !g.spec_pending,
+            "returning to the FFT tab reuses an unchanged completed cache");
 }
 
 void routed_window_messages() {
@@ -508,6 +589,15 @@ void frf_integration() {
     require(set_frf_frequency_range(4,64),"valid FRF frequency limits accepted");
     near(frf_frequency_at_fraction(.5),16,"log-frequency midpoint is geometric");
     near(frf_frequency_fraction(16),.5,"frequency-to-pixel inverse matches log mapping");
+    g.frf.logarithmic_frequency_axis=false;
+    sync_frf_frequency_limits();
+    near(frf_frequency_at_fraction(.5),34,"linear-frequency midpoint is arithmetic");
+    near(frf_frequency_fraction(34),.5,"frequency-to-pixel inverse matches linear mapping");
+    zoom_at(.5,.5);
+    near(frf_frequency_at_fraction(.5),34,"linear FRF zoom preserves frequency at cursor");
+    g.frf.logarithmic_frequency_axis=true;
+    sync_frf_frequency_limits();
+    require(set_frf_frequency_range(4,64),"restore logarithmic range after linear navigation");
     const auto generation=g.frf.generation;
     const auto transfer=g.frf.result.common().transfer;
     zoom_at(.5,.5);
@@ -741,6 +831,14 @@ void frf_multi_channels() {
     const RECT reference_plot=frf_reference_plot_rect(full_plot);
     require(coefficient_plot.bottom<reference_plot.top && reference_plot.bottom==full_plot.bottom,
             "averaged Reference uses a separate graph below KD");
+    const double reference_auto_max=frf_reference_y_max();
+    g.frf.reference_auto_y=false; g.frf.reference_y_max=reference_auto_max*.5;
+    near(frf_reference_y_max(),reference_auto_max*.5,"Reference graph has an independent vertical scale");
+    g.frf.show_reference_amplitude=false;
+    require(frf_coefficient_plot_rect(full_plot).bottom==full_plot.bottom &&
+            frf_reference_plot_rect(full_plot).top==full_plot.bottom,
+            "Reference graph can be hidden without changing KD data");
+    g.frf.show_reference_amplitude=true; g.frf.reference_auto_y=true;
     const SettingsSnapshot before_symbols=capture_settings_snapshot();
     g.distinguish_curves=true;
     require(record_settings_change(before_symbols),"grayscale curve symbols participate in settings history");
@@ -947,7 +1045,7 @@ void multiple_open_documents() {
 int main() {
     std::filesystem::create_directories(test_dir);
     try {
-        exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); multiple_open_documents(); processing(); fft_recording_recovery();
+        document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); multiple_open_documents(); processing(); fft_recording_recovery();
         light_mode_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
         light_mode_fft_visibility();
         routed_window_messages();

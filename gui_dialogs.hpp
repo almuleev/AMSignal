@@ -149,6 +149,9 @@ LRESULT CALLBACK InfoPromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
 void show_styled_info_prompt(HWND owner, const wchar_t* title, const wchar_t* message, bool error);
 
+// Modal Save / Don't save / Cancel prompt using the application's theme.
+int show_styled_save_changes_prompt(HWND owner, const wchar_t* title, const wchar_t* message);
+
 double normalize_prompt_bound(double value);
 
 const wchar_t* speed_prompt_title_text();

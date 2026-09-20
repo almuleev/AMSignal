@@ -24,9 +24,14 @@ void clamp_range(double& lo, double& hi, double minb, double maxb, double minw) 
 bool active_axis(double*& lo, double*& hi, double& minb, double& maxb, double& minw) {
     if (g.mode == AnalysisMode::FRF) {
         if (!g.frf.result.ok || g.frf.pending) return false;
-        lo = &g.frf.log_start; hi = &g.frf.log_end;
-        minb = std::log10(g.frf.result.common().frequencies[1]);
-        maxb = std::log10(g.frf.result.common().frequencies.back());
+        if (g.frf.logarithmic_frequency_axis) {
+            lo = &g.frf.log_start; hi = &g.frf.log_end;
+            minb = std::log10(g.frf.result.common().frequencies[1]);
+            maxb = std::log10(g.frf.result.common().frequencies.back());
+        } else {
+            lo=&g.frf.frequency_start; hi=&g.frf.frequency_end;
+            minb=g.frf.result.common().frequencies[1]; maxb=g.frf.result.common().frequencies.back();
+        }
         minw = std::min(1e-6, (maxb-minb)*.01);
         return true;
     }
@@ -59,6 +64,7 @@ void zoom_at(double center_frac, double factor) {
     if (nhi > maxb) { nhi = maxb; nlo = nhi - nw; if (nlo < minb) nlo = minb; }
     *lo = nlo;
     *hi = nhi;
+    if (g.mode==AnalysisMode::FRF) sync_frf_frequency_limits();
     set_status();
     invalidate_plot();
 }
@@ -116,6 +122,7 @@ void pan_by(double frac) {
     *lo += w * frac;
     *hi += w * frac;
     clamp_range(*lo, *hi, minb, maxb, minw);
+    if (g.mode==AnalysisMode::FRF) sync_frf_frequency_limits();
     set_status();
     invalidate_plot();
 }

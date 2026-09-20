@@ -2,6 +2,7 @@
 #include "gui_playback.hpp"
 #include "gui_frf.hpp"
 #include "gui_controls.hpp"
+#include "gui_documents.hpp"
 #include "gui_ids.hpp"
 #include "gui_layout.hpp"
 #include "gui_render.hpp"
@@ -34,6 +35,7 @@ void set_play_speed(double speed) {
         g.play_anchor_qpc = now;
     }
     g.play_speed = speed;
+    mark_active_document_dirty();
     save_runtime_settings();
     set_status();
 }

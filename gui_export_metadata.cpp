@@ -131,6 +131,12 @@ void write_export_metadata(std::ofstream& out,
         write_export_key_value(out, L"y_lock_max", format_optional_edit_number(g.y_lock_max), line_end);
         write_export_key_value(out, L"auto_y_amp", g.auto_y_amp ? L"1" : L"0", line_end);
         write_export_key_value(out, L"y_amp_max", format_optional_edit_number(g.y_amp_max), line_end);
+        write_export_key_value(out, L"frf_apply_processing", g.frf.apply_processing ? L"1" : L"0", line_end);
+        write_export_key_value(out, L"frf_logarithmic_frequency_axis", g.frf.logarithmic_frequency_axis ? L"1" : L"0", line_end);
+        write_export_key_value(out, L"frf_show_reference_amplitude", g.frf.show_reference_amplitude ? L"1" : L"0", line_end);
+        write_export_key_value(out, L"frf_reference_height_fraction", format_edit_number(g.frf.reference_height_fraction), line_end);
+        write_export_key_value(out, L"frf_reference_auto_y", g.frf.reference_auto_y ? L"1" : L"0", line_end);
+        write_export_key_value(out, L"frf_reference_y_max", format_optional_edit_number(g.frf.reference_y_max), line_end);
         write_export_key_value(out, L"play_speed", format_edit_number(g.play_speed), line_end);
         write_export_key_value(out, L"point_display", export_point_display_text(g.pdisp), line_end);
         write_export_comment(out, L"", line_end);
@@ -473,6 +479,22 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 parse_bool(value, g.auto_y_amp);
             } else if (key == "y_amp_max") {
                 parse_double(value, g.y_amp_max);
+            } else if (key == "frf_apply_processing") {
+                parse_bool(value, g.frf.apply_processing);
+            } else if (key == "frf_logarithmic_frequency_axis") {
+                parse_bool(value, g.frf.logarithmic_frequency_axis);
+            } else if (key == "frf_show_reference_amplitude") {
+                parse_bool(value, g.frf.show_reference_amplitude);
+            } else if (key == "frf_reference_height_fraction") {
+                double fraction=0;
+                if (parse_double(value, fraction) && std::isfinite(fraction))
+                    g.frf.reference_height_fraction=std::clamp(fraction,.12,.55);
+            } else if (key == "frf_reference_auto_y") {
+                parse_bool(value, g.frf.reference_auto_y);
+            } else if (key == "frf_reference_y_max") {
+                double ymax=0;
+                if (parse_double(value,ymax) && std::isfinite(ymax) && ymax>0)
+                    g.frf.reference_y_max=ymax;
             } else if (key == "play_speed") {
                 double speed = g.play_speed;
                 if (parse_double(value, speed) && std::isfinite(speed) && speed > 0.0) g.play_speed = speed;

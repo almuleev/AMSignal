@@ -88,6 +88,14 @@ bool spectrum_needs_visible_channels() {
     return false;
 }
 
+bool spectrum_matches_current_source() {
+    double start=0.0, end=0.0;
+    bool from_selection=false;
+    return current_fft_source_window(start,end,from_selection) &&
+        g.spec_source_valid && g.spec_source_start==start && g.spec_source_end==end &&
+        g.spec_source_from_selection==from_selection;
+}
+
 void compute_spectrum_for_window(double start, double end, bool from_selection) {
     if (!has_data()) return;
     clamp_time_window(start, end);
@@ -127,13 +135,36 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
         return;
     }
     try {
+        ensure_channel_formula_vectors();
+        bool worker_can_prepare = g.main && !g.noise_threshold_enabled;
+        if (worker_can_prepare) {
+            for (std::size_t c : visible_channels) {
+                if (c >= g.channel_transform_kind.size() ||
+                    g.channel_transform_kind[c] == TransformRuntimeKind::CachedFormula) {
+                    worker_can_prepare = false;
+                    break;
+                }
+            }
+        }
         lvm::Dataset view;
-        build_time_window_dataset(g.ds, start, end, view, &visible_channels);
+        build_time_window_dataset(g.ds, start, end, view, &visible_channels, !worker_can_prepare);
         g.spec_attempted = true;
         if (g.main) {
+            std::vector<lvm::SpectrumWorker::AffineTransform> transforms;
+            if (worker_can_prepare) {
+                transforms.reserve(visible_channels.size());
+                for (std::size_t c : visible_channels) {
+                    lvm::SpectrumWorker::AffineTransform transform;
+                    if (g.channel_transform_kind[c] == TransformRuntimeKind::Affine) {
+                        transform.mul = g.channel_transform_mul[c];
+                        transform.add = g.channel_transform_add[c];
+                    }
+                    transforms.push_back(transform);
+                }
+            }
             g.spec_pending = true;
             g.spec_valid = false;
-            g_spectrum_worker.submit(std::move(view), visible_channels, ++g.spec_generation);
+            g_spectrum_worker.submit(std::move(view), visible_channels, ++g.spec_generation, std::move(transforms));
         } else {
             auto spectrum = lvm::compute_spectrum(view, 0);
             for (auto& c : spectrum.source_channels) c = visible_channels[c];

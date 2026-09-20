@@ -4,6 +4,7 @@
 #include "gui_hotkeys.hpp"
 #include "gui_gap_details.hpp"
 #include "gui_controls.hpp"
+#include "gui_documents.hpp"
 #include "gui_settings_hotkeys.hpp"
 #include "gui_menu.hpp"
 #include "gui_state.hpp"
@@ -340,6 +341,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED) {
                         toggle_checked_state(ctl);
                         g.show_gap_markers = checked();
+                        mark_active_document_dirty();
                         if (!g.show_gap_markers) hide_gap_details_card();
                         invalidate_plot_analysis_cache();
                         save_runtime_settings();
@@ -351,6 +353,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED) {
                         toggle_checked_state(ctl);
                         g.stitch_time_gaps = checked();
+                        mark_active_document_dirty();
                         hide_gap_details_card();
                         invalidate_plot_analysis_cache();
                         save_runtime_settings();
@@ -365,8 +368,10 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     GetWindowTextW(ctl, buf, 128);
                     const bool is_x = (id == IDC_SET_AXIS_X_LABEL_EDIT);
                     std::wstring label = normalize_axis_label_text(buf, is_x ? L"X" : L"Y");
+                    const bool changed = is_x ? g.axis_x_label != label : g.axis_y_label != label;
                     if (is_x) g.axis_x_label = label;
                     else g.axis_y_label = label;
+                    if (changed) mark_active_document_dirty();
                     g.updating_axis_label_edits = true;
                     SetWindowTextW(ctl, label.c_str());
                     g.updating_axis_label_edits = false;

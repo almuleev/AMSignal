@@ -19,6 +19,10 @@ void apply_spectrum_result(lvm::Spectrum spectrum);
 
 bool spectrum_needs_visible_channels();
 
+// True when the cached (or in-flight) FFT was requested for the current
+// selection/visible time window. Entering the FFT tab must not rerun it.
+bool spectrum_matches_current_source();
+
 void compute_spectrum_for_window(double start, double end, bool from_selection);
 
 void compute_spectrum_from_current_source();

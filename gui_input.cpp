@@ -45,7 +45,7 @@ bool px_to_data(int px, int py, double& dx, double& dy) {
     const RECT& p = g.vrect;
     if (p.right <= p.left || p.bottom <= p.top) return false;
     dx = g.vx0 + static_cast<double>(px - p.left) / (p.right - p.left) * (g.vx1 - g.vx0);
-    if (g.mode == AnalysisMode::FRF) dx = std::pow(10.0, dx);
+    if (g.mode == AnalysisMode::FRF) dx = frf_frequency_at_fraction(static_cast<double>(px-p.left)/(p.right-p.left));
     if ((g.mode == AnalysisMode::Time) && g.stitch_time_gaps) dx = raw_time_from_stitched(dx);
     dy = g.vy0 + static_cast<double>(p.bottom - py) / (p.bottom - p.top) * (g.vy1 - g.vy0);
     return true;
@@ -63,7 +63,7 @@ bool snap_to_nearest_target(double& dx, double& dy, int* out_channel) {
     if (pw <= 0 || ph <= 0) return false;
 
     auto to_px = [&](double x) -> double {
-        const double displayed_x = (g.mode == AnalysisMode::FRF) ? std::log10(x) :
+        const double displayed_x = (g.mode == AnalysisMode::FRF) ? (g.vx0+frf_frequency_fraction(x)*(g.vx1-g.vx0)) :
             (g.mode == AnalysisMode::FFT) ? x : stitched_time_from_raw(x);
         return static_cast<double>(p.left) + (displayed_x - g.vx0) / (g.vx1 - g.vx0) * pw;
     };

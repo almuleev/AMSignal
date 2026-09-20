@@ -22,6 +22,17 @@ RangePromptState g_range_prompt;
 
 InfoPromptState g_info_prompt;
 
+namespace {
+struct SaveChangesPromptState {
+    HWND wnd = nullptr;
+    bool done = false;
+    int choice = IDCANCEL;
+    std::wstring title;
+    std::wstring message;
+};
+SaveChangesPromptState g_save_changes_prompt;
+}
+
 ExportPromptState g_export_prompt;
 
 int prompt_button_width(HDC dc, const wchar_t* text, int min_width) {
@@ -188,6 +199,102 @@ void show_styled_info_prompt(HWND owner, const wchar_t* title, const wchar_t* me
 
     EnableWindow(owner, TRUE);
     SetForegroundWindow(owner);
+}
+
+namespace {
+LRESULT CALLBACK SaveChangesPromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_CREATE: {
+            HFONT font=g.ui_font ? g.ui_font : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            HDC dc=GetDC(hwnd); HGDIOBJ old_font=SelectObject(dc,font);
+            const wchar_t* save=g_str==&kEn ? L"Save" : L"Сохранить";
+            const wchar_t* discard=g_str==&kEn ? L"Don't save" : L"Не сохранять";
+            const wchar_t* cancel=g_str==&kEn ? L"Cancel" : L"Отмена";
+            const int save_w=prompt_button_width(dc,save,96);
+            const int discard_w=prompt_button_width(dc,discard,112);
+            const int cancel_w=prompt_button_width(dc,cancel,96);
+            const int gap=8, total=save_w+discard_w+cancel_w+2*gap;
+            const int x=std::max(16,(400-total)/2);
+            auto make=[&](int id,const wchar_t* text,int left,int width,bool primary) {
+                HWND button=CreateWindowExW(0,L"BUTTON",text,
+                    WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_OWNERDRAW|(primary ? BS_DEFPUSHBUTTON : 0),
+                    left,112,width,28,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                    reinterpret_cast<LPCREATESTRUCT>(lp)->hInstance,nullptr);
+                if (button) SendMessageW(button,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
+                return button;
+            };
+            HWND first=make(IDYES,save,x,save_w,true);
+            make(IDNO,discard,x+save_w+gap,discard_w,false);
+            make(IDCANCEL,cancel,x+save_w+gap+discard_w+gap,cancel_w,false);
+            if (first) SetFocus(first);
+            SelectObject(dc,old_font); ReleaseDC(hwnd,dc);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wp)==IDYES || LOWORD(wp)==IDNO || LOWORD(wp)==IDCANCEL) {
+                g_save_changes_prompt.choice=LOWORD(wp); DestroyWindow(hwnd); return 0;
+            }
+            break;
+        case WM_CLOSE:
+            g_save_changes_prompt.choice=IDCANCEL; DestroyWindow(hwnd); return 0;
+        case WM_ERASEBKGND:
+            draw_prompt_surface(hwnd,reinterpret_cast<HDC>(wp)); return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps{}; HDC dc=BeginPaint(hwnd,&ps); draw_prompt_surface(hwnd,dc);
+            HICON icon=LoadIconW(nullptr,IDI_WARNING);
+            if (icon) DrawIconEx(dc,26,42,icon,32,32,0,nullptr,DI_NORMAL);
+            SetBkMode(dc,TRANSPARENT); SetTextColor(dc,g_theme->text_primary);
+            HFONT font=g.ui_font ? g.ui_font : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            HGDIOBJ old_font=SelectObject(dc,font);
+            RECT text{72,38,380,96};
+            DrawTextW(dc,g_save_changes_prompt.message.c_str(),-1,&text,DT_LEFT|DT_TOP|DT_WORDBREAK|DT_NOPREFIX);
+            SelectObject(dc,old_font); EndPaint(hwnd,&ps); return 0;
+        }
+        case WM_CTLCOLORBTN: {
+            HDC dc=reinterpret_cast<HDC>(wp); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,g_theme->text_primary);
+            return reinterpret_cast<LRESULT>(g_panel_brush);
+        }
+        case WM_DRAWITEM: {
+            auto* dis=reinterpret_cast<DRAWITEMSTRUCT*>(lp);
+            if (!dis || !dis->hwndItem) break;
+            wchar_t text[64]{}; GetWindowTextW(dis->hwndItem,text,64);
+            draw_welcome_action_button(dis->hDC,dis->rcItem,text,(dis->itemState&ODS_SELECTED)!=0,
+                dis->CtlID==IDYES,dis->CtlID!=IDYES);
+            return TRUE;
+        }
+        case WM_DESTROY:
+            g_save_changes_prompt.done=true; g_save_changes_prompt.wnd=nullptr; return 0;
+    }
+    return DefWindowProcW(hwnd,msg,wp,lp);
+}
+}
+
+int show_styled_save_changes_prompt(HWND owner, const wchar_t* title, const wchar_t* message) {
+    if (!owner || !IsWindow(owner)) owner=g.main;
+    static ATOM atom=0;
+    HINSTANCE instance=reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(g.main,GWLP_HINSTANCE));
+    if (!atom) {
+        WNDCLASSEXW wc{}; wc.cbSize=sizeof(wc); wc.lpfnWndProc=SaveChangesPromptProc;
+        wc.hInstance=instance; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.lpszClassName=L"AMSaveChangesPrompt";
+        atom=RegisterClassExW(&wc);
+    }
+    g_save_changes_prompt.done=false; g_save_changes_prompt.choice=IDCANCEL;
+    g_save_changes_prompt.title=title ? title : L"";
+    g_save_changes_prompt.message=message ? message : L"";
+    g_save_changes_prompt.wnd=CreateWindowExW(WS_EX_DLGMODALFRAME|WS_EX_TOOLWINDOW,L"AMSaveChangesPrompt",
+        g_save_changes_prompt.title.c_str(),WS_CAPTION|WS_SYSMENU|WS_POPUP|WS_VISIBLE,
+        CW_USEDEFAULT,CW_USEDEFAULT,420,184,owner,nullptr,instance,nullptr);
+    if (!g_save_changes_prompt.wnd) return IDCANCEL;
+    RECT owner_rect{}, prompt_rect{}; GetWindowRect(owner,&owner_rect); GetWindowRect(g_save_changes_prompt.wnd,&prompt_rect);
+    SetWindowPos(g_save_changes_prompt.wnd,HWND_TOP,owner_rect.left+((owner_rect.right-owner_rect.left)-(prompt_rect.right-prompt_rect.left))/2,
+        owner_rect.top+((owner_rect.bottom-owner_rect.top)-(prompt_rect.bottom-prompt_rect.top))/2,0,0,SWP_NOSIZE|SWP_SHOWWINDOW);
+    EnableWindow(owner,FALSE);
+    MSG msg;
+    while (!g_save_changes_prompt.done && GetMessageW(&msg,nullptr,0,0)>0) {
+        if (!IsDialogMessageW(g_save_changes_prompt.wnd,&msg)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    }
+    EnableWindow(owner,TRUE); SetForegroundWindow(owner);
+    return g_save_changes_prompt.choice;
 }
 
 double normalize_prompt_bound(double value) {

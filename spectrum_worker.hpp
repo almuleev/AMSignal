@@ -11,15 +11,18 @@ namespace lvm {
 class SpectrumWorker {
 public:
     struct Result { std::uint64_t generation; Spectrum spectrum; };
+    struct AffineTransform { double mul = 1.0, add = 0.0; };
     SpectrumWorker() = default;
     ~SpectrumWorker();
-    void submit(Dataset data, std::vector<std::size_t> source_channels, std::uint64_t generation);
+    void submit(Dataset data, std::vector<std::size_t> source_channels, std::uint64_t generation,
+                std::vector<AffineTransform> transforms = {});
     void cancel();
     std::optional<Result> take_result();
 private:
     struct Request {
         Dataset data;
         std::vector<std::size_t> source_channels;
+        std::vector<AffineTransform> transforms;
         std::uint64_t generation;
         std::shared_ptr<std::atomic<bool>> cancelled;
     };

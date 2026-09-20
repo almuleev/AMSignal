@@ -1,5 +1,7 @@
 #include "gui_documents.hpp"
 #include "gui_analysis_source.hpp"
+#include "gui_dialogs.hpp"
+#include "gui_export.hpp"
 #include "gui_frf.hpp"
 #include "gui_layout.hpp"
 #include "gui_loading.hpp"
@@ -38,11 +40,7 @@ void cancel_document_workers() {
 
 void refresh_active_document_ui() {
     if (!g.main) return;
-    if (g.file_name.empty()) {
-        SetWindowTextW(g.main, g_str->app_title);
-    } else {
-        SetWindowTextW(g.main, (std::wstring(g_str->app_title) + L" — " + g.file_name).c_str());
-    }
+    refresh_active_document_title();
     if (g.play) SetWindowTextW(g.play, g.playing ? g_str->btn_pause : g_str->btn_play);
     refresh_open_document_selector();
     if (g.autoy) {
@@ -79,6 +77,52 @@ bool is_open_or_queued(const std::wstring& path) {
 
 } // namespace
 
+void refresh_active_document_title() {
+    if (!g.main) return;
+    if (g.file_name.empty()) {
+        SetWindowTextW(g.main, g_str->app_title);
+    } else {
+        const wchar_t* changed = g.project_dirty ? L" *" : L"";
+        SetWindowTextW(g.main, (std::wstring(g_str->app_title) + L" — " + g.file_name + changed).c_str());
+    }
+}
+
+bool active_document_has_unsaved_changes() {
+    return has_data() && g.project_dirty;
+}
+
+void mark_active_document_dirty() {
+    if (!has_data()) return;
+    if (g.next_project_revision < g.project_revision) g.next_project_revision = g.project_revision;
+    g.project_revision = ++g.next_project_revision;
+    g.project_dirty = g.project_revision != g.saved_project_revision;
+    refresh_active_document_title();
+}
+
+void mark_active_document_saved() {
+    if (!has_data()) return;
+    g.saved_project_revision = g.project_revision;
+    g.project_dirty = false;
+    refresh_active_document_title();
+}
+
+namespace {
+
+bool confirm_active_document_close() {
+    if (!active_document_has_unsaved_changes()) return true;
+    const std::wstring name = g.file_name.empty()
+        ? (g_str == &kEn ? L"Untitled" : L"Без имени")
+        : g.file_name;
+    const std::wstring message = (g_str == &kEn)
+        ? L"Save changes to \"" + name + L"\" before closing?"
+        : L"Сохранить изменения в \"" + name + L"\" перед закрытием?";
+    const int choice = show_styled_save_changes_prompt(g.main, g_str->app_title, message.c_str());
+    if (choice == IDYES) return save_current_project();
+    return choice == IDNO;
+}
+
+} // namespace
+
 std::size_t open_document_count() {
     return (has_data() ? 1u : 0u) + g.inactive_documents.size();
 }
@@ -100,10 +144,9 @@ bool switch_to_document(std::size_t index) {
     if (!has_data() || index == 0 || index > g.inactive_documents.size() ||
         g.async_load_stage != AsyncLoadStage::None) return index == 0 && has_data();
     cancel_document_workers();
+    save_active_document_history();
     std::swap(active_document_state(), g.inactive_documents[index - 1]);
-    g_undo.clear();
-    g_redo.clear();
-    g_filter_slider_before.reset();
+    restore_active_document_history();
     refresh_active_document_ui();
     return true;
 }
@@ -123,34 +166,44 @@ void refresh_open_document_selector() {
 
 bool close_active_document() {
     if (!has_data() || g.async_load_stage != AsyncLoadStage::None) return false;
+    if (!confirm_active_document_close()) return false;
     cancel_document_workers();
     if (!g.inactive_documents.empty()) {
         std::swap(active_document_state(), g.inactive_documents.back());
         g.inactive_documents.pop_back();
-        g_undo.clear();
-        g_redo.clear();
-        g_filter_slider_before.reset();
+        restore_active_document_history();
         refresh_active_document_ui();
         return true;
     }
 
     active_document_state() = DocumentState{};
-    g_undo.clear();
-    g_redo.clear();
-    g_filter_slider_before.reset();
+    clear_active_document_history();
     if (g.main) show_welcome(reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(g.main, GWLP_HINSTANCE)));
     refresh_active_document_ui();
+    return true;
+}
+
+bool request_application_close(HWND hwnd) {
+    if (g.async_load_stage != AsyncLoadStage::None) {
+        show_styled_info_prompt(hwnd, g_str->app_title,
+            g_str == &kEn ? L"Wait for loading to finish or cancel it before closing the application."
+                         : L"Дождитесь завершения загрузки или отмените её перед закрытием программы.", false);
+        return false;
+    }
+    while (has_data()) {
+        if (!close_active_document()) return false;
+    }
+    DestroyWindow(hwnd);
     return true;
 }
 
 void begin_loaded_document() {
     if (!has_data()) return;
     cancel_document_workers();
+    save_active_document_history();
     g.inactive_documents.emplace_back();
     std::swap(active_document_state(), g.inactive_documents.back());
-    g_undo.clear();
-    g_redo.clear();
-    g_filter_slider_before.reset();
+    restore_active_document_history();
 }
 
 void queue_open_paths(std::vector<std::wstring> paths) {

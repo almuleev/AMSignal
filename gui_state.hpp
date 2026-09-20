@@ -7,6 +7,8 @@ namespace gui {
 
 extern std::wstring g_config_path;
 
+struct DocumentHistory;
+
 // Which read-outs to draw next to measurement markers (toggled from the
 // "Measurements -> show at points" menu).
 struct PointDisplay {
@@ -68,7 +70,15 @@ struct FrfState {
     std::uint64_t generation = 0;
     bool view_initialized = false, auto_y = true;
     double log_start = 0.0, log_end = 3.0;
+    // Keep physical limits alongside their logarithms so the same calculated
+    // FRF can be viewed on either a logarithmic or a linear frequency axis.
+    double frequency_start = 1.0, frequency_end = 1000.0;
+    bool logarithmic_frequency_axis = true;
     double y_min = 0.0, y_max = 1.0;
+    bool show_reference_amplitude = true;
+    double reference_height_fraction = .25;
+    bool reference_auto_y = true;
+    double reference_y_max = 1.0;
     // Display-only logarithmic smoothing band; 0 leaves the curve unsmoothed.
     double display_smoothing_octaves = 1.0 / 12.0;
     double source_start = 0.0, source_end = 0.0;
@@ -214,6 +224,12 @@ struct DocumentState {
     std::wstring file_name;
     // Empty until the document has been saved as, or opened from, an AMSignal project.
     std::wstring project_path;
+    // Each source retains its history and saved revision while inactive.
+    std::shared_ptr<DocumentHistory> history;
+    std::uint64_t project_revision = 0;
+    std::uint64_t next_project_revision = 0;
+    std::uint64_t saved_project_revision = 0;
+    bool project_dirty = false;
 };
 
 struct App : DocumentState {

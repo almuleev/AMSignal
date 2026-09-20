@@ -55,6 +55,14 @@ struct UndoAction {
     std::vector<App::Marker> saved_markers;
     SettingsSnapshot before_settings;
     SettingsSnapshot after_settings;
+    std::uint64_t before_project_revision = 0;
+    std::uint64_t after_project_revision = 0;
+};
+
+struct DocumentHistory {
+    std::vector<UndoAction> undo;
+    std::vector<UndoAction> redo;
+    std::optional<SettingsSnapshot> filter_slider_before;
 };
 
 extern std::vector<UndoAction> g_undo;
@@ -128,6 +136,12 @@ std::size_t history_action_bytes(const UndoAction& action);
 std::size_t history_stack_bytes(const std::vector<UndoAction>& stack);
 
 void push_undo(UndoAction a);
+
+void save_active_document_history();
+
+void restore_active_document_history();
+
+void clear_active_document_history();
 
 SettingsSnapshot capture_settings_snapshot();
 
