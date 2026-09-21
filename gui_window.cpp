@@ -36,9 +36,9 @@ void rebuild_ui() {
     refresh_open_document_selector();
     SetWindowTextW(g.savepng, g_str->btn_png);
     SetWindowTextW(g.savecsv, g_str->btn_csv);
-    SetWindowTextW(g.mode_time, g_str->st_time);
-    SetWindowTextW(g.mode_freq, g_str->st_hz);
-    SetWindowTextW(g.mode_frf, g_str == &kEn ? L"FRF" : L"FRF / АЧХ");
+    SetWindowTextW(g.mode_time, mode_time_text());
+    SetWindowTextW(g.mode_freq, mode_spectrum_text());
+    SetWindowTextW(g.mode_frf, mode_frf_text());
     refresh_frf_controls(true);
     SetWindowTextW(g.play, g.playing ? g_str->btn_pause : g_str->btn_play);
     SetWindowTextW(g.measure, g_str->btn_measure);
@@ -135,9 +135,9 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             refresh_open_document_selector();
             g.savepng = mk(g_str->btn_png, IDC_SAVEPNG, 0, false);
             g.savecsv = mk(g_str->btn_csv, IDC_SAVECSV, 0, false);
-            g.mode_time = mk(g_str->st_time, IDM_MODE_TIME, 0);
-            g.mode_freq = mk(g_str->st_hz, IDM_MODE_FREQ, 0);
-            g.mode_frf = mk(g_str == &kEn ? L"FRF" : L"FRF / АЧХ", IDM_MODE_FRF, 0);
+            g.mode_time = mk(mode_time_text(), IDM_MODE_TIME, 0);
+            g.mode_freq = mk(mode_spectrum_text(), IDM_MODE_FREQ, 0);
+            g.mode_frf = mk(mode_frf_text(), IDM_MODE_FRF, 0);
             create_frf_panel(hwnd, inst);
             g.play = mk(g_str->btn_play, IDC_PLAY, 0);
             g.measure = mk(g_str->btn_measure, IDC_MEASURE, 0);
@@ -237,6 +237,19 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                        0, 0, 10, 10, hwnd, nullptr, inst, nullptr);
             SendMessageW(g.status, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             ShowWindow(g.status, SW_HIDE);   // owner-drawn in on_paint
+            g.status_tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT,
+                CW_USEDEFAULT, CW_USEDEFAULT, hwnd, nullptr, inst, nullptr);
+            if (g.status_tooltip) {
+                SendMessageW(g.status_tooltip, TTM_SETMAXTIPWIDTH, 0, 640);
+                TOOLINFOW tool{};
+                tool.cbSize = sizeof(tool);
+                tool.uFlags = TTF_SUBCLASS;
+                tool.hwnd = hwnd;
+                tool.uId = 1;
+                tool.lpszText = LPSTR_TEXTCALLBACKW;
+                SendMessageW(g.status_tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
+            }
 
             g.axis_font = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -273,6 +286,16 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 finish_channel_rename_if_click_outside(hwnd);
             }
             break;
+        case WM_NOTIFY: {
+            auto* notification = reinterpret_cast<NMHDR*>(lp);
+            if (notification && notification->hwndFrom == g.status_tooltip &&
+                notification->code == TTN_GETDISPINFOW) {
+                auto* info = reinterpret_cast<NMTTDISPINFOW*>(lp);
+                info->lpszText = const_cast<wchar_t*>(g.status_tooltip_text.c_str());
+                return 0;
+            }
+            break;
+        }
         case WM_CTLCOLORBTN: {
             HDC dc = reinterpret_cast<HDC>(wp);
             SetBkMode(dc, TRANSPARENT);

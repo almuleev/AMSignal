@@ -21,6 +21,7 @@
 #include "../gui_spectrum.hpp"
 #include "../gui_state.hpp"
 #include "../gui_state_history.hpp"
+#include "../gui_status.hpp"
 #include "../gui_text.hpp"
 #include "../gui_theme.hpp"
 #include "../gui_time_axis.hpp"
@@ -1010,6 +1011,29 @@ void point_display_defaults() {
             "first point group inherits display choices set before any point exists");
 }
 
+void status_bar_text() {
+    reset_document({"A"}, {0, 1}, {{1, 2}});
+    g.mode = AnalysisMode::Time;
+    g.auto_y = true;
+    set_status();
+    require(g.status_text.find(L"Time: 1 channels, 2 samples, 0–1 s | Y scale: auto") != std::wstring::npos,
+            "time status uses a separated, correctly named Y-scale segment");
+    require(g.status_tooltip_text == g.status_text,
+            "status tooltip retains the complete untruncated status text");
+}
+
+void mode_button_text() {
+    g_str = &kEn;
+    require(std::wstring(mode_time_text()) == L"Time" && std::wstring(mode_spectrum_text()) == L"Spectrum" &&
+                std::wstring(mode_frf_text()) == L"FRF",
+            "English mode buttons use compact labels rather than status format templates");
+    g_str = &kRu;
+    require(std::wstring(mode_time_text()) == L"Время" && std::wstring(mode_spectrum_text()) == L"Спектр" &&
+                std::wstring(mode_frf_text()) == L"FRF / АЧХ",
+            "Russian mode buttons use compact labels rather than status format templates");
+    g_str = &kEn;
+}
+
 void multiple_open_documents() {
     reset_document({"first"}, {0, 1, 2}, {{1, 2, 3}});
     g.file_name = L"first.lvm";
@@ -1051,7 +1075,7 @@ void multiple_open_documents() {
 int main() {
     std::filesystem::create_directories(test_dir);
     try {
-        document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); multiple_open_documents(); processing(); fft_recording_recovery();
+        document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); multiple_open_documents(); processing(); fft_recording_recovery();
         light_mode_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
         light_mode_fft_visibility();
         routed_window_messages();

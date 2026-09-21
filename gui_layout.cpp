@@ -4,6 +4,7 @@
 #include "gui_ids.hpp"
 #include "gui_side_panel.hpp"
 #include "gui_state.hpp"
+#include "gui_status.hpp"
 
 namespace gui {
 
@@ -11,6 +12,7 @@ void layout() {
     RECT rc;
     GetClientRect(g.main, &rc);
     const int cw = rc.right, ch = rc.bottom;
+    update_status_tooltip();
 
     g.toolbar_seps.clear();
     int x = 8;

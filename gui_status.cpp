@@ -11,6 +11,29 @@
 
 namespace gui {
 
+namespace {
+
+std::wstring full_status_text() {
+    if (!g.status_text.empty() && !g.status_detail_text.empty())
+        return g.status_text + L" | " + g.status_detail_text;
+    return g.status_text.empty() ? g.status_detail_text : g.status_text;
+}
+
+} // namespace
+
+void update_status_tooltip() {
+    g.status_tooltip_text = full_status_text();
+    if (!g.main || !g.status_tooltip) return;
+    RECT client{};
+    GetClientRect(g.main, &client);
+    TOOLINFOW tool{};
+    tool.cbSize = sizeof(tool);
+    tool.hwnd = g.main;
+    tool.uId = 1;
+    tool.rect = {0, std::max(0L, client.bottom - kBottomBar), client.right, client.bottom};
+    SendMessageW(g.status_tooltip, TTM_NEWTOOLRECTW, 0, reinterpret_cast<LPARAM>(&tool));
+}
+
 bool marker_status_detail(std::wstring& text, COLORREF& color) {
     if (g.active_marker < 0 || g.active_marker >= static_cast<int>(g.markers.size())) return false;
     const App::Marker& m = g.markers[static_cast<std::size_t>(g.active_marker)];
@@ -18,11 +41,11 @@ bool marker_status_detail(std::wstring& text, COLORREF& color) {
     color = channel_color(static_cast<std::size_t>(m.channel));
     wchar_t buf[160];
     if ((g.mode == AnalysisMode::FFT)) {
-        if (g_str == &kEn) swprintf(buf, 160, L"   |   %ls: f=%.6g Hz, amp=%.6g", m.label.c_str(), m.x, m.y);
-        else swprintf(buf, 160, L"   |   %ls: f=%.6g Гц, amp=%.6g", m.label.c_str(), m.x, m.y);
+        if (g_str == &kEn) swprintf(buf, 160, L"%ls: f=%.6g Hz, amp=%.6g", m.label.c_str(), m.x, m.y);
+        else swprintf(buf, 160, L"%ls: f=%.6g Гц, amp=%.6g", m.label.c_str(), m.x, m.y);
     } else {
-        if (g_str == &kEn) swprintf(buf, 160, L"   |   %ls: t=%.6g s, y=%.6g", m.label.c_str(), m.x, m.y);
-        else swprintf(buf, 160, L"   |   %ls: t=%.6g c, y=%.6g", m.label.c_str(), m.x, m.y);
+        if (g_str == &kEn) swprintf(buf, 160, L"%ls: t=%.6g s, y=%.6g", m.label.c_str(), m.x, m.y);
+        else swprintf(buf, 160, L"%ls: t=%.6g c, y=%.6g", m.label.c_str(), m.x, m.y);
     }
     text = buf;
     return true;
@@ -41,6 +64,7 @@ void set_status() {
         g.status_detail_text.clear(); g.status_detail_color = g_theme->accent;
         refresh_frf_controls();
         if (g.status) SetWindowTextW(g.status, g.status_text.c_str());
+        update_status_tooltip();
         return;
     }
     std::wstring s;
@@ -110,6 +134,7 @@ void set_status() {
     marker_status_detail(g.status_detail_text, g.status_detail_color);
     g.status_text = s;
     if (g.status) SetWindowTextW(g.status, s.c_str());
+    update_status_tooltip();
     if (g.main) {
         RECT rc;
         GetClientRect(g.main, &rc);

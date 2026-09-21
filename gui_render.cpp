@@ -27,10 +27,90 @@ RECT g_legend_box = {0,0,0,0};
 namespace {
 constexpr wchar_t kStatusAuthorCredit[] = L"AMSignal · Alexander Muleev · al.muleev@gmail.com";
 
+int status_text_width(HDC dc, const std::wstring& value) {
+    SIZE size{};
+    GetTextExtentPoint32W(dc, value.c_str(), static_cast<int>(value.size()), &size);
+    return size.cx;
+}
+
 void draw_status_text(HDC dc, int x, int y, int right, const std::wstring& value) {
     if (value.empty() || x >= right) return;
-    const RECT bounds = {x, y, right, y + kBottomBar - 5};
-    ExtTextOutW(dc, x, y, ETO_CLIPPED, &bounds, value.c_str(), static_cast<UINT>(value.size()), nullptr);
+    RECT bounds = {x, y, right, y + kBottomBar - 5};
+    DrawTextW(dc, value.c_str(), static_cast<int>(value.size()), &bounds,
+        DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+}
+
+std::vector<std::wstring> split_status_segments(const std::wstring& value) {
+    std::vector<std::wstring> result;
+    std::size_t begin = 0;
+    while (begin <= value.size()) {
+        const std::size_t end = value.find(L'|', begin);
+        const std::wstring piece = value.substr(begin, end == std::wstring::npos ? end : end - begin);
+        const std::size_t first = piece.find_first_not_of(L" \t");
+        if (first != std::wstring::npos) {
+            const std::size_t last = piece.find_last_not_of(L" \t");
+            result.push_back(piece.substr(first, last - first + 1));
+        }
+        if (end == std::wstring::npos) break;
+        begin = end + 1;
+    }
+    return result;
+}
+
+struct StatusSegment {
+    std::wstring text;
+    COLORREF color;
+    bool optional = false;
+    bool active = false;
+};
+
+int status_segments_width(HDC dc, const std::vector<StatusSegment>& segments) {
+    int width = 0;
+    for (std::size_t i = 0; i < segments.size(); ++i) {
+        if (i) width += status_text_width(dc, L" | ");
+        width += status_text_width(dc, segments[i].text);
+    }
+    return width;
+}
+
+void draw_status_segments(HDC dc, int x, int y, int right, std::vector<StatusSegment> segments) {
+    while (status_segments_width(dc, segments) > right - x) {
+        auto remove = std::find_if(segments.rbegin(), segments.rend(), [](const StatusSegment& segment) {
+            return segment.optional;
+        });
+        if (remove == segments.rend()) break;
+        segments.erase(std::next(remove).base());
+    }
+    if (segments.size() > 1 && segments.back().active && status_segments_width(dc, segments) > right - x) {
+        const StatusSegment& active = segments.back();
+        const int separator_width = status_text_width(dc, L" | ");
+        const int active_width = status_text_width(dc, active.text);
+        if (active_width + separator_width >= right - x) {
+            SetTextColor(dc, active.color);
+            draw_status_text(dc, x, y, right, active.text);
+            return;
+        }
+        const int active_x = right - active_width;
+        SetTextColor(dc, segments.front().color);
+        draw_status_text(dc, x, y, active_x - separator_width, segments.front().text);
+        SetTextColor(dc, g_theme->text_secondary);
+        draw_status_text(dc, active_x - separator_width, y, active_x, L" | ");
+        SetTextColor(dc, active.color);
+        draw_status_text(dc, active_x, y, right, active.text);
+        return;
+    }
+    for (std::size_t i = 0; i < segments.size() && x < right; ++i) {
+        if (i) {
+            SetTextColor(dc, g_theme->text_secondary);
+            const int separator_width = status_text_width(dc, L" | ");
+            draw_status_text(dc, x, y, right, L" | ");
+            x += separator_width;
+        }
+        SetTextColor(dc, segments[i].color);
+        const int width = status_text_width(dc, segments[i].text);
+        draw_status_text(dc, x, y, right, segments[i].text);
+        x += width;
+    }
 }
 } // namespace
 
@@ -1415,27 +1495,34 @@ void on_paint(HDC hdc) {
     const HFONT status_font = g.axis_font ? g.axis_font :
         (g.ui_font ? g.ui_font : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
     HGDIOBJ previous_font = SelectObject(mem, status_font);
-    SIZE credit_size{};
-    GetTextExtentPoint32W(mem, kStatusAuthorCredit, lstrlenW(kStatusAuthorCredit), &credit_size);
-    const int credit_x = max(12, cw - 12 - static_cast<int>(credit_size.cx));
-    const int status_right = max(12, credit_x - 12);
+    const std::vector<std::wstring> status_parts = split_status_segments(g.status_text);
+    std::vector<StatusSegment> status_segments;
+    status_segments.reserve(status_parts.size() + (g.status_detail_text.empty() ? 0 : 1));
+    for (std::size_t i = 0; i < status_parts.size(); ++i)
+        status_segments.push_back({status_parts[i], g_theme->text_secondary, i != 0, false});
+    if (!g.status_detail_text.empty())
+        status_segments.push_back({g.status_detail_text, g.status_detail_color, false, true});
+    std::vector<StatusSegment> required_status_segments = status_segments;
+    required_status_segments.erase(std::remove_if(required_status_segments.begin(), required_status_segments.end(),
+        [](const StatusSegment& segment) { return segment.optional; }), required_status_segments.end());
+    const int required_status_width = status_segments_width(mem, required_status_segments);
+    const int credit_width = status_text_width(mem, kStatusAuthorCredit);
+    const bool show_credit = cw - 24 >= required_status_width + credit_width + 20;
+    const int credit_x = show_credit ? cw - 12 - credit_width : cw;
+    const int status_right = show_credit ? credit_x - 12 : cw - 12;
 
     SetTextColor(mem, g_theme->text_secondary);
     SetTextAlign(mem, TA_LEFT | TA_TOP);
     if (!g.hover_status_text.empty()) {
         SetTextColor(mem, g_theme->accent);
         draw_status_text(mem, 12, ch - kBottomBar + 7, status_right, g.hover_status_text);
-    } else if (!g.status_text.empty()) {
-        draw_status_text(mem, 12, ch - kBottomBar + 7, status_right, g.status_text);
-        if (!g.status_detail_text.empty()) {
-            SIZE sz = {};
-            GetTextExtentPoint32W(mem, g.status_text.c_str(), static_cast<int>(g.status_text.size()), &sz);
-            SetTextColor(mem, g.status_detail_color);
-            draw_status_text(mem, 12 + sz.cx, ch - kBottomBar + 7, status_right, g.status_detail_text);
-        }
+    } else if (!status_segments.empty()) {
+        draw_status_segments(mem, 12, ch - kBottomBar + 7, status_right, std::move(status_segments));
     }
-    SetTextColor(mem, g_theme->text_secondary);
-    TextOutW(mem, credit_x, ch - kBottomBar + 7, kStatusAuthorCredit, lstrlenW(kStatusAuthorCredit));
+    if (show_credit) {
+        SetTextColor(mem, g_theme->text_secondary);
+        TextOutW(mem, credit_x, ch - kBottomBar + 7, kStatusAuthorCredit, lstrlenW(kStatusAuthorCredit));
+    }
     SelectObject(mem, previous_font);
 
     BitBlt(hdc, 0, 0, cw, ch, mem, 0, 0, SRCCOPY);

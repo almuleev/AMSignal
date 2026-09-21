@@ -262,6 +262,7 @@ struct App : DocumentState {
     HWND reset = nullptr, autoy = nullptr, sidepanel_btn = nullptr;
     HWND show_all_btn = nullptr, hide_all_btn = nullptr;
     HWND status = nullptr;
+    HWND status_tooltip = nullptr;
     std::vector<HWND> checks;
     std::vector<HWND> check_labels;
     HWND channel_edit = nullptr;
@@ -271,6 +272,7 @@ struct App : DocumentState {
     std::wstring status_text;
     std::wstring status_detail_text;
     COLORREF status_detail_color = RGB(0, 0, 0);
+    std::wstring status_tooltip_text;
     std::wstring hover_status_text;  // shown in status bar when hovering toolbar buttons
     std::vector<int> toolbar_seps;
 

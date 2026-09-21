@@ -6,7 +6,7 @@ namespace gui {
 const Strings kRu = {
     L"AMSignal",
     L"Открыть", L"PNG", L"Сохранить как…", L"Старт", L"Стоп", L"Точки", L"Сброс", L"АвтоМасштаб",
-    L"Время", L"Гц (FFT)", L"Y: авто", L"Y: фикс.", L"Линий", L"Маркеров", L"Скорость воспроизведения",
+    L"Время: %zu каналов, %zu отсчётов, %.6g–%.6g с", L"Спектр: %zu каналов, верхняя частота %.6g Гц | %.6g–%.6g Гц", L" | Масштаб Y: авто", L" | Масштаб Y: фикс.", L" | Линий: %zu", L" | Маркеров: %zu", L" | Скорость: %.4gx",
     L"Время, c", L"Частота, Гц",
     L"Δx=%.5g", L"Δy=%.5g", L"1/Δt=%.5g Гц", L"d=%.5g",
     L"Горячие клавиши — AMSignal",
@@ -49,7 +49,7 @@ const Strings kRu = {
 const Strings kEn = {
     L"AMSignal",
     L"Open", L"PNG", L"Save as…", L"▶ Play", L"⏸ Pause", L"Points", L"Reset", L"Auto zoom",
-    L"Time", L"Hz (FFT)", L"Y: auto", L"Y: fixed", L"Lines", L"Markers", L"Playback speed",
+    L"Time: %zu channels, %zu samples, %.6g–%.6g s", L"Spectrum: %zu channels, upper frequency %.6g Hz | %.6g–%.6g Hz", L" | Y scale: auto", L" | Y scale: fixed", L" | Lines: %zu", L" | Markers: %zu", L" | Speed: %.4gx",
     L"Time, s", L"Frequency, Hz",
     L"Δx=%.5g", L"Δy=%.5g", L"1/Δt=%.5g Hz", L"d=%.5g",
     L"Keyboard shortcuts — AMSignal",
@@ -90,6 +90,18 @@ const Strings kEn = {
 };
 
 const Strings* g_str = &kRu;
+
+const wchar_t* mode_time_text() {
+    return g_str == &kEn ? L"Time" : L"Время";
+}
+
+const wchar_t* mode_spectrum_text() {
+    return g_str == &kEn ? L"Spectrum" : L"Спектр";
+}
+
+const wchar_t* mode_frf_text() {
+    return g_str == &kEn ? L"FRF" : L"FRF / АЧХ";
+}
 
 const wchar_t* gap_markers_toggle_text() {
     return (g_str == &kEn) ? L"Show gap markers" : L"Показывать разрывы";

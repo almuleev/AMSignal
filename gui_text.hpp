@@ -93,6 +93,14 @@ const wchar_t* side_channel_formula_label_text();
 
 const wchar_t* point_group_list_title();
 
+// Compact labels for the three top-toolbar modes. Keep these separate from
+// the parameterized status-bar templates in Strings.
+const wchar_t* mode_time_text();
+
+const wchar_t* mode_spectrum_text();
+
+const wchar_t* mode_frf_text();
+
 const wchar_t* point_current_color_button_text();
 
 const wchar_t* point_selected_group_color_button_text();
