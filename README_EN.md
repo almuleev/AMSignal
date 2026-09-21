@@ -154,4 +154,8 @@ In an MSYS2/MinGW shell, `make all test test-gui gui` builds both applications a
 - [Russian README](README_RU.md)
 - [Main README](README.md)
 - [Changelog](CHANGELOG.md)
-- [MIT License](LICENSE)
+- [GNU GPLv3](LICENSE)
+
+## License
+
+The Software is distributed under the [GNU GPLv3](LICENSE). It may be used, studied, modified and redistributed under GPLv3; distributed modified versions must remain under GPLv3 with corresponding source code available.

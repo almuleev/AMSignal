@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Лицензия проекта заменена на GNU GPLv3. При распространении изменённых версий
+  должны сохраняться GPLv3, уведомления об авторстве и доступность
+  соответствующего исходного кода. Ранее выпущенные версии под MIT сохраняют
+  условия этой лицензии.
+- Replaced the project license with GNU GPLv3. Distributed modified versions
+  must retain GPLv3, copyright notices and the availability of corresponding
+  source code. Earlier MIT releases retain their original terms.
+
 ## v0.15.3
 
 - В АЧХ добавлено переключение логарифмической и линейной частотной шкалы без

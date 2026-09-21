@@ -158,6 +158,10 @@ powershell -ExecutionPolicy Bypass -File .\build_gui.ps1 -Test
 - [Основной README](README.md)
 - [English README](README_EN.md)
 - [История изменений](CHANGELOG.md)
-- [Лицензия MIT](LICENSE)
+- [GNU GPLv3](LICENSE)
+
+## Лицензия
+
+Программа распространяется по [GNU GPLv3](LICENSE). Её можно использовать, изучать, изменять и распространять на условиях GPLv3; при распространении изменённой версии должны сохраняться GPLv3 и доступность соответствующего исходного кода.
 
 

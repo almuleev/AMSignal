@@ -18,7 +18,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/github/v/release/almuleev/AMSignal?display_name=tag&sort=semver" alt="Latest release">
-  <img src="https://img.shields.io/github/license/almuleev/AMSignal" alt="License">
+  <img src="https://img.shields.io/github/license/almuleev/AMSignal" alt="GNU GPLv3 license">
   <img src="https://img.shields.io/badge/platform-Windows-0078d4" alt="Platform">
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C" alt="C++17">
   <img src="https://img.shields.io/badge/UI-Win32%20%2B%20GDI-1f2937" alt="Win32 GDI">
@@ -137,4 +137,4 @@ powershell -ExecutionPolicy Bypass -File .\build_gui.ps1 -Test
 
 ## License
 
-This project is distributed under the [MIT License](LICENSE).
+This project is distributed under the [GNU General Public License v3.0](LICENSE). Anyone may use, study, modify and redistribute it under the GPLv3 terms; distributed modified versions must remain under GPLv3 with corresponding source code available.
