@@ -264,19 +264,25 @@ void draw_frf(HDC dc, const RECT& p) {
     const double base = std::pow(10.0, std::floor(std::log10(raw_step)));
     const double ratio = raw_step / base;
     const double step = base * (ratio <= 1 ? 1 : ratio <= 2 ? 2 : ratio <= 5 ? 5 : 10);
+    // The reference graph can be deliberately compact. Keep all grid lines,
+    // but omit only numeric labels that would overlap a preceding label.
+    int coefficient_last_label_top=coefficient_plot.bottom+3;
     for (double v = std::ceil(low / step) * step; v <= high; v += step) {
         const int y = mapy(v); line(dc, coefficient_plot.left, y, coefficient_plot.right, y);
         wchar_t text[48]; swprintf(text, 48, L"%.5g", v);
         SIZE size{}; GetTextExtentPoint32W(dc,text,lstrlenW(text),&size);
         const int label_y=std::clamp(y-size.cy/2,coefficient_plot.top+2,
             coefficient_plot.bottom-size.cy-2);
+        if (label_y+size.cy+3>coefficient_last_label_top) continue;
         SetTextAlign(dc,TA_RIGHT|TA_TOP);
         TextOutW(dc,coefficient_plot.left-8,label_y,text,lstrlenW(text));
+        coefficient_last_label_top=label_y;
     }
     const double reference_raw_step=reference_high/3;
     const double reference_base=std::pow(10.0,std::floor(std::log10(reference_raw_step)));
     const double reference_ratio=reference_raw_step/reference_base;
     const double reference_step=reference_base*(reference_ratio<=1 ? 1 : reference_ratio<=2 ? 2 : reference_ratio<=5 ? 5 : 10);
+    int reference_last_label_top=reference_plot.bottom+3;
     for (double value=0;g.frf.show_reference_amplitude && value<=reference_high;value+=reference_step) {
         const int y=map_reference_y(value);
         line(dc,reference_plot.left,y,reference_plot.right,y);
@@ -284,8 +290,10 @@ void draw_frf(HDC dc, const RECT& p) {
         SIZE size{}; GetTextExtentPoint32W(dc,text,lstrlenW(text),&size);
         const int label_y=std::clamp(y-size.cy/2,reference_plot.top+2,
             reference_plot.bottom-size.cy-2);
+        if (label_y+size.cy+3>reference_last_label_top) continue;
         SetTextAlign(dc,TA_RIGHT|TA_TOP);
         TextOutW(dc,reference_plot.left-8,label_y,text,lstrlenW(text));
+        reference_last_label_top=label_y;
     }
     SelectObject(dc, old_pen); DeleteObject(grid);
     HPEN frame = CreatePen(PS_SOLID, 1, g_theme->frame);
@@ -380,19 +388,13 @@ void draw_frf(HDC dc, const RECT& p) {
     RestoreDC(dc,reference_saved);
 
     RECT reference_title{reference_plot.left,coefficient_plot.bottom+4,reference_plot.right,reference_plot.top-3};
-    const std::wstring reference_text=(g_str==&kEn ? L"Average Reference amplitude: " : L"Амплитуда средней опоры: ")+g.frf.input_name;
+    const std::wstring reference_text=(g_str==&kEn ? L"Average Reference amplitude: " : L"Ср. опора: ")+g.frf.input_name;
     SetTextColor(dc,g_theme->axis_text);
     if (g.frf.show_reference_amplitude) DrawTextW(dc,reference_text.c_str(),-1,&reference_title,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     RECT xlabel{reference_plot.left, reference_plot.bottom+23, reference_plot.right, reference_plot.bottom+42};
-    DrawTextW(dc, g.frf.logarithmic_frequency_axis ? (g_str==&kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (логарифмическая шкала)") :
-              (g_str==&kEn ? L"Frequency, Hz (linear scale)" : L"Частота, Гц (линейная шкала)"),
+    DrawTextW(dc, g.frf.logarithmic_frequency_axis ? (g_str==&kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (лог.)") :
+              (g_str==&kEn ? L"Frequency, Hz (linear scale)" : L"Частота, Гц (лин.)"),
               -1, &xlabel, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
-    RECT ylabel{4, coefficient_plot.top+2, coefficient_plot.left-8, coefficient_plot.top+24};
-    DrawTextW(dc, g_str==&kEn ? L"KD |H|" : L"КД |H|",
-              -1, &ylabel, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-    RECT reference_ylabel{4,reference_plot.top+2,reference_plot.left-8,reference_plot.top+24};
-    if (g.frf.show_reference_amplitude) DrawTextW(dc,g_str==&kEn ? L"AVG Ref." : L"Ср. опора",-1,&reference_ylabel,
-              DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     SelectObject(dc, font);
     g.vx0 = g.frf.logarithmic_frequency_axis ? g.frf.log_start : g.frf.frequency_start;
     g.vx1 = g.frf.logarithmic_frequency_axis ? g.frf.log_end : g.frf.frequency_end;
@@ -400,6 +402,27 @@ void draw_frf(HDC dc, const RECT& p) {
     draw_guides(dc);
     draw_markers(dc);
     draw_measure(dc);
+
+    // Keep scale meanings above guides, markers and measurements. Otherwise a
+    // moving overlay can temporarily paint over the labels and make them blink.
+    const auto draw_axis_label = [&](const RECT& plot, const std::wstring& text) {
+        SIZE size{};
+        GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+        RECT background{plot.left + 2, plot.top + 2,
+                        std::min(plot.right - 2, plot.left + size.cx + 10),
+                        plot.top + size.cy + 7};
+        HBRUSH brush=CreateSolidBrush(g_theme->bg_plot);
+        FillRect(dc,&background,brush);
+        DeleteObject(brush);
+        SetTextColor(dc,g_theme->axis_text);
+        SetBkMode(dc,TRANSPARENT);
+        SetTextAlign(dc,TA_LEFT|TA_TOP);
+        TextOutW(dc,plot.left+4,plot.top+3,text.c_str(),static_cast<int>(text.size()));
+    };
+    draw_axis_label(coefficient_plot, g_str==&kEn ? L"KD |H| (dimensionless)" : L"КД |H| (б/р)");
+    if (g.frf.show_reference_amplitude) {
+        draw_axis_label(reference_plot, (g_str==&kEn ? L"AVG Ref. amplitude, " : L"Ср. опора, ") + vertical_axis_unit());
+    }
 }
 
 LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

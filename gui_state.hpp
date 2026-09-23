@@ -151,7 +151,8 @@ struct DocumentState {
     bool snap_to_data = true;       // snap markers to the nearest real sample
     PointDisplay pdisp;             // which read-outs to draw at markers
     std::wstring axis_x_label = L"X"; // graph label shown on the X axis corner
-    std::wstring axis_y_label = L"Y"; // graph label shown on the Y axis corner
+    // Unit shown for amplitude scales in Time, FFT and the reference plot of FRF.
+    std::wstring axis_y_label = L"ед.";
     COLORREF marker_color = g_theme->marker_color;
     std::vector<PointGroup> point_groups;
     int active_point_group = -1;

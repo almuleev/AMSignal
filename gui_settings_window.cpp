@@ -367,7 +367,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     wchar_t buf[128]{};
                     GetWindowTextW(ctl, buf, 128);
                     const bool is_x = (id == IDC_SET_AXIS_X_LABEL_EDIT);
-                    std::wstring label = normalize_axis_label_text(buf, is_x ? L"X" : L"Y");
+                    std::wstring label = normalize_axis_label_text(buf, is_x ? L"X" : L"ед.");
                     const bool changed = is_x ? g.axis_x_label != label : g.axis_y_label != label;
                     if (is_x) g.axis_x_label = label;
                     else g.axis_y_label = label;

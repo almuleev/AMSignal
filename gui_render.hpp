@@ -20,6 +20,12 @@ void draw_curve_symbol(HDC dc, int x, int y, std::size_t curve_index, COLORREF c
 void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1,
                const wchar_t* xlabel);
 
+// Physical unit selected in Settings for amplitude scales.
+std::wstring vertical_axis_unit();
+
+// Localized label for amplitude scales; used by Time and FFT.
+std::wstring amplitude_axis_label();
+
 void draw_legend(HDC dc, const RECT& p);
 
 void draw_guides(HDC dc);

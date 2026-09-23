@@ -288,7 +288,7 @@ const wchar_t* axis_x_label_text() {
 }
 
 const wchar_t* axis_y_label_text() {
-    return (g_str == &kEn) ? L"Y label:" : L"Буква Y:";
+    return (g_str == &kEn) ? L"Y units:" : L"Единицы Y:";
 }
 
 std::wstring to_w(const std::string& s) {

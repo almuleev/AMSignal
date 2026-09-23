@@ -128,6 +128,14 @@ void draw_text(HDC dc, int x, int y, const wchar_t* s, UINT align) {
     TextOutW(dc, x, y, s, lstrlenW(s));
 }
 
+std::wstring vertical_axis_unit() {
+    return normalize_axis_label_text(g.axis_y_label, L"ед.");
+}
+
+std::wstring amplitude_axis_label() {
+    return (g_str == &kEn ? L"Amplitude, " : L"Амплитуда, ") + vertical_axis_unit();
+}
+
 int curve_pen_style(std::size_t curve_index) {
     static constexpr int styles[] = {PS_SOLID, PS_DASH, PS_DOT, PS_DASHDOT, PS_DASHDOTDOT};
     return styles[curve_index % (sizeof(styles) / sizeof(styles[0]))];
@@ -242,7 +250,7 @@ void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1
     Rectangle(dc, p.left, p.top, p.right, p.bottom);
     SelectObject(dc, old_brush);
     const std::wstring corner_x = normalize_axis_label_text(g.axis_x_label, L"X");
-    const std::wstring corner_y = normalize_axis_label_text(g.axis_y_label, L"Y");
+    const std::wstring corner_y = amplitude_axis_label();
     auto draw_corner_label = [&](const std::wstring& text, int x, int y, UINT align) {
         if (text.empty()) return;
         SIZE ts{};

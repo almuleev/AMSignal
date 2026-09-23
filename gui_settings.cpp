@@ -343,7 +343,10 @@ void load_runtime_settings() {
     g.axis_x_label = normalize_axis_label_text(
         read_ini_wstring(L"ui", L"axis_x_label", read_ini_wstring(L"points", L"x_label", g.axis_x_label)), L"X");
     g.axis_y_label = normalize_axis_label_text(
-        read_ini_wstring(L"ui", L"axis_y_label", read_ini_wstring(L"points", L"y_label", g.axis_y_label)), L"Y");
+        read_ini_wstring(L"ui", L"axis_y_label", read_ini_wstring(L"points", L"y_label", g.axis_y_label)), L"ед.");
+    // Prior versions stored the decorative default "Y" here. It is not a
+    // physical unit, so replace it with the neutral unit placeholder.
+    if (g.axis_y_label == L"Y") g.axis_y_label = L"ед.";
 
     g.marker_color = static_cast<COLORREF>(read_ini_int(
         L"ui", L"marker_color", static_cast<int>(g_theme->marker_color)));

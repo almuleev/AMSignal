@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## v0.15.5
+
+- Во всех режимах графика добавлена явная подпись вертикальной шкалы: в Time
+  и FFT показаны амплитуда и настраиваемые единицы Y. В настройках прежняя
+  «Буква Y» переименована в «Единицы Y»; старое служебное значение `Y`
+  автоматически заменяется нейтральным `ед.`.
+- В АЧХ раздельно обозначены безразмерный коэффициент `КД |H|` и физические
+  единицы амплитуды средней опоры. Русские подписи КД, опоры и частотной оси
+  сокращены так, чтобы не обрезаться в рабочей области графика.
+- Подписи АЧХ теперь рисуются последним слоем на непрозрачной подложке, поэтому
+  не мигают и не закрываются маркерами, направляющими или измерениями при
+  панорамировании и масштабировании. Числовые подписи Y автоматически
+  пропускают слишком близкие позиции на компактном графике средней опоры, но
+  линии сетки сохраняются полностью.
+- Added explicit vertical-scale labels to every graph mode: Time and FFT now
+  show amplitude with configurable Y units. Settings rename the former “Y
+  label” to “Y units”, and the old decorative `Y` value automatically becomes
+  a neutral unit placeholder.
+- FRF now distinguishes the dimensionless `KD |H|` scale from the physical
+  amplitude units of the averaged Reference. Compact Russian labels for the
+  coefficient, Reference and frequency axis fit within the graph workspace.
+- FRF scale labels are rendered last on opaque backing plates, preventing
+  flicker or occlusion by markers, guides and measurements during pan or zoom.
+  Closely spaced Y tick labels on a compact Reference plot are omitted while
+  retaining the complete grid.
+
+## v0.15.4
+
 - Лицензия проекта заменена на GNU GPLv3. При распространении изменённых версий
   должны сохраняться GPLv3, уведомления об авторстве и доступность
   соответствующего исходного кода. Ранее выпущенные версии под MIT сохраняют
