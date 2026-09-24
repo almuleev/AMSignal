@@ -46,7 +46,6 @@ std::vector<HotkeyBinding> default_hotkeys() {
         {IDC_RESET, FVIRTKEY, VK_HOME},
         {IDC_GOTO_START, FVIRTKEY | FCONTROL, VK_HOME},
         {IDC_GOTO_END, FVIRTKEY | FCONTROL, VK_END},
-        {IDM_CLEAR_POINTS, FVIRTKEY, VK_DELETE},
         {IDM_HOTKEYS, FVIRTKEY, VK_F1},
     };
 }
@@ -230,7 +229,6 @@ std::wstring hotkeys_body_text() {
     append_hotkey_line(out, IDC_RESET);
     append_hotkey_line(out, IDC_GOTO_START);
     append_hotkey_line(out, IDC_GOTO_END);
-    append_hotkey_line(out, IDM_CLEAR_POINTS);
     out += L"\n";
 
     out += en ? L"Mouse\n" : L"Мышь\n";
@@ -240,7 +238,8 @@ std::wstring hotkeys_body_text() {
     out += en ? L"  Alt+Wheel\t: Pan up / down (Y)\n" : L"  Alt+колесо\t: Сдвиг вверх / вниз по Y\n";
     out += en ? L"  Left-drag\t: Pan view\n" : L"  ЛКМ + тяга\t: Панорамирование\n";
     out += en ? L"  Left-click\t: Place point / line / marker in active mode\n" : L"  ЛКМ\t: Поставить точку / линию / маркер в активном режиме\n";
-    out += en ? L"  Right-click\t: Clear points\n\n" : L"  ПКМ\t: Очистить точки\n\n";
+    out += en ? L"  Click object in Cursor mode\t: Select / drag\n" : L"  Щелчок по объекту в режиме Курсор\t: Выбрать / перетащить\n";
+    out += en ? L"  Delete / Backspace\t: Delete selected annotation\n\n" : L"  Delete / Backspace\t: Удалить выделенный объект\n\n";
     append_hotkey_line(out, IDM_HOTKEYS);
     return out;
 }
@@ -528,7 +527,11 @@ HACCEL make_accelerators() {
     std::vector<ACCEL> acc;
     acc.reserve(g.hotkeys.size());
     for (const auto& hk : g.hotkeys) {
-        if (hk.key == 0) continue;
+        // Plain Delete is reserved for the selected annotation. Older
+        // settings could bind it to “Clear points”; never turn that into an
+        // accelerator before the graph input handler sees the key.
+        if (hk.key == 0 || ((hk.key == VK_DELETE || hk.key == VK_BACK) &&
+            !(hk.fvirt & (FCONTROL | FSHIFT | FALT)))) continue;
         ACCEL a = {};
         a.fVirt = hk.fvirt;
         a.key = hk.key;

@@ -55,7 +55,7 @@ def configure_styles(document):
 def add_footer(section):
     paragraph = section.footer.paragraphs[0]
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = paragraph.add_run("AMSignal  Руководство пользователя  Версия 0.15.4")
+    run = paragraph.add_run("AMSignal  Руководство пользователя  Версия 0.16.1")
     set_font(run, size=8)
 
 
@@ -109,7 +109,7 @@ def build():
         "6. Измерительные инструменты",
         "7. Преобразование и фильтрация каналов",
         "8. FFT спектральный анализ",
-        "9. FRF АЧХ",
+        "9. АЧХ FRF",
         "10. Экспорт и сохранение",
         "11. Настройки и горячие клавиши",
         "12. Практические сценарии",

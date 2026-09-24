@@ -49,14 +49,16 @@ std::vector<double> display_coefficients(const lvm::FrfResult& r) {
 // Measurement points must snap to what is drawn, not to the unsmoothed source
 // bin. Otherwise a click visibly lands away from its point when FRF display
 // smoothing is enabled.
-bool snap_to_displayed_frf_curve(double& frequency, double& coefficient) {
+bool snap_to_displayed_frf_curve_impl(double& frequency, double& coefficient) {
     if (!g.frf.result.ok || !g.vvalid || g.vx1 <= g.vx0 || g.vy1 <= g.vy0) return false;
     const RECT& p = g.vrect;
     const int width = p.right - p.left, height = p.bottom - p.top;
     if (width <= 0 || height <= 0) return false;
+    // Use the same active linear/logarithmic mapping as draw_frf(). The
+    // previous logarithmic-only conversion could pick a bin away from the
+    // rendered curve while the linear frequency axis was active.
     const auto to_x = [&](double f) {
-        return static_cast<double>(p.left) +
-            (std::log10(f) - g.vx0) / (g.vx1 - g.vx0) * width;
+        return static_cast<double>(p.left) + frf_frequency_fraction(f) * width;
     };
     const auto to_y = [&](double kd) {
         return static_cast<double>(p.bottom) -
@@ -113,6 +115,10 @@ double frf_frequency_fraction(double f) {
     }
     if (!(g.frf.frequency_end > g.frf.frequency_start)) return std::numeric_limits<double>::quiet_NaN();
     return (f-g.frf.frequency_start)/(g.frf.frequency_end-g.frf.frequency_start);
+}
+
+bool snap_to_displayed_frf_curve(double& frequency, double& coefficient) {
+    return snap_to_displayed_frf_curve_impl(frequency, coefficient);
 }
 
 double frf_reference_y_max() {
@@ -482,6 +488,17 @@ void draw_frf(HDC dc, const RECT& p) {
                 SelectObject(dc,old_pen);
                 SelectObject(dc,old_brush);
                 DeleteObject(dot);
+                if (g.annotation_selection_kind==App::AnnotationSelectionKind::Point &&
+                    g.annotation_selection_index==static_cast<int>(&group-&g.point_groups[0]) &&
+                    g.annotation_selection_point_index==static_cast<int>(i)) {
+                    HPEN selected=CreatePen(PS_SOLID,2,g_theme->accent);
+                    HGDIOBJ old_selected=SelectObject(dc,selected);
+                    HGDIOBJ old_selected_brush=SelectObject(dc,GetStockObject(HOLLOW_BRUSH));
+                    Ellipse(dc,x-7,y-7,x+8,y+8);
+                    SelectObject(dc,old_selected_brush);
+                    SelectObject(dc,old_selected);
+                    DeleteObject(selected);
+                }
                 if (group.display.number || group.display.x || group.display.y) {
                     wchar_t label[160]{};
                     std::wstring text;
@@ -656,6 +673,9 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         if (group_index<0) return false;
+        g.annotation_selection_kind=App::AnnotationSelectionKind::Point;
+        g.annotation_selection_index=group_index;
+        g.annotation_selection_point_index=point_index;
         g.annotation_drag_kind=App::AnnotationDragKind::Point;
         g.annotation_drag_reference_axis=true;
         g.annotation_drag_index=group_index; g.annotation_drag_point_index=point_index;
@@ -681,35 +701,19 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_LBUTTONDOWN: {
+            // See the common graph handler: annotation keyboard commands must
+            // regain focus when the user clicks an FRF plot.
+            if (GetFocus()!=hwnd) SetFocus(hwnd);
             if (on_reference_divider(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && g.frf.result.ok) {
                 g_dragging_reference_divider=true; SetCapture(hwnd); return 0;
             }
-            if (begin_reference_point_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) ||
-                (inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && begin_annotation_drag(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp)))) return 0;
-            if (!g.annotations_locked && inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && (g.pending_line || g.pending_marker) && g.vvalid) {
-                double frequency=0, coefficient=0;
-                if (!px_to_data(GET_X_LPARAM(lp),GET_Y_LPARAM(lp),frequency,coefficient)) return 0;
-                if (g.pending_line) {
-                    GuideLine line;
-                    line.vertical=g.pending_line==1; line.value=line.vertical ? frequency : coefficient; line.mode=AnalysisMode::FRF;
-                    g.guides.push_back(line);
-                    UndoAction action; action.type=UndoAction::ADD_LINE; action.line=line; push_undo(action);
-                } else if (g.pending_marker) {
-                    App::Marker marker;
-                    int channel=-1;
-                    const bool snapped=g.snap_to_data && snap_to_nearest_target(frequency,coefficient,&channel);
-                    marker.x=frequency; marker.y=coefficient; marker.freq=true;
-                    marker.mode=AnalysisMode::FRF; marker.snapped=snapped; marker.channel=snapped ? channel : -1;
-                    wchar_t label[16]{}; swprintf(label,16,L"M%zu",g.markers.size()+1);
-                    marker.label=label;
-                    g.markers.push_back(marker);
-                    g.active_marker=static_cast<int>(g.markers.size())-1;
-                    UndoAction action; action.type=UndoAction::ADD_MARKER; action.marker=marker; push_undo(action);
-                }
-                set_status(); sync_menu(); invalidate_plot(); return 0;
-            }
+            const bool placing_annotation=g.measure_mode || g.pending_line || g.pending_marker;
+            if (!placing_annotation && (begin_reference_point_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) ||
+                (inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && begin_annotation_drag(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp))))) return 0;
+            clear_annotation_selection();
             const bool lower_reference=inside_reference(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
-            if (!g.annotations_locked && (inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) || lower_reference) && g.measure_mode && g.vvalid &&
+            if (!g.annotations_locked && (inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) || (g.measure_mode && lower_reference)) &&
+                (g.measure_mode || g.pending_line || g.pending_marker) && g.vvalid &&
                 prepare_plot_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp))) {
                 g.point_click_pending=true;
                 g.point_click_reference_axis=lower_reference;
@@ -817,19 +821,47 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 const bool mapped=reference_axis
                     ? reference_px_to_data(point_x,point_y,frequency,coefficient)
                     : px_to_data(point_x,point_y,frequency,coefficient);
-                if (g.measure_mode && mapped) {
+                if (mapped && g.measure_mode) {
                     if (g.snap_to_data) {
                         if (reference_axis) snap_to_reference_curve(frequency,coefficient);
                         else snap_to_displayed_frf_curve(frequency,coefficient);
                     }
                     bool created=false;
                     const int group=ensure_point_group_for_measurement((GetKeyState(VK_CONTROL)&0x8000)!=0,&created,reference_axis);
-                    if (group>=0) {
+                    if (group>=0 && !point_group_contains_point(group,frequency,coefficient)) {
                         g.point_groups[static_cast<std::size_t>(group)].points.push_back({frequency,coefficient});
                         UndoAction action; action.type=UndoAction::ADD_POINT; action.point={frequency,coefficient};
                         action.point_group_index=group; action.point_group_created=created;
                         action.point_group_state=g.point_groups[static_cast<std::size_t>(group)]; action.point_group_state.points.clear();
                         push_undo(action); refresh_side_panel_controls();
+                    }
+                    set_status(); sync_menu(); invalidate_plot();
+                } else if (mapped && g.pending_line) {
+                    if (g.snap_to_data) {
+                        if (reference_axis) snap_to_reference_curve(frequency,coefficient);
+                        else snap_to_displayed_frf_curve(frequency,coefficient);
+                    }
+                    GuideLine line;
+                    line.vertical=g.pending_line==1;
+                    line.value=line.vertical ? frequency : coefficient;
+                    line.mode=AnalysisMode::FRF;
+                    if (!guide_exists_at_current_position(line.vertical,line.value)) {
+                        g.guides.push_back(line);
+                        UndoAction action; action.type=UndoAction::ADD_LINE; action.line=line; push_undo(action);
+                    }
+                    set_status(); sync_menu(); invalidate_plot();
+                } else if (mapped && g.pending_marker) {
+                    App::Marker marker;
+                    int channel=-1;
+                    const bool snapped=g.snap_to_data && snap_to_nearest_target(frequency,coefficient,&channel);
+                    marker.x=frequency; marker.y=coefficient; marker.freq=true;
+                    marker.mode=AnalysisMode::FRF; marker.snapped=snapped; marker.channel=snapped ? channel : -1;
+                    wchar_t label[16]{}; swprintf(label,16,L"M%zu",g.markers.size()+1);
+                    marker.label=label;
+                    if (!marker_exists_at_current_position(marker.x,marker.y)) {
+                        g.markers.push_back(marker);
+                        g.active_marker=static_cast<int>(g.markers.size())-1;
+                        UndoAction action; action.type=UndoAction::ADD_MARKER; action.marker=marker; push_undo(action);
                     }
                     set_status(); sync_menu(); invalidate_plot();
                 }
@@ -842,6 +874,13 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (GetCapture() == hwnd) ReleaseCapture();
             return 0;
         case WM_KEYDOWN:
+            if (wp==VK_DELETE || wp==VK_BACK) {
+                if (delete_selected_annotation()) {
+                    set_status();
+                    invalidate_plot();
+                }
+                return 0;
+            }
             if (wp == VK_ESCAPE) {
                 if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
                     finish_annotation_drag(false);
@@ -864,16 +903,6 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_RBUTTONDOWN:
-            if (g.annotations_locked) return 0;
-            if (has_measure_points()) {
-                UndoAction action; action.type=UndoAction::CLEAR_POINTS; action.saved_point_groups=g.point_groups;
-                action.saved_active_point_group=g.active_point_group;
-                action.saved_time_active_point_group=g.time_active_point_group;
-                action.saved_freq_active_point_group=g.freq_active_point_group;
-                action.saved_frf_active_point_group=g.frf_active_point_group;
-                action.cleared_mode=current_point_group_mode();
-                push_undo(action); clear_measure_point_groups(); refresh_side_panel_controls(); invalidate_plot(); return 0;
-            }
             return 0;
         case WM_SETCURSOR:
             if (reinterpret_cast<HWND>(wp) == hwnd && LOWORD(lp) == HTCLIENT) {

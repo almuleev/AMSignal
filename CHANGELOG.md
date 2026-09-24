@@ -1,6 +1,57 @@
 # Changelog
 
-## Unreleased
+## v0.16.1
+
+### Исправлено
+
+- Горизонтальная направляющая теперь подчиняется Snap при постановке и
+  переносе: она получает Y ближайшей отображаемой кривой. В АЧХ для обеих
+  направляющих используется сглаженная отображаемая кривая.
+- Удаление выбранной точки, маркера или направляющей надёжно обрабатывается
+  клавишами `Delete` и `Backspace`, включая случай, когда до этого фокус был
+  у поля правой панели.
+- После удаления последней точки группа сразу исчезает из списка; Undo/Redo
+  восстанавливает и снова удаляет группу вместе с точкой.
+- Метка маркера больше не закрывает значение совпадающей вертикальной
+  направляющей.
+
+### Доработано
+
+- Разметка теперь выбирается акцентной рамкой в режиме «Курсор». Активные
+  инструменты создания оставляют короткий клик созданием объекта, а тягу от
+  4 пикселей — панорамированием. ПКМ больше не выполняет скрытую очистку.
+- Одна группа не получает одинаковую точку повторно; в текущем режиме также
+  исключены повторные маркеры и направляющие. Точки разных групп по-прежнему
+  могут совпадать.
+- Маркер всегда показывает точку в своей позиции, вертикальную и
+  горизонтальную направляющие. При совпадении с вертикальной линией подписи
+  разводятся по разные стороны; у левого края они не перекрываются.
+- Пункт «Справка → О программе» переименован в «Справка → Начальный экран»
+  (`Help → Start screen`).
+
+### Fixed
+
+- Horizontal guides now honor Snap during placement and dragging, taking Y
+  from the nearest displayed curve. In FRF, both guide orientations use the
+  displayed smoothed curve.
+- `Delete` and `Backspace` reliably remove the selected point, marker, or
+  guide, including after focus had been in a right-side-panel edit control.
+- A point group disappears as soon as its last point is removed; Undo/Redo
+  restores and removes that group together with the point.
+- A marker label no longer obscures the value of a coincident vertical guide.
+
+### Improved
+
+- Cursor mode selects annotations with an accent outline. Placement tools keep
+  a short click for creation and use a drag of 4+ pixels for panning; right
+  click no longer performs an implicit clear.
+- A group cannot receive a duplicate point; duplicate markers and guides are
+  also prevented in the current mode, while points from separate groups may
+  still coincide.
+- Every marker shows its point plus vertical and horizontal guides. Coincident
+  marker and vertical-guide labels use opposite sides of the line and remain
+  non-overlapping at the left edge.
+- `Help → About` is now named `Help → Start screen`.
 
 ## v0.16.0
 

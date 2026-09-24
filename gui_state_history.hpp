@@ -38,12 +38,13 @@ struct SettingsSnapshot {
 };
 
 struct UndoAction {
-    enum Type { NONE, ADD_POINT, ADD_LINE, ADD_MARKER, MOVE_POINT, MOVE_LINE, MOVE_MARKER,
+    enum Type { NONE, ADD_POINT, ADD_LINE, ADD_MARKER, REMOVE_POINT, REMOVE_LINE, REMOVE_MARKER, MOVE_POINT, MOVE_LINE, MOVE_MARKER,
                 CLEAR_POINTS, CLEAR_LINES, CLEAR_MARKERS, SETTINGS_CHANGE } type = NONE;
     std::pair<double, double> point;
     int point_group_index = -1;
     int annotation_drag_point_index = -1;
     bool point_group_created = false;
+    bool point_group_erased = false;
     PointGroupMode cleared_mode = PointGroupMode::Time;
     PointGroup point_group_state;
     GuideLine line;

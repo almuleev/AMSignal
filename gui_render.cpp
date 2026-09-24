@@ -423,6 +423,7 @@ void draw_guides(HDC dc) {
     SelectClipRgn(dc, clip);
     HPEN vpen = CreatePen(PS_DASH, 2, RGB(0, 150, 60));
     HPEN hpen = CreatePen(PS_DASH, 1, RGB(0, 150, 60));
+    HPEN selected_pen = CreatePen(PS_SOLID, 3, g_theme->accent);
     HGDIOBJ old = SelectObject(dc, vpen);
     SetTextColor(dc, RGB(0, 110, 45));
     HFONT lf = g.axis_font ? g.axis_font : g.ui_font;
@@ -430,10 +431,13 @@ void draw_guides(HDC dc) {
     SetBkMode(dc, TRANSPARENT);
     wchar_t b[48];
     HBRUSH wb = CreateSolidBrush(g_theme->bg_plot);
-    for (const auto& gl : g.guides) {
+    for (std::size_t guide_index=0; guide_index<g.guides.size(); ++guide_index) {
+        const auto& gl=g.guides[guide_index];
         if (gl.mode != g.mode) continue;
+        const bool selected=g.annotation_selection_kind==App::AnnotationSelectionKind::Guide &&
+            g.annotation_selection_index==static_cast<int>(guide_index);
         if (gl.vertical) {
-            SelectObject(dc, vpen);
+            SelectObject(dc, selected ? selected_pen : vpen);
             const int X = mx(gl.value);
             if (X < p.left || X > p.right) continue;
             MoveToEx(dc, X, p.top, nullptr); LineTo(dc, X, p.bottom);
@@ -441,11 +445,22 @@ void draw_guides(HDC dc) {
             SetTextAlign(dc, TA_LEFT | TA_TOP);
             SIZE ts;
             GetTextExtentPoint32W(dc, b, lstrlenW(b), &ts);
-            RECT br = {X + 3, p.top + 2, X + 3 + ts.cx + 2, p.top + 2 + ts.cy};
+            const bool shares_marker = std::any_of(g.markers.begin(), g.markers.end(),
+                [&](const App::Marker& marker) {
+                    const int marker_x = mx(marker.x);
+                    return marker.mode == g.mode && marker_x != std::numeric_limits<int>::min() &&
+                        std::abs(marker_x - X) <= 1;
+                });
+            // Put the guide read-out opposite the marker label when their X positions
+            // coincide.  Near the left edge the guide cannot fit on the left, so the
+            // marker label is moved past it instead (without overlap).
+            const bool guide_label_on_left = shares_marker && X - 3 - ts.cx >= p.left;
+            const int label_x = guide_label_on_left ? X - 3 - ts.cx : X + 3;
+            RECT br = {label_x - 2, p.top + 2, label_x + ts.cx + 2, p.top + 2 + ts.cy};
             FillRect(dc, &br, wb);
-            TextOutW(dc, X + 3, p.top + 2, b, lstrlenW(b));
+            TextOutW(dc, label_x, p.top + 2, b, lstrlenW(b));
         } else {
-            SelectObject(dc, hpen);
+            SelectObject(dc, selected ? selected_pen : hpen);
             const int Y = my(gl.value);
             if (Y < p.top || Y > p.bottom) continue;
             MoveToEx(dc, p.left, Y, nullptr); LineTo(dc, p.right, Y);
@@ -464,6 +479,7 @@ void draw_guides(HDC dc) {
     SelectObject(dc, old);
     DeleteObject(vpen);
     DeleteObject(hpen);
+    DeleteObject(selected_pen);
     SelectClipRgn(dc, nullptr);
     DeleteObject(clip);
 }
@@ -494,11 +510,16 @@ void draw_markers(HDC dc) {
     HPEN bp = CreatePen(PS_SOLID, 1, g_theme->frame);
     HGDIOBJ prev_pen = SelectObject(dc, bp);
     HGDIOBJ prev_brush = SelectObject(dc, wb);
-    for (const auto& m : g.markers) {
+    for (std::size_t marker_index=0; marker_index<g.markers.size(); ++marker_index) {
+        const auto& m=g.markers[marker_index];
         if (m.mode != g.mode) continue;
         const int X = mx(m.x);
         if (X < p.left || X > p.right) continue;
         MoveToEx(dc, X, p.top, nullptr); LineTo(dc, X, p.bottom);
+        const int Y = my(m.y);
+        if (Y >= p.top && Y <= p.bottom) {
+            MoveToEx(dc, p.left, Y, nullptr); LineTo(dc, p.right, Y);
+        }
         const wchar_t* txt = nullptr;
         int tlen = 0;
         wchar_t b[48];
@@ -513,22 +534,43 @@ void draw_markers(HDC dc) {
         SIZE ts;
         GetTextExtentPoint32W(dc, txt, tlen, &ts);
         int tx = X + 3;
+        for (const auto& guide : g.guides) {
+            const int guide_x = mx(guide.value);
+            if (guide.mode != g.mode || !guide.vertical ||
+                guide_x == std::numeric_limits<int>::min() || std::abs(guide_x - X) > 1) continue;
+            wchar_t guide_text[48];
+            swprintf(guide_text, 48, (g.mode == AnalysisMode::FFT || g.mode == AnalysisMode::FRF)
+                ? g_str->fmt_hz : g_str->fmt_sec, guide.value);
+            SIZE guide_size;
+            GetTextExtentPoint32W(dc, guide_text, lstrlenW(guide_text), &guide_size);
+            if (X - 3 - guide_size.cx < p.left) tx = X + guide_size.cx + 8;
+            break;
+        }
         int ty = p.top + 4;
         RoundRect(dc, tx - 2, ty - 1, tx + ts.cx + 4, ty + ts.cy + 2, 3, 3);
         SetTextAlign(dc, TA_LEFT | TA_TOP);
         TextOutW(dc, tx, ty, txt, tlen);
 
-        if (m.snapped && m.channel >= 0) {
-            const int Y = my(m.y);
-            if (Y >= p.top && Y <= p.bottom) {
-                HBRUSH dot = CreateSolidBrush(channel_color(static_cast<std::size_t>(m.channel)));
-                HGDIOBJ old_dot_br = SelectObject(dc, dot);
-                HGDIOBJ old_dot_pen = SelectObject(dc, GetStockObject(NULL_PEN));
-                Ellipse(dc, X - 4, Y - 4, X + 5, Y + 5);
-                SelectObject(dc, old_dot_pen);
-                SelectObject(dc, old_dot_br);
-                DeleteObject(dot);
-            }
+        if (Y >= p.top && Y <= p.bottom) {
+            const COLORREF point_color=(m.snapped && m.channel>=0)
+                ? channel_color(static_cast<std::size_t>(m.channel)) : RGB(180,0,180);
+            HBRUSH dot=CreateSolidBrush(point_color);
+            HGDIOBJ old_dot_br=SelectObject(dc,dot);
+            HGDIOBJ old_dot_pen=SelectObject(dc,GetStockObject(NULL_PEN));
+            Ellipse(dc,X-4,Y-4,X+5,Y+5);
+            SelectObject(dc,old_dot_pen);
+            SelectObject(dc,old_dot_br);
+            DeleteObject(dot);
+        }
+        if (g.annotation_selection_kind==App::AnnotationSelectionKind::Marker &&
+            g.annotation_selection_index==static_cast<int>(marker_index) && Y>=p.top && Y<=p.bottom) {
+            HPEN selected=CreatePen(PS_SOLID,2,g_theme->accent);
+            HGDIOBJ old_selected=SelectObject(dc,selected);
+            HGDIOBJ old_selected_brush=SelectObject(dc,GetStockObject(HOLLOW_BRUSH));
+            Ellipse(dc,X-7,Y-7,X+8,Y+8);
+            SelectObject(dc,old_selected_brush);
+            SelectObject(dc,old_selected);
+            DeleteObject(selected);
         }
     }
     SelectObject(dc, prev_pen);
@@ -601,6 +643,17 @@ void draw_measure(HDC dc) {
             SelectObject(dc, old_pn);
             SelectObject(dc, old_br);
             DeleteObject(dot_brush);
+            if (g.annotation_selection_kind==App::AnnotationSelectionKind::Point &&
+                g.annotation_selection_index==static_cast<int>(&group-&g.point_groups[0]) &&
+                g.annotation_selection_point_index==static_cast<int>(i)) {
+                HPEN selected=CreatePen(PS_SOLID,2,g_theme->accent);
+                HGDIOBJ old_selected=SelectObject(dc,selected);
+                HGDIOBJ old_selected_brush=SelectObject(dc,GetStockObject(HOLLOW_BRUSH));
+                Ellipse(dc,X-7,Y-7,X+8,Y+8);
+                SelectObject(dc,old_selected_brush);
+                SelectObject(dc,old_selected);
+                DeleteObject(selected);
+            }
 
             std::wstring lab;
             if (group.display.number) { swprintf(b, 96, L"#%zu ", i + 1); lab += b; }

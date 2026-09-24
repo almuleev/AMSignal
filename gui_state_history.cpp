@@ -625,6 +625,35 @@ void pop_undo() {
             }
             break;
         }
+        case UndoAction::REMOVE_POINT:
+            if (a.point_group_erased && a.point_group_index>=0) {
+                const std::size_t inserted=insert_point_group(static_cast<std::size_t>(a.point_group_index),a.point_group_state);
+                g.active_point_group=static_cast<int>(inserted);
+                active_point_group_index_for_mode(g.point_groups[inserted].mode)=g.active_point_group;
+                g.marker_color=g.point_groups[inserted].color;
+                g_redo.push_back(a); changed=true;
+            } else if (a.point_group_index>=0 && a.annotation_drag_point_index>=0 &&
+                static_cast<std::size_t>(a.point_group_index)<g.point_groups.size()) {
+                auto& points=g.point_groups[static_cast<std::size_t>(a.point_group_index)].points;
+                const std::size_t at=std::min(static_cast<std::size_t>(a.annotation_drag_point_index),points.size());
+                points.insert(points.begin()+static_cast<std::ptrdiff_t>(at),a.point);
+                g_redo.push_back(a); changed=true;
+            }
+            break;
+        case UndoAction::REMOVE_LINE:
+            if (a.point_group_index>=0) {
+                const std::size_t at=std::min(static_cast<std::size_t>(a.point_group_index),g.guides.size());
+                g.guides.insert(g.guides.begin()+static_cast<std::ptrdiff_t>(at),a.line);
+                g_redo.push_back(a); changed=true;
+            }
+            break;
+        case UndoAction::REMOVE_MARKER:
+            if (a.point_group_index>=0) {
+                const std::size_t at=std::min(static_cast<std::size_t>(a.point_group_index),g.markers.size());
+                g.markers.insert(g.markers.begin()+static_cast<std::ptrdiff_t>(at),a.marker);
+                g_redo.push_back(a); changed=true;
+            }
+            break;
         case UndoAction::MOVE_POINT:
             if (a.point_group_index>=0 && a.annotation_drag_point_index>=0 &&
                 static_cast<std::size_t>(a.point_group_index)<g.point_groups.size()) {
@@ -719,6 +748,32 @@ void pop_redo() {
             g.markers.push_back(a.marker);
             g_undo.push_back(a);
             changed = true;
+            break;
+        case UndoAction::REMOVE_POINT:
+            if (a.point_group_erased && a.point_group_index>=0 &&
+                static_cast<std::size_t>(a.point_group_index)<g.point_groups.size()) {
+                erase_point_group(static_cast<std::size_t>(a.point_group_index));
+                g_undo.push_back(a); changed=true;
+            } else if (a.point_group_index>=0 && a.annotation_drag_point_index>=0 &&
+                static_cast<std::size_t>(a.point_group_index)<g.point_groups.size()) {
+                auto& points=g.point_groups[static_cast<std::size_t>(a.point_group_index)].points;
+                if (static_cast<std::size_t>(a.annotation_drag_point_index)<points.size()) {
+                    points.erase(points.begin()+a.annotation_drag_point_index);
+                    g_undo.push_back(a); changed=true;
+                }
+            }
+            break;
+        case UndoAction::REMOVE_LINE:
+            if (a.point_group_index>=0 && static_cast<std::size_t>(a.point_group_index)<g.guides.size()) {
+                g.guides.erase(g.guides.begin()+a.point_group_index);
+                g_undo.push_back(a); changed=true;
+            }
+            break;
+        case UndoAction::REMOVE_MARKER:
+            if (a.point_group_index>=0 && static_cast<std::size_t>(a.point_group_index)<g.markers.size()) {
+                g.markers.erase(g.markers.begin()+a.point_group_index);
+                g_undo.push_back(a); changed=true;
+            }
             break;
         case UndoAction::MOVE_POINT:
             if (a.point_group_index>=0 && a.annotation_drag_point_index>=0 &&

@@ -289,7 +289,11 @@ struct App : DocumentState {
     std::vector<HWND> buttons;   // owner-drawn toolbar buttons
     HWND hovered_btn = nullptr;
     enum class AnnotationDragKind : unsigned char { None, Point, Guide, Marker };
+    enum class AnnotationSelectionKind : unsigned char { None, Point, Guide, Marker };
     AnnotationDragKind annotation_drag_kind = AnnotationDragKind::None;
+    AnnotationSelectionKind annotation_selection_kind = AnnotationSelectionKind::None;
+    int annotation_selection_index = -1;
+    int annotation_selection_point_index = -1;
     bool annotation_drag_reference_axis = false;
     int annotation_drag_index = -1;
     int annotation_drag_point_index = -1;

@@ -389,7 +389,7 @@ HMENU make_menu() {
     const HMENU help = CreatePopupMenu();
     const std::wstring hotkeys_text = menu_text(text(L"Keyboard shortcuts", L"Горячие клавиши"), IDM_HOTKEYS);
     append_menu_item_owner_draw(help, IDM_HOTKEYS, hotkeys_text);
-    append_menu_item_owner_draw(help, IDM_ABOUT, text(L"About", L"О программе"));
+    append_menu_item_owner_draw(help, IDM_ABOUT, text(L"Start screen", L"Начальный экран"));
     append_menu_popup_owner_draw(bar, help, text(L"Help", L"Справка"));
     return bar;
 }

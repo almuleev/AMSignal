@@ -491,6 +491,35 @@ void routed_window_messages() {
         require(!g.measure_mode && !g.pending_marker && g.pending_line == 0,
                 "cursor tool cancels every annotation placement mode");
     }
+    PointGroup annotation_group;
+    annotation_group.points={{1.0,2.0}};
+    g.point_groups={annotation_group};
+    g.annotation_selection_kind=App::AnnotationSelectionKind::Point;
+    g.annotation_selection_index=0;
+    g.annotation_selection_point_index=0;
+    require(delete_selected_annotation() && g.point_groups[0].points.empty(),
+            "Delete removes the selected measurement point");
+    pop_undo();
+    require(g.point_groups[0].points.size()==1,"Undo restores a deleted measurement point");
+    pop_redo();
+    require(g.point_groups[0].points.empty(),"Redo removes the measurement point again");
+    g.guides={{true,1.0,AnalysisMode::Time}};
+    g.annotation_selection_kind=App::AnnotationSelectionKind::Guide;
+    g.annotation_selection_index=0;
+    require(delete_selected_annotation() && g.guides.empty(),"Delete removes the selected guide");
+    pop_undo();
+    require(g.guides.size()==1,"Undo restores a deleted guide");
+    g.markers={{1.0,2.0,L"M1",false,AnalysisMode::Time,false,-1}};
+    g.annotation_selection_kind=App::AnnotationSelectionKind::Marker;
+    g.annotation_selection_index=0;
+    require(delete_selected_annotation() && g.markers.empty(),"Delete removes the selected marker");
+    pop_undo();
+    require(g.markers.size()==1,"Undo restores a deleted marker");
+    g.annotations_locked=true;
+    g.annotation_selection_kind=App::AnnotationSelectionKind::Marker;
+    g.annotation_selection_index=0;
+    require(!delete_selected_annotation() && g.markers.size()==1,"annotation lock also prevents deletion");
+    g.annotations_locked=false;
     MINMAXINFO limits{};
     WndProc(g.main, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&limits));
     require(limits.ptMinTrackSize.x == 980 && limits.ptMinTrackSize.y == 560,

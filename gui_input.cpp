@@ -51,6 +51,34 @@ bool px_to_data(int px, int py, double& dx, double& dy) {
     return true;
 }
 
+namespace {
+bool same_annotation_value(double left, double right) {
+    return std::abs(left-right)<=1e-12*std::max({1.0,std::abs(left),std::abs(right)});
+}
+}
+
+bool point_group_contains_point(int group_index, double x, double y) {
+    if (group_index<0 || static_cast<std::size_t>(group_index)>=g.point_groups.size()) return false;
+    for (const auto& point:g.point_groups[static_cast<std::size_t>(group_index)].points) {
+        if (same_annotation_value(point.first,x) && same_annotation_value(point.second,y)) return true;
+    }
+    return false;
+}
+
+bool marker_exists_at_current_position(double x, double y) {
+    for (const auto& marker:g.markers) {
+        if (marker.mode==g.mode && same_annotation_value(marker.x,x) && same_annotation_value(marker.y,y)) return true;
+    }
+    return false;
+}
+
+bool guide_exists_at_current_position(bool vertical, double value) {
+    for (const auto& guide:g.guides) {
+        if (guide.mode==g.mode && guide.vertical==vertical && same_annotation_value(guide.value,value)) return true;
+    }
+    return false;
+}
+
 // Snap a clicked coordinate to the nearest visible real sample (Time mode) or
 // spectrum point (Hz mode) by on-screen distance, so a marker lands on the
 // visually closest data point. The stored data is never modified � only the
@@ -211,6 +239,62 @@ int hit_test_marker(int px, int py) {
     return best;
 }
 
+void clear_annotation_selection() {
+    g.annotation_selection_kind=App::AnnotationSelectionKind::None;
+    g.annotation_selection_index=-1;
+    g.annotation_selection_point_index=-1;
+}
+
+bool delete_selected_annotation() {
+    if (g.annotations_locked || g.annotation_selection_kind==App::AnnotationSelectionKind::None) return false;
+    UndoAction action;
+    const int index=g.annotation_selection_index;
+    switch (g.annotation_selection_kind) {
+        case App::AnnotationSelectionKind::Point: {
+            const int point_index=g.annotation_selection_point_index;
+            if (index<0 || point_index<0 || static_cast<std::size_t>(index)>=g.point_groups.size()) return false;
+            auto& group=g.point_groups[static_cast<std::size_t>(index)];
+            if (group.mode!=current_point_group_mode()) return false;
+            auto& points=group.points;
+            if (static_cast<std::size_t>(point_index)>=points.size()) return false;
+            action.type=UndoAction::REMOVE_POINT;
+            action.point_group_index=index;
+            action.annotation_drag_point_index=point_index;
+            action.point=points[static_cast<std::size_t>(point_index)];
+            action.point_group_state=group;
+            points.erase(points.begin()+point_index);
+            if (points.empty()) {
+                action.point_group_erased=true;
+                erase_point_group(static_cast<std::size_t>(index));
+            }
+            break;
+        }
+        case App::AnnotationSelectionKind::Guide:
+            if (index<0 || static_cast<std::size_t>(index)>=g.guides.size()) return false;
+            if (g.guides[static_cast<std::size_t>(index)].mode!=g.mode) return false;
+            action.type=UndoAction::REMOVE_LINE;
+            action.point_group_index=index;
+            action.line=g.guides[static_cast<std::size_t>(index)];
+            g.guides.erase(g.guides.begin()+index);
+            break;
+        case App::AnnotationSelectionKind::Marker:
+            if (index<0 || static_cast<std::size_t>(index)>=g.markers.size()) return false;
+            if (g.markers[static_cast<std::size_t>(index)].mode!=g.mode) return false;
+            action.type=UndoAction::REMOVE_MARKER;
+            action.point_group_index=index;
+            action.marker=g.markers[static_cast<std::size_t>(index)];
+            g.markers.erase(g.markers.begin()+index);
+            g.active_marker=-1;
+            break;
+        case App::AnnotationSelectionKind::None:
+            return false;
+    }
+    clear_annotation_selection();
+    push_undo(std::move(action));
+    refresh_side_panel_controls();
+    return true;
+}
+
 bool begin_annotation_drag(HWND hwnd, int px, int py) {
     if (g.annotations_locked || !g.vvalid) return false;
     g.annotation_drag_reference_axis=false;
@@ -233,6 +317,9 @@ bool begin_annotation_drag(HWND hwnd, int px, int py) {
         }
     }
     if (group_index>=0) {
+        g.annotation_selection_kind=App::AnnotationSelectionKind::Point;
+        g.annotation_selection_index=group_index;
+        g.annotation_selection_point_index=point_index;
         g.annotation_drag_kind=App::AnnotationDragKind::Point;
         g.annotation_drag_index=group_index;
         g.annotation_drag_point_index=point_index;
@@ -241,6 +328,9 @@ bool begin_annotation_drag(HWND hwnd, int px, int py) {
     }
     const int marker=hit_test_marker(px,py);
     if (marker>=0) {
+        g.annotation_selection_kind=App::AnnotationSelectionKind::Marker;
+        g.annotation_selection_index=marker;
+        g.annotation_selection_point_index=-1;
         g.annotation_drag_kind=App::AnnotationDragKind::Marker;
         g.annotation_drag_index=marker;
         g.annotation_drag_marker_before=g.markers[static_cast<std::size_t>(marker)];
@@ -253,6 +343,9 @@ bool begin_annotation_drag(HWND hwnd, int px, int py) {
         if (distance<best_distance) { best_distance=distance; guide=static_cast<int>(i); }
     }
     if (guide>=0) {
+        g.annotation_selection_kind=App::AnnotationSelectionKind::Guide;
+        g.annotation_selection_index=guide;
+        g.annotation_selection_point_index=-1;
         g.annotation_drag_kind=App::AnnotationDragKind::Guide;
         g.annotation_drag_index=guide;
         g.annotation_drag_guide_before=g.guides[static_cast<std::size_t>(guide)];
@@ -265,7 +358,10 @@ void update_annotation_drag(int px, int py) {
     if (g.annotation_drag_kind==App::AnnotationDragKind::None) return;
     double x=0,y=0; if (!px_to_data(px,py,x,y)) return;
     if (g.annotation_drag_kind==App::AnnotationDragKind::Point && g.annotation_drag_index>=0 && g.annotation_drag_point_index>=0) {
-        if (g.snap_to_data) snap_to_nearest(x,y);
+        if (g.snap_to_data) {
+            if (g.mode==AnalysisMode::FRF) snap_to_displayed_frf_curve(x,y);
+            else snap_to_nearest(x,y);
+        }
         auto& points=g.point_groups[static_cast<std::size_t>(g.annotation_drag_index)].points;
         if (static_cast<std::size_t>(g.annotation_drag_point_index)<points.size()) points[static_cast<std::size_t>(g.annotation_drag_point_index)]={x,y};
     } else if (g.annotation_drag_kind==App::AnnotationDragKind::Marker && g.annotation_drag_index>=0 &&
@@ -276,7 +372,10 @@ void update_annotation_drag(int px, int py) {
     } else if (g.annotation_drag_kind==App::AnnotationDragKind::Guide && g.annotation_drag_index>=0 &&
                static_cast<std::size_t>(g.annotation_drag_index)<g.guides.size()) {
         auto& line=g.guides[static_cast<std::size_t>(g.annotation_drag_index)];
-        if (line.vertical && g.snap_to_data) { double ignored=y; snap_to_nearest(x,ignored); }
+        if (g.snap_to_data) {
+            if (g.mode==AnalysisMode::FRF) snap_to_displayed_frf_curve(x,y);
+            else snap_to_nearest(x,y);
+        }
         line.value=line.vertical ? x : y;
     }
 }
@@ -395,6 +494,10 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_LBUTTONDOWN: {
+            // Child controls may retain keyboard focus after editing a field.
+            // A graph click must return it to the main window so Delete and
+            // Backspace target the selected annotation without an app switch.
+            if (GetFocus()!=hwnd) SetFocus(hwnd);
             finish_channel_rename_if_click_outside(hwnd);
             if (g.gap_details_visible) {
                 hide_gap_details_card();
@@ -440,9 +543,13 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
             }
 
-            if ((g.mode == AnalysisMode::Time) && g.show_gap_markers) {
+            const bool placing_annotation=g.measure_mode || g.pending_line || g.pending_marker;
+            if ((g.mode == AnalysisMode::Time) && g.show_gap_markers && !placing_annotation) {
                 const int gap_index = hit_test_gap_marker(mx, my);
                 if (gap_index >= 0) {
+                    // An annotation drawn over a gap must be selectable before
+                    // the gap card claims the click.
+                    if (begin_annotation_drag(hwnd,mx,my)) return 0;
                     g.gap_click_pending = false;
                     g.gap_click_index = -1;
                     if (prepare_plot_drag(mx, my)) {
@@ -482,10 +589,12 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             if (mx < p.left || mx > p.right || my < p.top || my > p.bottom) return 0;
-            // Existing annotations take precedence over placement tools: a
-            // press on an object edits it, while empty space still places a
-            // new object with the active tool.
-            if (begin_annotation_drag(hwnd,mx,my)) return 0;
+            // Creation tools deliberately take priority over existing
+            // annotations, so a point, marker, or guide can be placed at an
+            // already marked coordinate. In cursor mode a press on an object
+            // selects it and starts a possible drag.
+            if (!placing_annotation && begin_annotation_drag(hwnd,mx,my)) return 0;
+            clear_annotation_selection();
             const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             if ((g.mode == AnalysisMode::Time) && shift && !g.pending_line && !g.pending_marker && !g.measure_mode) {
                 const int pw = p.right - p.left;
@@ -511,51 +620,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 }
             }
-            if (g.pending_line && !g.annotations_locked) {
-                double dx, dy;
-                if (px_to_data(mx, my, dx, dy)) {
-                    GuideLine gl;
-                    gl.vertical = (g.pending_line == 1);
-                    gl.mode = g.mode;
-                    if (gl.vertical && g.snap_to_data && g.mode != AnalysisMode::FRF) { double sx = dx, sy = dy; snap_to_nearest(sx, sy); dx = sx; }
-                    gl.value = gl.vertical ? dx : dy;
-                    g.guides.push_back(gl);
-                    UndoAction ua; ua.type = UndoAction::ADD_LINE; ua.line = gl;
-                    push_undo(ua);
-                }
-                // Режим множественного добавления: остаётся активным до Esc
-                set_status();
-                sync_menu();
-                InvalidateRect(hwnd, nullptr, FALSE);
-                return 0;
-            }
-            if (g.pending_marker && !g.annotations_locked) {
-                double dx, dy;
-                if (px_to_data(mx, my, dx, dy)) {
-                    App::Marker mk;
-                    int snapped_channel = -1;
-                    bool snapped = false;
-                    if (g.snap_to_data) snapped = snap_to_nearest_target(dx, dy, &snapped_channel);
-                    mk.x = dx;
-                    mk.y = dy;
-                    mk.freq = (g.mode == AnalysisMode::FFT);
-                    mk.mode = g.mode;
-                    mk.snapped = snapped;
-                    mk.channel = snapped ? snapped_channel : -1;
-                    wchar_t buf[16];
-                    swprintf(buf, 16, L"M%zu", g.markers.size() + 1);
-                    mk.label = buf;
-                    g.markers.push_back(mk);
-                    g.active_marker = static_cast<int>(g.markers.size()) - 1;
-                    UndoAction ua; ua.type = UndoAction::ADD_MARKER; ua.marker = mk;
-                    push_undo(ua);
-                }
-                set_status();
-                sync_menu();
-                InvalidateRect(hwnd, nullptr, FALSE);
-                return 0;
-            }
-            if (g.measure_mode && !g.annotations_locked) {
+            if ((g.measure_mode || g.pending_line || g.pending_marker) && !g.annotations_locked) {
                 if (!prepare_plot_drag(mx, my)) return 0;
                 g.point_click_pending = true;
                 g.point_click_reference_axis = false;
@@ -581,20 +646,6 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 set_status();
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
-            }
-            if (has_measure_points()) {
-                UndoAction ua;
-                ua.type = UndoAction::CLEAR_POINTS;
-                ua.saved_point_groups = g.point_groups;
-                ua.saved_active_point_group = g.active_point_group;
-                ua.saved_time_active_point_group = g.time_active_point_group;
-                ua.saved_freq_active_point_group = g.freq_active_point_group;
-                ua.saved_frf_active_point_group = g.frf_active_point_group;
-                ua.cleared_mode = current_point_group_mode();
-                push_undo(ua);
-                clear_measure_point_groups();
-                set_status();
-                InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
         case WM_MOUSEMOVE: {
@@ -715,12 +766,14 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.point_click_reference_axis = false;
                 if (GetCapture() == hwnd) ReleaseCapture();
                 double dx, dy;
-                if (g.measure_mode && px_to_data(point_x, point_y, dx, dy)) {
-                    const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-                    if (g.snap_to_data) snap_to_nearest(dx, dy);
+                if (px_to_data(point_x, point_y, dx, dy)) {
+                    if (g.measure_mode) {
+                        const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                        if (g.snap_to_data) snap_to_nearest(dx, dy);
                     bool created_group = false;
                     const int group_index = ensure_point_group_for_measurement(ctrl, &created_group);
-                    if (group_index >= 0 && group_index < static_cast<int>(g.point_groups.size())) {
+                    if (group_index >= 0 && group_index < static_cast<int>(g.point_groups.size()) &&
+                        !point_group_contains_point(group_index,dx,dy)) {
                         g.point_groups[static_cast<std::size_t>(group_index)].points.push_back({dx, dy});
                         UndoAction ua;
                         ua.type = UndoAction::ADD_POINT;
@@ -734,12 +787,50 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         set_status();
                         InvalidateRect(hwnd, nullptr, FALSE);
                     }
+                    } else if (g.pending_line) {
+                        GuideLine line;
+                        line.vertical=g.pending_line==1;
+                        line.mode=g.mode;
+                        if (g.snap_to_data) {
+                            if (g.mode==AnalysisMode::FRF) snap_to_displayed_frf_curve(dx,dy);
+                            else snap_to_nearest(dx,dy);
+                        }
+                        line.value=line.vertical ? dx : dy;
+                        if (!guide_exists_at_current_position(line.vertical,line.value)) {
+                            g.guides.push_back(line);
+                            UndoAction action; action.type=UndoAction::ADD_LINE; action.line=line;
+                            push_undo(action);
+                        }
+                        set_status(); sync_menu(); InvalidateRect(hwnd,nullptr,FALSE);
+                    } else if (g.pending_marker) {
+                        App::Marker marker;
+                        int channel=-1;
+                        const bool snapped=g.snap_to_data && snap_to_nearest_target(dx,dy,&channel);
+                        marker.x=dx; marker.y=dy; marker.freq=g.mode==AnalysisMode::FFT;
+                        marker.mode=g.mode; marker.snapped=snapped; marker.channel=snapped ? channel : -1;
+                        wchar_t label[16]{}; swprintf(label,16,L"M%zu",g.markers.size()+1);
+                        marker.label=label;
+                        if (!marker_exists_at_current_position(marker.x,marker.y)) {
+                            g.markers.push_back(marker);
+                            g.active_marker=static_cast<int>(g.markers.size())-1;
+                            UndoAction action; action.type=UndoAction::ADD_MARKER; action.marker=marker;
+                            push_undo(action);
+                        }
+                        set_status(); sync_menu(); InvalidateRect(hwnd,nullptr,FALSE);
+                    }
                 }
                 return 0;
             }
             if (g.dragging) { g.dragging = false; ReleaseCapture(); }
             return 0;
         case WM_KEYDOWN:
+            if (wp==VK_DELETE || wp==VK_BACK) {
+                if (delete_selected_annotation()) {
+                    set_status();
+                    InvalidateRect(hwnd,nullptr,FALSE);
+                }
+                return 0;
+            }
             if (g.gap_details_visible && wp != VK_ESCAPE) {
                 hide_gap_details_card();
             }

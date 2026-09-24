@@ -168,7 +168,7 @@ void enable_file_drop_support(HWND hwnd) {
     EnumChildWindows(hwnd, enable_file_drop_child_proc, 0);
 }
 
-void handle_file_drop(HWND hwnd, HDROP hDrop) {
+void handle_file_drop([[maybe_unused]] HWND hwnd, HDROP hDrop) {
     UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
     if (count > 0) {
         std::vector<std::wstring> paths;
