@@ -13,6 +13,10 @@ void snap_to_nearest(double& dx, double& dy);
 
 int hit_test_marker(int px, int py);
 
+bool begin_annotation_drag(HWND hwnd, int px, int py);
+void update_annotation_drag(int px, int py);
+void finish_annotation_drag(bool commit);
+
 LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
 } // namespace gui

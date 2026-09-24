@@ -53,6 +53,7 @@ void layout() {
     place(g.measure, text_button_width(g.measure, 72, 28), 40);
     place(g.marker_btn, text_button_width(g.marker_btn, 72, 30), 40);
     place(g.line_menu_btn, text_button_width(g.line_menu_btn, 90, 28), 40);
+    place(g.annotation_lock_btn, 30, 40);
     // View controls share the right edge as a vertical pair.
     const int auto_w = text_button_width(g.autoy, 108, 34);
     const int side_w = text_button_width(g.sidepanel_btn, 92, 32);

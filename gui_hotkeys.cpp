@@ -52,7 +52,12 @@ std::vector<HotkeyBinding> default_hotkeys() {
 }
 
 void ensure_hotkeys_initialized() {
-    if (g.hotkeys.empty()) {
+    const bool no_assigned_bindings = !g.hotkeys.empty() && std::none_of(
+        g.hotkeys.begin(), g.hotkeys.end(), [](const HotkeyBinding& binding) { return binding.key != 0; });
+    // An empty vector and an all-zero table are both uninitialized states.
+    // The latter can be left by an interrupted settings write; it must not turn
+    // the whole application into an unassigned-shortcuts state.
+    if (g.hotkeys.empty() || no_assigned_bindings) {
         g.hotkeys = default_hotkeys();
         return;
     }

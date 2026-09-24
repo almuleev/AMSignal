@@ -183,7 +183,9 @@ int hit_test_marker(int px, int py) {
     if (px < p.left || px > p.right || py < p.top || py > p.bottom) return -1;
     if (g.vx1 <= g.vx0 || g.vy1 <= g.vy0) return -1;
     auto mx = [&](double dx) {
-        const double displayed_x = (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
+        const double displayed_x = (g.mode == AnalysisMode::FRF) ?
+            (g.vx0+frf_frequency_fraction(dx)*(g.vx1-g.vx0)) :
+            (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
         return p.left + static_cast<int>((displayed_x - g.vx0) / (g.vx1 - g.vx0) * (p.right - p.left));
     };
     auto my = [&](double dy) {
@@ -209,10 +211,113 @@ int hit_test_marker(int px, int py) {
     return best;
 }
 
+bool begin_annotation_drag(HWND hwnd, int px, int py) {
+    if (g.annotations_locked || !g.vvalid) return false;
+    g.annotation_drag_reference_axis=false;
+    const RECT& p=g.vrect;
+    if (px<p.left || px>p.right || py<p.top || py>p.bottom || g.vx1<=g.vx0 || g.vy1<=g.vy0) return false;
+    const auto map_x=[&](double x) {
+        const double displayed=g.mode==AnalysisMode::FRF ? (g.vx0+frf_frequency_fraction(x)*(g.vx1-g.vx0)) :
+            g.mode==AnalysisMode::FFT ? x : stitched_time_from_raw(x);
+        return p.left+static_cast<int>((displayed-g.vx0)/(g.vx1-g.vx0)*(p.right-p.left));
+    };
+    const auto map_y=[&](double y) { return p.bottom-static_cast<int>((y-g.vy0)/(g.vy1-g.vy0)*(p.bottom-p.top)); };
+    int best_distance=10, group_index=-1, point_index=-1;
+    for (std::size_t group=0;group<g.point_groups.size();++group) {
+        const auto& points=g.point_groups[group];
+        if (!points.visible || points.mode!=current_point_group_mode() || points.frf_reference_axis) continue;
+        for (std::size_t point=0;point<points.points.size();++point) {
+            const int distance=std::max(std::abs(px-map_x(points.points[point].first)),
+                                        std::abs(py-map_y(points.points[point].second)));
+            if (distance<best_distance) { best_distance=distance; group_index=static_cast<int>(group); point_index=static_cast<int>(point); }
+        }
+    }
+    if (group_index>=0) {
+        g.annotation_drag_kind=App::AnnotationDragKind::Point;
+        g.annotation_drag_index=group_index;
+        g.annotation_drag_point_index=point_index;
+        g.annotation_drag_point_before=g.point_groups[static_cast<std::size_t>(group_index)].points[static_cast<std::size_t>(point_index)];
+        SetCapture(hwnd); return true;
+    }
+    const int marker=hit_test_marker(px,py);
+    if (marker>=0) {
+        g.annotation_drag_kind=App::AnnotationDragKind::Marker;
+        g.annotation_drag_index=marker;
+        g.annotation_drag_marker_before=g.markers[static_cast<std::size_t>(marker)];
+        SetCapture(hwnd); return true;
+    }
+    int guide=-1; best_distance=7;
+    for (std::size_t i=0;i<g.guides.size();++i) {
+        const auto& line=g.guides[i]; if (line.mode!=g.mode) continue;
+        const int distance=line.vertical ? std::abs(px-map_x(line.value)) : std::abs(py-map_y(line.value));
+        if (distance<best_distance) { best_distance=distance; guide=static_cast<int>(i); }
+    }
+    if (guide>=0) {
+        g.annotation_drag_kind=App::AnnotationDragKind::Guide;
+        g.annotation_drag_index=guide;
+        g.annotation_drag_guide_before=g.guides[static_cast<std::size_t>(guide)];
+        SetCapture(hwnd); return true;
+    }
+    return false;
+}
+
+void update_annotation_drag(int px, int py) {
+    if (g.annotation_drag_kind==App::AnnotationDragKind::None) return;
+    double x=0,y=0; if (!px_to_data(px,py,x,y)) return;
+    if (g.annotation_drag_kind==App::AnnotationDragKind::Point && g.annotation_drag_index>=0 && g.annotation_drag_point_index>=0) {
+        if (g.snap_to_data) snap_to_nearest(x,y);
+        auto& points=g.point_groups[static_cast<std::size_t>(g.annotation_drag_index)].points;
+        if (static_cast<std::size_t>(g.annotation_drag_point_index)<points.size()) points[static_cast<std::size_t>(g.annotation_drag_point_index)]={x,y};
+    } else if (g.annotation_drag_kind==App::AnnotationDragKind::Marker && g.annotation_drag_index>=0 &&
+               static_cast<std::size_t>(g.annotation_drag_index)<g.markers.size()) {
+        int channel=-1; const bool snapped=g.snap_to_data && snap_to_nearest_target(x,y,&channel);
+        auto& marker=g.markers[static_cast<std::size_t>(g.annotation_drag_index)];
+        marker.x=x; marker.y=y; marker.snapped=snapped; marker.channel=snapped ? channel : -1;
+    } else if (g.annotation_drag_kind==App::AnnotationDragKind::Guide && g.annotation_drag_index>=0 &&
+               static_cast<std::size_t>(g.annotation_drag_index)<g.guides.size()) {
+        auto& line=g.guides[static_cast<std::size_t>(g.annotation_drag_index)];
+        if (line.vertical && g.snap_to_data) { double ignored=y; snap_to_nearest(x,ignored); }
+        line.value=line.vertical ? x : y;
+    }
+}
+
+void finish_annotation_drag(bool commit) {
+    const auto kind=g.annotation_drag_kind;
+    const int index=g.annotation_drag_index, point_index=g.annotation_drag_point_index;
+    g.annotation_drag_kind=App::AnnotationDragKind::None;
+    g.annotation_drag_index=-1; g.annotation_drag_point_index=-1;
+    g.annotation_drag_reference_axis=false;
+    if (!commit || index<0) {
+        if (kind==App::AnnotationDragKind::Point && index>=0 && point_index>=0 && static_cast<std::size_t>(index)<g.point_groups.size() &&
+            static_cast<std::size_t>(point_index)<g.point_groups[static_cast<std::size_t>(index)].points.size())
+            g.point_groups[static_cast<std::size_t>(index)].points[static_cast<std::size_t>(point_index)]=g.annotation_drag_point_before;
+        else if (kind==App::AnnotationDragKind::Guide && static_cast<std::size_t>(index)<g.guides.size()) g.guides[static_cast<std::size_t>(index)]=g.annotation_drag_guide_before;
+        else if (kind==App::AnnotationDragKind::Marker && static_cast<std::size_t>(index)<g.markers.size()) g.markers[static_cast<std::size_t>(index)]=g.annotation_drag_marker_before;
+        return;
+    }
+    UndoAction action;
+    if (kind==App::AnnotationDragKind::Point && static_cast<std::size_t>(index)<g.point_groups.size() && static_cast<std::size_t>(point_index)<g.point_groups[static_cast<std::size_t>(index)].points.size()) {
+        const auto after=g.point_groups[static_cast<std::size_t>(index)].points[static_cast<std::size_t>(point_index)];
+        if (after==g.annotation_drag_point_before) return;
+        action.type=UndoAction::MOVE_POINT; action.point_group_index=index; action.point_group_created=false;
+        action.point=after; action.old_point=g.annotation_drag_point_before; action.annotation_drag_point_index=point_index;
+    } else if (kind==App::AnnotationDragKind::Guide && static_cast<std::size_t>(index)<g.guides.size()) {
+        const auto after=g.guides[static_cast<std::size_t>(index)];
+        if (after.vertical==g.annotation_drag_guide_before.vertical && after.value==g.annotation_drag_guide_before.value && after.mode==g.annotation_drag_guide_before.mode) return;
+        action.type=UndoAction::MOVE_LINE; action.point_group_index=index; action.line=after; action.old_line=g.annotation_drag_guide_before;
+    } else if (kind==App::AnnotationDragKind::Marker && static_cast<std::size_t>(index)<g.markers.size()) {
+        const auto after=g.markers[static_cast<std::size_t>(index)];
+        if (after.x==g.annotation_drag_marker_before.x && after.y==g.annotation_drag_marker_before.y && after.snapped==g.annotation_drag_marker_before.snapped && after.channel==g.annotation_drag_marker_before.channel) return;
+        action.type=UndoAction::MOVE_MARKER; action.point_group_index=index; action.marker=after; action.old_marker=g.annotation_drag_marker_before;
+    } else return;
+    push_undo(std::move(action));
+}
+
 LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (g.mode == AnalysisMode::FRF) return handle_frf_input(hwnd, msg, wp, lp);
     switch (msg) {
         case WM_CANCELMODE:
+            if (g.annotation_drag_kind!=App::AnnotationDragKind::None) finish_annotation_drag(false);
             g_filter_slider_before.reset();
             refresh_side_panel_controls();
             return 0;
@@ -377,6 +482,10 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             if (mx < p.left || mx > p.right || my < p.top || my > p.bottom) return 0;
+            // Existing annotations take precedence over placement tools: a
+            // press on an object edits it, while empty space still places a
+            // new object with the active tool.
+            if (begin_annotation_drag(hwnd,mx,my)) return 0;
             const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             if ((g.mode == AnalysisMode::Time) && shift && !g.pending_line && !g.pending_marker && !g.measure_mode) {
                 const int pw = p.right - p.left;
@@ -402,7 +511,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 }
             }
-            if (g.pending_line) {
+            if (g.pending_line && !g.annotations_locked) {
                 double dx, dy;
                 if (px_to_data(mx, my, dx, dy)) {
                     GuideLine gl;
@@ -420,7 +529,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
-            if (g.pending_marker) {
+            if (g.pending_marker && !g.annotations_locked) {
                 double dx, dy;
                 if (px_to_data(mx, my, dx, dy)) {
                     App::Marker mk;
@@ -446,27 +555,13 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
-            if (g.measure_mode) {
-                double dx, dy;
-                if (px_to_data(mx, my, dx, dy)) {
-                    const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-                    if (g.snap_to_data && g.mode != AnalysisMode::FRF) snap_to_nearest(dx, dy);
-                    bool created_group = false;
-                    const int group_index = ensure_point_group_for_measurement(ctrl, &created_group);
-                    if (group_index < 0 || group_index >= static_cast<int>(g.point_groups.size())) return 0;
-                    g.point_groups[static_cast<std::size_t>(group_index)].points.push_back({dx, dy});
-                    UndoAction ua;
-                    ua.type = UndoAction::ADD_POINT;
-                    ua.point = {dx, dy};
-                    ua.point_group_index = group_index;
-                    ua.point_group_created = created_group;
-                    ua.point_group_state = g.point_groups[static_cast<std::size_t>(group_index)];
-                    ua.point_group_state.points.clear();
-                    push_undo(ua);
-                    refresh_side_panel_controls();
-                    set_status();
-                    InvalidateRect(hwnd, nullptr, FALSE);
-                }
+            if (g.measure_mode && !g.annotations_locked) {
+                if (!prepare_plot_drag(mx, my)) return 0;
+                g.point_click_pending = true;
+                g.point_click_reference_axis = false;
+                g.point_click_x = mx;
+                g.point_click_y = my;
+                SetCapture(hwnd);
                 return 0;
             }
             if (!prepare_plot_drag(mx, my)) return 0;
@@ -477,6 +572,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_RBUTTONDOWN:
+            if (g.annotations_locked) return 0;
             if (g.gap_details_visible) {
                 hide_gap_details_card();
             }
@@ -502,6 +598,11 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_MOUSEMOVE: {
+            if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
+                update_annotation_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
+                InvalidateRect(hwnd,nullptr,FALSE);
+                return 0;
+            }
             if (g.fft_selecting) {
                 const RECT p = plot_rect();
                 const int pw = p.right - p.left;
@@ -515,6 +616,14 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
                 return 0;
+            }
+            if (g.point_click_pending) {
+                const int dx = GET_X_LPARAM(lp) - g.point_click_x;
+                const int dy = GET_Y_LPARAM(lp) - g.point_click_y;
+                if (std::abs(dx) < 4 && std::abs(dy) < 4) return 0;
+                g.point_click_pending = false;
+                g.point_click_reference_axis = false;
+                g.dragging = true;
             }
             const int hovered_marker = hit_test_marker(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             if (hovered_marker >= 0 && hovered_marker != g.active_marker) {
@@ -570,6 +679,12 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_LBUTTONUP:
+            if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
+                finish_annotation_drag(true);
+                if (GetCapture()==hwnd) ReleaseCapture();
+                set_status(); InvalidateRect(hwnd,nullptr,FALSE);
+                return 0;
+            }
             if (g.fft_selecting) {
                 g.fft_selecting = false;
                 if (GetCapture() == hwnd) ReleaseCapture();
@@ -594,6 +709,34 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return 0;
             }
+            if (g.point_click_pending) {
+                const int point_x = g.point_click_x, point_y = g.point_click_y;
+                g.point_click_pending = false;
+                g.point_click_reference_axis = false;
+                if (GetCapture() == hwnd) ReleaseCapture();
+                double dx, dy;
+                if (g.measure_mode && px_to_data(point_x, point_y, dx, dy)) {
+                    const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                    if (g.snap_to_data) snap_to_nearest(dx, dy);
+                    bool created_group = false;
+                    const int group_index = ensure_point_group_for_measurement(ctrl, &created_group);
+                    if (group_index >= 0 && group_index < static_cast<int>(g.point_groups.size())) {
+                        g.point_groups[static_cast<std::size_t>(group_index)].points.push_back({dx, dy});
+                        UndoAction ua;
+                        ua.type = UndoAction::ADD_POINT;
+                        ua.point = {dx, dy};
+                        ua.point_group_index = group_index;
+                        ua.point_group_created = created_group;
+                        ua.point_group_state = g.point_groups[static_cast<std::size_t>(group_index)];
+                        ua.point_group_state.points.clear();
+                        push_undo(ua);
+                        refresh_side_panel_controls();
+                        set_status();
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                    }
+                }
+                return 0;
+            }
             if (g.dragging) { g.dragging = false; ReleaseCapture(); }
             return 0;
         case WM_KEYDOWN:
@@ -601,6 +744,18 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 hide_gap_details_card();
             }
             if (wp == VK_ESCAPE) {
+                if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
+                    finish_annotation_drag(false);
+                    if (GetCapture()==hwnd) ReleaseCapture();
+                    InvalidateRect(hwnd,nullptr,FALSE);
+                    return 0;
+                }
+                if (g.point_click_pending) {
+                    g.point_click_pending = false;
+                    g.point_click_reference_axis = false;
+                    if (GetCapture() == hwnd) ReleaseCapture();
+                    return 0;
+                }
                 if (g.gap_details_visible) {
                     hide_gap_details_card();
                     return 0;

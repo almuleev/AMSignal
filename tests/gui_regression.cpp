@@ -576,6 +576,7 @@ void frf_integration() {
     }
     reset_document({"Input, special", "Output"}, t, {x,y});
     require(g.frf.inputs.empty() && g.frf.outputs.empty(), "FRF starts without preselected channel roles");
+    require(!g.frf.logarithmic_frequency_axis, "new FRF views default to a linear frequency axis");
     require(set_frf_channels({0},{1}), "FRF accepts the first selected support and response");
     g.frf.options.estimator=lvm::FrfEstimator::Direct;
     set_fft_window(t[0],t[511]);
@@ -587,6 +588,8 @@ void frf_integration() {
     require(g.frf.result.common().valid[8] && !g.frf.result.common().valid[80], "weak input bins are masked in GUI result");
     require(g.frf.result.common().reference_amplitude_valid[8] &&
             g.frf.result.common().reference_amplitude[8]>0,"GUI receives the averaged Reference amplitude graph");
+    g.frf.logarithmic_frequency_axis=true;
+    sync_frf_frequency_limits();
     require(set_frf_frequency_range(4,64),"valid FRF frequency limits accepted");
     near(frf_frequency_at_fraction(.5),16,"log-frequency midpoint is geometric");
     near(frf_frequency_fraction(16),.5,"frequency-to-pixel inverse matches log mapping");
@@ -654,6 +657,11 @@ void frf_integration() {
     g.frf.apply_processing=false; invalidate_frf(); ensure_current_frf();
     near(lvm::frf_dynamic_coefficient(g.frf.result.common(),8),4,"raw FRF ignores display processing");
     {
+        // Placement tests need empty space: existing annotations are now
+        // intentionally edited before an active placement tool creates more.
+        g.guides.clear();
+        g.markers.clear();
+        clear_measure_point_groups();
         Gdiplus::GdiplusStartupInput startup;
         ULONG_PTR token=0;
         require(Gdiplus::GdiplusStartup(&token,&startup,nullptr)==Gdiplus::Ok,"GDI+ starts for FRF PNG test");
@@ -680,18 +688,48 @@ void frf_integration() {
         require(!g.markers.empty() && g.markers.back().mode==AnalysisMode::FRF && g.pending_marker,
                 "FRF marker uses frequency and dynamic-coefficient coordinates and stays armed");
         WndProc(g.main,WM_COMMAND,IDM_ADD_VLINE,0);
-        handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x,point_y));
+        handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x+40,point_y));
         require(!g.guides.empty() && g.guides.back().mode==AnalysisMode::FRF && g.pending_line==1,
                 "FRF line stays armed just like the marker tool");
         handle_frf_input(g.main,WM_KEYDOWN,VK_ESCAPE,0);
         require(!g.pending_marker && g.pending_line==0,"Esc exits the active FRF annotation tool");
-        WndProc(g.main,WM_COMMAND,IDC_MEASURE,0);
+        const auto marker_before_drag=g.markers.back();
+        const std::size_t undo_before_drag=g_undo.size();
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x,point_y));
+        handle_frf_input(g.main,WM_MOUSEMOVE,0,MAKELPARAM(point_x+20,point_y));
+        handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(point_x+20,point_y));
+        require(g.markers.back().x!=marker_before_drag.x && g_undo.size()==undo_before_drag+1,
+                "dragging an FRF marker changes it in one undo action");
+        pop_undo();
+        require(g.markers.back().x==marker_before_drag.x,"Undo restores the dragged FRF marker");
+        pop_redo();
+        require(g.markers.back().x!=marker_before_drag.x,"Redo reapplies the dragged FRF marker");
+        WndProc(g.main,WM_COMMAND,IDC_LOCK_ANNOTATIONS,0);
+        const std::size_t locked_marker_count=g.markers.size();
+        WndProc(g.main,WM_COMMAND,IDM_ADD_MARKER,0);
+        handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x+120,point_y));
+        require(g.annotations_locked && g.markers.size()==locked_marker_count,
+                "annotation lock prevents new FRF annotations");
+        WndProc(g.main,WM_COMMAND,IDC_LOCK_ANNOTATIONS,0);
+        WndProc(g.main,WM_COMMAND,IDC_MEASURE,0);
+        handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x+80,point_y));
+        handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(point_x+80,point_y));
         require(!g.point_groups.empty() && g.point_groups.back().mode==PointGroupMode::FRF &&
                 !g.point_groups.back().points.empty(),"FRF measurement point uses its dedicated point group");
         const double snapped_frequency=g.point_groups.back().points.back().first;
         require(std::find(g.frf.result.common().frequencies.begin(),g.frf.result.common().frequencies.end(),snapped_frequency) !=
                 g.frf.result.common().frequencies.end(),"FRF point snapping selects an actual response-frequency bin");
+        const RECT reference_chart=frf_reference_plot_rect(chart);
+        const int reference_x=(reference_chart.left+reference_chart.right)/2;
+        const int reference_y=(reference_chart.top+reference_chart.bottom)/2;
+        handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(reference_x,reference_y));
+        handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(reference_x,reference_y));
+        require(!g.point_groups.empty() && g.point_groups.back().mode==PointGroupMode::FRF &&
+                g.point_groups.back().frf_reference_axis && !g.point_groups.back().points.empty(),
+                "FRF averaged Reference accepts measurement points in a separate amplitude group");
+        const auto& reference_point=g.point_groups.back().points.back();
+        require(reference_point.second>=0.0 && std::isfinite(reference_point.second),
+                "FRF averaged Reference point uses its physical amplitude axis");
         g.measure_mode=false;
         wchar_t input_text[128]{};
         GetWindowTextW(GetDlgItem(g.frf_panel,7101),input_text,128);
@@ -838,6 +876,13 @@ void frf_multi_channels() {
     const RECT reference_plot=frf_reference_plot_rect(full_plot);
     require(coefficient_plot.bottom<reference_plot.top && reference_plot.bottom==full_plot.bottom,
             "averaged Reference uses a separate graph below KD");
+    g.frf.reference_height_fraction=.5;
+    const RECT balanced_coefficient_plot=frf_coefficient_plot_rect(full_plot);
+    const RECT balanced_reference_plot=frf_reference_plot_rect(full_plot);
+    require(std::abs((balanced_coefficient_plot.bottom-balanced_coefficient_plot.top)-
+                     (balanced_reference_plot.bottom-balanced_reference_plot.top))<=30,
+            "FRF divider allows KD and averaged Reference plots to have nearly equal heights");
+    g.frf.reference_height_fraction=.25;
     const double reference_auto_max=frf_reference_y_max();
     g.frf.reference_auto_y=false; g.frf.reference_y_max=reference_auto_max*.5;
     near(frf_reference_y_max(),reference_auto_max*.5,"Reference graph has an independent vertical scale");
@@ -1029,7 +1074,7 @@ void mode_button_text() {
             "English mode buttons use compact labels rather than status format templates");
     g_str = &kRu;
     require(std::wstring(mode_time_text()) == L"Время" && std::wstring(mode_spectrum_text()) == L"Спектр" &&
-                std::wstring(mode_frf_text()) == L"FRF / АЧХ",
+                std::wstring(mode_frf_text()) == L"АЧХ",
             "Russian mode buttons use compact labels rather than status format templates");
     g_str = &kEn;
 }

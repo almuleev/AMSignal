@@ -136,6 +136,9 @@ void reset_all_hotkeys_to_defaults(HWND hwnd) {
 void populate_hotkey_list(HWND hwnd) {
     HWND list = GetDlgItem(hwnd, IDC_SET_HOTKEY_LIST);
     if (!list) return;
+    // Refreshing the editor is also a recovery point for a corrupted all-zero
+    // table, so the user never sees every shortcut as "Not assigned".
+    ensure_hotkeys_initialized();
     int selected_command = settings_selected_hotkey_command(hwnd);
     SendMessageW(list, LB_RESETCONTENT, 0, 0);
     int selected_index = 0;

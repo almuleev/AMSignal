@@ -88,12 +88,26 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDM_MODE_FRF: set_mode(AnalysisMode::FRF); return 0;
                 case IDC_CURSOR_TOOL:
                     g.measure_mode = false;
+                    g.point_click_pending = false;
+                    g.point_click_reference_axis = false;
                     g.pending_marker = false;
                     g.pending_line = 0;
                     SendMessageW(g.measure, BM_SETCHECK, BST_UNCHECKED, 0);
                     sync_menu();
                     set_status();
                     redraw_window_with_children(hwnd);
+                    return 0;
+                case IDC_LOCK_ANNOTATIONS:
+                    g.annotations_locked = !g.annotations_locked;
+                    if (g.annotations_locked) {
+                        g.point_click_pending = false;
+                        g.pending_marker = false;
+                        g.pending_line = 0;
+                    }
+                    InvalidateRect(g.annotation_lock_btn, nullptr, FALSE);
+                    sync_menu();
+                    set_status();
+                    InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 case IDC_LINE_MENU: {
                     HMENU menu = CreatePopupMenu();
@@ -129,7 +143,12 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 }
                 case IDC_MEASURE:
+                    if (g.annotations_locked) return 0;
                     g.measure_mode = !g.measure_mode;
+                    if (!g.measure_mode) {
+                        g.point_click_pending = false;
+                        g.point_click_reference_axis = false;
+                    }
                     if (g.measure_mode) g.pending_line = 0;
                     if (g.measure_mode) g.pending_marker = false;
                     SendMessageW(g.measure, BM_SETCHECK,
@@ -321,6 +340,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     apply_theme_choice((g_theme == &kLightTheme) ? &kDarkTheme : &kLightTheme);
                     return 0;
                 case IDM_ADD_VLINE:
+                    if (g.annotations_locked) return 0;
                     if (!has_data()) { show_styled_info_prompt(hwnd, g_str->msg_nodata, g_str->msg_openfirst, false); return 0; }
                     if (g.pending_line == 1) {
                         g.pending_line = 0;
@@ -338,6 +358,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 case IDM_ADD_VLINE_EXACT: {
+                    if (g.annotations_locked) return 0;
                     if (!has_data()) { show_styled_info_prompt(hwnd, g_str->msg_nodata, g_str->msg_openfirst, false); return 0; }
                     double value = 0.0;
                     if (!prompt_exact_guide_value(true, value)) return 0;
@@ -345,6 +366,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 }
                 case IDM_ADD_HLINE:
+                    if (g.annotations_locked) return 0;
                     if (!has_data()) { show_styled_info_prompt(hwnd, g_str->msg_nodata, g_str->msg_openfirst, false); return 0; }
                     if (g.pending_line == 2) {
                         g.pending_line = 0;
@@ -362,6 +384,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 case IDM_ADD_HLINE_EXACT: {
+                    if (g.annotations_locked) return 0;
                     if (!has_data()) { show_styled_info_prompt(hwnd, g_str->msg_nodata, g_str->msg_openfirst, false); return 0; }
                     double value = 0.0;
                     if (!prompt_exact_guide_value(false, value)) return 0;
@@ -369,6 +392,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 }
                 case IDM_CLEAR_LINES:
+                    if (g.annotations_locked) return 0;
                     if (!g.guides.empty()) {
                         UndoAction ua; ua.type = UndoAction::CLEAR_LINES; ua.saved_lines = g.guides;
                         push_undo(ua);
@@ -377,6 +401,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     set_status();
                     return 0;
                 case IDM_CLEAR_POINTS:
+                    if (g.annotations_locked) return 0;
                     if (has_measure_points()) {
                         UndoAction ua;
                         ua.type = UndoAction::CLEAR_POINTS;
@@ -394,6 +419,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     set_status();
                     return 0;
                 case IDM_ADD_MARKER:
+                    if (g.annotations_locked) return 0;
                     if (!has_data()) { show_styled_info_prompt(hwnd, g_str->msg_nodata, g_str->msg_openfirst, false); return 0; }
                     if (g.pending_marker) {
                         g.pending_marker = false;
@@ -411,6 +437,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 case IDM_CLEAR_MARKERS:
+                    if (g.annotations_locked) return 0;
                     if (!g.markers.empty()) {
                         UndoAction ua; ua.type = UndoAction::CLEAR_MARKERS; ua.saved_markers = g.markers;
                         push_undo(ua);

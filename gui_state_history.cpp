@@ -203,14 +203,36 @@ int create_point_group(COLORREF color) {
     return g.active_point_group;
 }
 
-int ensure_point_group_for_measurement(bool force_new_group, bool* created_group) {
+int ensure_point_group_for_measurement(bool force_new_group, bool* created_group, bool frf_reference_axis) {
     bool created = false;
     normalize_active_point_group();
     PointGroup* group = active_point_group();
+    // Keep points from the lower averaged-reference plot separate from KD
+    // points. Reuse the latest matching FRF group when the user switches
+    // between the two plots instead of silently mixing their units.
+    if (current_point_group_mode() == PointGroupMode::FRF &&
+        group && group->frf_reference_axis != frf_reference_axis) {
+        group = nullptr;
+        if (!force_new_group) {
+            for (int i = static_cast<int>(g.point_groups.size()) - 1; i >= 0; --i) {
+                PointGroup& candidate = g.point_groups[static_cast<std::size_t>(i)];
+                if (candidate.mode == PointGroupMode::FRF &&
+                    candidate.frf_reference_axis == frf_reference_axis) {
+                    g.active_point_group = i;
+                    g.frf_active_point_group = i;
+                    group = &candidate;
+                    sync_point_display_from_active_group();
+                    break;
+                }
+            }
+        }
+    }
     if (!group) {
         create_point_group(g.marker_color);
         created = true;
         group = active_point_group();
+        if (group) group->frf_reference_axis =
+            current_point_group_mode() == PointGroupMode::FRF && frf_reference_axis;
     } else {
         const bool active_has_points = !group->points.empty();
         if (force_new_group || (active_has_points && group->color != g.marker_color)) {
@@ -394,6 +416,7 @@ bool settings_snapshot_differs(const SettingsSnapshot& a, const SettingsSnapshot
                 lhs[i].color != rhs[i].color ||
                 lhs[i].visible != rhs[i].visible ||
                 lhs[i].mode != rhs[i].mode ||
+                lhs[i].frf_reference_axis != rhs[i].frf_reference_axis ||
                 lhs[i].display.number != rhs[i].display.number ||
                 lhs[i].display.x != rhs[i].display.x ||
                 lhs[i].display.y != rhs[i].display.y ||
@@ -602,6 +625,28 @@ void pop_undo() {
             }
             break;
         }
+        case UndoAction::MOVE_POINT:
+            if (a.point_group_index>=0 && a.annotation_drag_point_index>=0 &&
+                static_cast<std::size_t>(a.point_group_index)<g.point_groups.size()) {
+                auto& points=g.point_groups[static_cast<std::size_t>(a.point_group_index)].points;
+                if (static_cast<std::size_t>(a.annotation_drag_point_index)<points.size()) {
+                    points[static_cast<std::size_t>(a.annotation_drag_point_index)]=a.old_point;
+                    g_redo.push_back(a); changed=true;
+                }
+            }
+            break;
+        case UndoAction::MOVE_LINE:
+            if (a.point_group_index>=0 && static_cast<std::size_t>(a.point_group_index)<g.guides.size()) {
+                g.guides[static_cast<std::size_t>(a.point_group_index)]=a.old_line;
+                g_redo.push_back(a); changed=true;
+            }
+            break;
+        case UndoAction::MOVE_MARKER:
+            if (a.point_group_index>=0 && static_cast<std::size_t>(a.point_group_index)<g.markers.size()) {
+                g.markers[static_cast<std::size_t>(a.point_group_index)]=a.old_marker;
+                g_redo.push_back(a); changed=true;
+            }
+            break;
         case UndoAction::CLEAR_POINTS:
             g_redo.push_back(a);
             g.point_groups = a.saved_point_groups;
@@ -674,6 +719,28 @@ void pop_redo() {
             g.markers.push_back(a.marker);
             g_undo.push_back(a);
             changed = true;
+            break;
+        case UndoAction::MOVE_POINT:
+            if (a.point_group_index>=0 && a.annotation_drag_point_index>=0 &&
+                static_cast<std::size_t>(a.point_group_index)<g.point_groups.size()) {
+                auto& points=g.point_groups[static_cast<std::size_t>(a.point_group_index)].points;
+                if (static_cast<std::size_t>(a.annotation_drag_point_index)<points.size()) {
+                    points[static_cast<std::size_t>(a.annotation_drag_point_index)]=a.point;
+                    g_undo.push_back(a); changed=true;
+                }
+            }
+            break;
+        case UndoAction::MOVE_LINE:
+            if (a.point_group_index>=0 && static_cast<std::size_t>(a.point_group_index)<g.guides.size()) {
+                g.guides[static_cast<std::size_t>(a.point_group_index)]=a.line;
+                g_undo.push_back(a); changed=true;
+            }
+            break;
+        case UndoAction::MOVE_MARKER:
+            if (a.point_group_index>=0 && static_cast<std::size_t>(a.point_group_index)<g.markers.size()) {
+                g.markers[static_cast<std::size_t>(a.point_group_index)]=a.marker;
+                g_undo.push_back(a); changed=true;
+            }
             break;
         case UndoAction::CLEAR_POINTS:
             g_undo.push_back(a);

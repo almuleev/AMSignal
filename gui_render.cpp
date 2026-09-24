@@ -116,6 +116,10 @@ void draw_status_segments(HDC dc, int x, int y, int right, std::vector<StatusSeg
 
 void invalidate_plot() {
     RECT pr = plot_rect();
+    // Physical Y captions and numeric Y scales are drawn in the left gutter.
+    // Include it when an asynchronous FRF result arrives; otherwise Windows
+    // keeps the old gutter pixels until an unrelated repaint occurs.
+    pr.left = 0;
     RECT rc; GetClientRect(g.main, &rc);
     pr.bottom = rc.bottom; // include status bar
     InvalidateRect(g.main, &pr, FALSE);
@@ -132,8 +136,45 @@ std::wstring vertical_axis_unit() {
     return normalize_axis_label_text(g.axis_y_label, L"ед.");
 }
 
+std::wstring axis_label_for(AnalysisMode mode, bool x_axis) {
+    switch (mode) {
+        case AnalysisMode::Time:
+            return normalize_axis_label_text(x_axis ? g.axis_x_label : g.time_axis_y_label, x_axis ? L"X" : L"Y");
+        case AnalysisMode::FFT:
+            return normalize_axis_label_text(x_axis ? g.fft_axis_x_label : g.fft_axis_y_label, x_axis ? L"X" : L"Y");
+        case AnalysisMode::FRF:
+            return normalize_axis_label_text(x_axis ? g.frf_axis_x_label : g.frf_axis_y_label, x_axis ? L"X" : L"Y");
+    }
+    return x_axis ? L"X" : L"Y";
+}
+
 std::wstring amplitude_axis_label() {
     return (g_str == &kEn ? L"Amplitude, " : L"Амплитуда, ") + vertical_axis_unit();
+}
+
+void draw_user_axis_names(HDC dc, const RECT& p, AnalysisMode mode) {
+    HFONT font = g.axis_font ? g.axis_font : g.ui_font;
+    HGDIOBJ old_font = SelectObject(dc, font);
+    SetTextColor(dc, g_theme->axis_text);
+    SetBkMode(dc, TRANSPARENT);
+    const auto draw_name = [&](const std::wstring& text, int x, int y) {
+        if (text.empty()) return;
+        SIZE size{};
+        GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+        RECT background{x - 3, y - 2, x + size.cx + 3, y + size.cy + 2};
+        HBRUSH brush = CreateSolidBrush(g_theme->bg_plot);
+        FillRect(dc, &background, brush);
+        DeleteObject(brush);
+        SetTextAlign(dc, TA_LEFT | TA_TOP);
+        TextOutW(dc, x, y, text.c_str(), static_cast<int>(text.size()));
+    };
+    const std::wstring y_name = axis_label_for(mode, false);
+    const std::wstring x_name = axis_label_for(mode, true);
+    draw_name(y_name, p.left + 4, p.top + 4);
+    SIZE x_size{};
+    GetTextExtentPoint32W(dc, x_name.c_str(), static_cast<int>(x_name.size()), &x_size);
+    draw_name(x_name, p.right - 4 - x_size.cx, p.bottom - 4 - x_size.cy);
+    SelectObject(dc, old_font);
 }
 
 int curve_pen_style(std::size_t curve_index) {
@@ -249,24 +290,29 @@ void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1
     HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
     Rectangle(dc, p.left, p.top, p.right, p.bottom);
     SelectObject(dc, old_brush);
-    const std::wstring corner_x = normalize_axis_label_text(g.axis_x_label, L"X");
-    const std::wstring corner_y = amplitude_axis_label();
-    auto draw_corner_label = [&](const std::wstring& text, int x, int y, UINT align) {
-        if (text.empty()) return;
-        SIZE ts{};
-        GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &ts);
-        RECT br = {x - 3, y - 2, x + ts.cx + 3, y + ts.cy + 2};
-        HBRUSH bg = CreateSolidBrush(g_theme->bg_plot);
-        FillRect(dc, &br, bg);
-        DeleteObject(bg);
-        SetTextAlign(dc, align);
-        TextOutW(dc, x, y, text.c_str(), static_cast<int>(text.size()));
-    };
-    draw_corner_label(corner_y, p.left + 4, p.top + 4, TA_LEFT | TA_TOP);
+    draw_user_axis_names(dc, p, g.mode);
     {
-        SIZE ts{};
-        GetTextExtentPoint32W(dc, corner_x.c_str(), static_cast<int>(corner_x.size()), &ts);
-        draw_corner_label(corner_x, p.right - 4 - ts.cx, p.bottom - 4 - ts.cy, TA_LEFT | TA_TOP);
+        // Keep the physical amplitude unit separate from the editable Y
+        // designation and draw it in the conventional vertical Y-axis position.
+        const std::wstring physical_y = amplitude_axis_label();
+        LOGFONTW lf{};
+        if (!physical_y.empty() && GetObjectW(font, sizeof(lf), &lf) == sizeof(lf)) {
+            SIZE ts{};
+            GetTextExtentPoint32W(dc, physical_y.c_str(), static_cast<int>(physical_y.size()), &ts);
+            lf.lfEscapement = 900;
+            lf.lfOrientation = 900;
+            HFONT vertical_font = CreateFontIndirectW(&lf);
+            if (vertical_font) {
+                HGDIOBJ previous_font = SelectObject(dc, vertical_font);
+                SetTextAlign(dc, TA_LEFT | TA_BASELINE);
+                // With a 90-degree escapement the baseline goes upward, so this
+                // starting point centres the label beside the numeric Y ticks.
+                TextOutW(dc, kVerticalAxisCaptionLeft, (p.top + p.bottom + ts.cx) / 2,
+                         physical_y.c_str(), static_cast<int>(physical_y.size()));
+                SelectObject(dc, previous_font);
+                DeleteObject(vertical_font);
+            }
+        }
     }
     draw_text(dc, (p.left + p.right) / 2, p.bottom + 20, xlabel, TA_CENTER | TA_TOP);
 
@@ -526,11 +572,11 @@ void draw_measure(HDC dc) {
     HGDIOBJ prev_brush = SelectObject(dc, wb);
     for (const auto& group : g.point_groups) {
         if (!group.visible || group.points.empty() || !point_group_matches_mode(group, current_point_group_mode())) continue;
-        const std::wstring x_axis_label = g.mode == AnalysisMode::FRF ? L"f" :
-            (g.mode == AnalysisMode::FFT ? L"f" : normalize_axis_label_text(g.axis_x_label,L"X"));
-        const std::wstring y_axis_label = g.mode == AnalysisMode::FRF ? L"КД" :
-            (g.mode == AnalysisMode::FFT ? (g_str == &kEn ? L"Amplitude" : L"Амплитуда") :
-             normalize_axis_label_text(g.axis_y_label,L"Y"));
+        // The lower FRF Reference plot has its own physical amplitude scale
+        // and is rendered by gui_frf_render with its own coordinate mapping.
+        if (g.mode == AnalysisMode::FRF && group.frf_reference_axis) continue;
+        const std::wstring x_axis_label = axis_label_for(g.mode, true);
+        const std::wstring y_axis_label = axis_label_for(g.mode, false);
 
         HPEN seg = CreatePen(PS_DASH, 1, group.color);
         HGDIOBJ old_seg = SelectObject(dc, seg);
@@ -1333,6 +1379,9 @@ void draw_chart(HDC dc, const RECT& p) {
     draw_guides(dc);
     draw_markers(dc);
     draw_measure(dc);
+    // Curves and interactive overlays may reach the plot edge. Draw the
+    // editable coordinate designations last so X and Y stay legible.
+    draw_user_axis_names(dc, p, g.mode);
 }
 
 void release_backbuffer() {

@@ -3,6 +3,8 @@
 
 namespace gui {
 
+enum class AnalysisMode;
+
 struct LegendItem { int channel; RECT rect; };
 
 extern std::vector<LegendItem> g_legend_items;
@@ -22,6 +24,9 @@ void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1
 
 // Physical unit selected in Settings for amplitude scales.
 std::wstring vertical_axis_unit();
+
+// User-defined coordinate name for the requested graph mode.
+std::wstring axis_label_for(AnalysisMode mode, bool x_axis);
 
 // Localized label for amplitude scales; used by Time and FFT.
 std::wstring amplitude_axis_label();

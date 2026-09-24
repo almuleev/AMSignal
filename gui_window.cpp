@@ -143,6 +143,7 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.measure = mk(g_str->btn_measure, IDC_MEASURE, 0);
             g.cursor_btn = mk(g_str == &kEn ? L"Cursor" : L"Курсор", IDC_CURSOR_TOOL, 0);
             g.line_menu_btn = mk(g_str == &kEn ? L"Line ▾" : L"Линия ▾", IDC_LINE_MENU, 0);
+            g.annotation_lock_btn = mk(L"🔒", IDC_LOCK_ANNOTATIONS, 0);
             g.marker_btn = mk(g_str == &kEn ? L"Marker" : L"Маркер", IDM_ADD_MARKER, 0);
             g.vline_btn = mk(g_str == &kEn ? L"V-Line" : L"V-линия", IDM_ADD_VLINE, 0);
             g.hline_btn = mk(g_str == &kEn ? L"H-Line" : L"H-линия", IDM_ADD_HLINE, 0);
@@ -373,6 +374,8 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 active = !g.measure_mode && !g.pending_marker && g.pending_line == 0;
             } else if (btn == g.line_menu_btn) {
                 active = g.pending_line != 0;
+            } else if (btn == g.annotation_lock_btn) {
+                active = g.annotations_locked;
             } else if (btn == g.measure) {
                 active = g.measure_mode;
             } else if (btn == g.autoy) {

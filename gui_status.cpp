@@ -62,7 +62,9 @@ void set_status() {
         if (markers) { swprintf(buf,128,g_str->st_markers,markers); g.status_text+=buf; }
         g.status_text+=measure_points_status_text();
         g.status_detail_text.clear(); g.status_detail_color = g_theme->accent;
-        refresh_frf_controls();
+        // Navigation changes only the graph view and the status text.  Do not
+        // refresh the FRF control panel here: rapid wheel zooming would reset
+        // and repaint every label/button in that panel on each wheel message.
         if (g.status) SetWindowTextW(g.status, g.status_text.c_str());
         update_status_tooltip();
         return;

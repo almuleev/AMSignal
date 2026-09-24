@@ -43,6 +43,9 @@ struct PointGroup {
     COLORREF color = RGB(0, 120, 215);
     bool visible = true;
     PointGroupMode mode = PointGroupMode::Time;
+    // FRF has two independent Y axes.  Reference-axis points belong to the
+    // lower averaged-reference plot; all other FRF points use the KD plot.
+    bool frf_reference_axis = false;
     PointDisplay display;
     std::vector<std::pair<double, double>> points;
 };
@@ -73,7 +76,9 @@ struct FrfState {
     // Keep physical limits alongside their logarithms so the same calculated
     // FRF can be viewed on either a logarithmic or a linear frequency axis.
     double frequency_start = 1.0, frequency_end = 1000.0;
-    bool logarithmic_frequency_axis = true;
+    // New FRF views start with physically uniform frequency spacing. Saved
+    // projects retain their explicit choice of logarithmic or linear display.
+    bool logarithmic_frequency_axis = false;
     double y_min = 0.0, y_max = 1.0;
     bool show_reference_amplitude = true;
     double reference_height_fraction = .25;
@@ -147,12 +152,22 @@ struct DocumentState {
     bool auto_y_amp = true;        // auto-fit amplitude in Hz mode
     double y_amp_max = 1.0;        // locked amplitude max in Hz mode
 
-    bool measure_mode = false;
+    // Points are the default graph interaction. A press becomes a point only
+    // when released without a drag, so panning remains available in this mode.
+    bool measure_mode = true;
+    bool point_click_pending = false;
+    bool point_click_reference_axis = false;
+    int point_click_x = 0, point_click_y = 0;
     bool snap_to_data = true;       // snap markers to the nearest real sample
     PointDisplay pdisp;             // which read-outs to draw at markers
-    std::wstring axis_x_label = L"X"; // graph label shown on the X axis corner
-    // Unit shown for amplitude scales in Time, FFT and the reference plot of FRF.
-    std::wstring axis_y_label = L"ед.";
+    // User-defined coordinate names. They are independent in every view and
+    // do not replace the physical quantity/unit captions on the plots.
+    std::wstring axis_x_label = L"X"; // Time X; retained for old project metadata
+    std::wstring time_axis_y_label = L"Y";
+    std::wstring fft_axis_x_label = L"X", fft_axis_y_label = L"Y";
+    std::wstring frf_axis_x_label = L"X", frf_axis_y_label = L"Y";
+    // Unit shown for amplitude scales in Time, FFT and the Reference plot of FRF.
+    std::wstring axis_y_label = L"ед."; // retained key: amplitude unit
     COLORREF marker_color = g_theme->marker_color;
     std::vector<PointGroup> point_groups;
     int active_point_group = -1;
@@ -162,6 +177,8 @@ struct DocumentState {
 
     std::vector<GuideLine> guides;  // vertical / horizontal reference lines
     int pending_line = 0;           // 0 none, 1 active vertical tool, 2 active horizontal tool
+    // Prevent accidental changes to annotations in the active document/mode.
+    bool annotations_locked = false;
     std::vector<HotkeyBinding> hotkeys;
 
     bool playing = false;
@@ -260,6 +277,7 @@ struct App : DocumentState {
     HWND play = nullptr, measure = nullptr, marker_btn = nullptr;
     HWND vline_btn = nullptr, hline_btn = nullptr;
     HWND cursor_btn = nullptr, line_menu_btn = nullptr;
+    HWND annotation_lock_btn = nullptr;
     HWND reset = nullptr, autoy = nullptr, sidepanel_btn = nullptr;
     HWND show_all_btn = nullptr, hide_all_btn = nullptr;
     HWND status = nullptr;
@@ -270,6 +288,14 @@ struct App : DocumentState {
     int editing_channel = -1;
     std::vector<HWND> buttons;   // owner-drawn toolbar buttons
     HWND hovered_btn = nullptr;
+    enum class AnnotationDragKind : unsigned char { None, Point, Guide, Marker };
+    AnnotationDragKind annotation_drag_kind = AnnotationDragKind::None;
+    bool annotation_drag_reference_axis = false;
+    int annotation_drag_index = -1;
+    int annotation_drag_point_index = -1;
+    std::pair<double, double> annotation_drag_point_before;
+    GuideLine annotation_drag_guide_before;
+    DocumentState::Marker annotation_drag_marker_before;
     std::wstring status_text;
     std::wstring status_detail_text;
     COLORREF status_detail_color = RGB(0, 0, 0);

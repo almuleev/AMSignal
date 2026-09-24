@@ -16,6 +16,7 @@
 namespace gui {
 namespace {
 bool g_dragging_reference_divider = false;
+constexpr int kReferenceDividerGap = 26;
 double dynamic_coefficient(const lvm::FrfResult& r, std::size_t k) {
     return lvm::frf_dynamic_coefficient(r, k);
 }
@@ -93,6 +94,7 @@ void changed() {
     // Pan and zoom only change the graph and its axis labels. Do not invalidate
     // the bottom status bar: it contains text that does not change on zoom.
     RECT dirty=plot_rect();
+    dirty.left=0; // include the physical captions and numeric Y-scale gutter
     dirty.bottom+=kAxisBottom;
     InvalidateRect(g.main,&dirty,FALSE);
 }
@@ -163,10 +165,12 @@ RECT frf_coefficient_plot_rect(const RECT& full) {
     coefficient.top+=frf_legend_height();
     if (!g.frf.show_reference_amplitude) return coefficient;
     const int available=std::max(1L,coefficient.bottom-coefficient.top);
-    const int gap=26;
+    const int gap=kReferenceDividerGap;
     int reference_height=static_cast<int>(std::lround(available*g.frf.reference_height_fraction));
-    reference_height=std::clamp(reference_height,60,140);
-    if (available-reference_height-gap<70) reference_height=std::max(40,available-70-gap);
+    // Keep both plots usable, but do not cap the Reference graph at a fixed
+    // pixel size: the divider must allow the two plots to be nearly equal.
+    const int maximum_reference_height=std::max(60,available-70-gap);
+    reference_height=std::clamp(reference_height,60,maximum_reference_height);
     coefficient.bottom=std::max(coefficient.top+1,coefficient.bottom-reference_height-gap);
     return coefficient;
 }
@@ -174,7 +178,7 @@ RECT frf_coefficient_plot_rect(const RECT& full) {
 RECT frf_reference_plot_rect(const RECT& full) {
     if (!g.frf.show_reference_amplitude) return RECT{full.left,full.bottom,full.right,full.bottom};
     const RECT coefficient=frf_coefficient_plot_rect(full);
-    return RECT{full.left,coefficient.bottom+26,full.right,full.bottom};
+    return RECT{full.left,coefficient.bottom+kReferenceDividerGap,full.right,full.bottom};
 }
 
 void draw_frf(HDC dc, const RECT& p) {
@@ -184,14 +188,15 @@ void draw_frf(HDC dc, const RECT& p) {
     FillRect(dc, &p, bg); DeleteObject(bg);
     SetTextAlign(dc, TA_LEFT | TA_TOP);
     SetBkMode(dc, TRANSPARENT); SetTextColor(dc, g_theme->axis_text);
-    HGDIOBJ font = SelectObject(dc, g.axis_font ? g.axis_font :
-        (g.ui_font ? g.ui_font : GetStockObject(DEFAULT_GUI_FONT)));
+    HFONT axis_font = g.axis_font ? g.axis_font :
+        (g.ui_font ? g.ui_font : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
+    HGDIOBJ previous_font = SelectObject(dc, axis_font);
     if (!g.frf.result.ok || g.frf.pending) {
         RECT r = p; InflateRect(&r, -24, -24);
         std::wstring text = frf_status_text();
         if (text.empty()) text = g_str == &kEn ? L"Select Supports and Responses, then Calculate." : L"Выберите опоры и отклики и нажмите «Рассчитать».";
         DrawTextW(dc, text.c_str(), -1, &r, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
-        SelectObject(dc, font); g.vvalid = false; return;
+        SelectObject(dc, previous_font); g.vvalid = false; return;
     }
     double low, high; frf_y_range(low, high);
     const RECT coefficient_plot=frf_coefficient_plot_rect(p);
@@ -199,7 +204,7 @@ void draw_frf(HDC dc, const RECT& p) {
     const int width = coefficient_plot.right - coefficient_plot.left;
     const int height = coefficient_plot.bottom - coefficient_plot.top;
     if (width <= 0 || height <= 0 || (g.frf.show_reference_amplitude && reference_plot.bottom<=reference_plot.top) || !(high > low)) {
-        SelectObject(dc, font); return;
+        SelectObject(dc, previous_font); return;
     }
     const auto mapx = [&](double f) { return p.left + static_cast<int>(std::clamp(frf_frequency_fraction(f), -1.0, 2.0) * width); };
     const auto mapy = [&](double v) { return coefficient_plot.bottom - static_cast<int>(std::clamp((v - low) / (high - low), -1.0, 2.0) * height); };
@@ -267,6 +272,7 @@ void draw_frf(HDC dc, const RECT& p) {
     // The reference graph can be deliberately compact. Keep all grid lines,
     // but omit only numeric labels that would overlap a preceding label.
     int coefficient_last_label_top=coefficient_plot.bottom+3;
+    int coefficient_label_count=0;
     for (double v = std::ceil(low / step) * step; v <= high; v += step) {
         const int y = mapy(v); line(dc, coefficient_plot.left, y, coefficient_plot.right, y);
         wchar_t text[48]; swprintf(text, 48, L"%.5g", v);
@@ -277,12 +283,23 @@ void draw_frf(HDC dc, const RECT& p) {
         SetTextAlign(dc,TA_RIGHT|TA_TOP);
         TextOutW(dc,coefficient_plot.left-8,label_y,text,lstrlenW(text));
         coefficient_last_label_top=label_y;
+        ++coefficient_label_count;
+    }
+    // A compact plot still needs a usable scale. If collision avoidance left
+    // only its zero label, explicitly retain the upper range endpoint.
+    wchar_t coefficient_high_text[48]; swprintf(coefficient_high_text,48,L"%.5g",high);
+    SIZE coefficient_high_size{};
+    GetTextExtentPoint32W(dc,coefficient_high_text,lstrlenW(coefficient_high_text),&coefficient_high_size);
+    if (coefficient_label_count<2 && coefficient_plot.bottom-coefficient_plot.top>=coefficient_high_size.cy*2+6) {
+        SetTextAlign(dc,TA_RIGHT|TA_TOP);
+        TextOutW(dc,coefficient_plot.left-8,coefficient_plot.top+2,coefficient_high_text,lstrlenW(coefficient_high_text));
     }
     const double reference_raw_step=reference_high/3;
     const double reference_base=std::pow(10.0,std::floor(std::log10(reference_raw_step)));
     const double reference_ratio=reference_raw_step/reference_base;
     const double reference_step=reference_base*(reference_ratio<=1 ? 1 : reference_ratio<=2 ? 2 : reference_ratio<=5 ? 5 : 10);
     int reference_last_label_top=reference_plot.bottom+3;
+    int reference_label_count=0;
     for (double value=0;g.frf.show_reference_amplitude && value<=reference_high;value+=reference_step) {
         const int y=map_reference_y(value);
         line(dc,reference_plot.left,y,reference_plot.right,y);
@@ -294,6 +311,15 @@ void draw_frf(HDC dc, const RECT& p) {
         SetTextAlign(dc,TA_RIGHT|TA_TOP);
         TextOutW(dc,reference_plot.left-8,label_y,text,lstrlenW(text));
         reference_last_label_top=label_y;
+        ++reference_label_count;
+    }
+    wchar_t reference_high_text[48]; swprintf(reference_high_text,48,L"%.5g",reference_high);
+    SIZE reference_high_size{};
+    GetTextExtentPoint32W(dc,reference_high_text,lstrlenW(reference_high_text),&reference_high_size);
+    if (g.frf.show_reference_amplitude && reference_label_count<2 &&
+        reference_plot.bottom-reference_plot.top>=reference_high_size.cy*2+6) {
+        SetTextAlign(dc,TA_RIGHT|TA_TOP);
+        TextOutW(dc,reference_plot.left-8,reference_plot.top+2,reference_high_text,lstrlenW(reference_high_text));
     }
     SelectObject(dc, old_pen); DeleteObject(grid);
     HPEN frame = CreatePen(PS_SOLID, 1, g_theme->frame);
@@ -391,11 +417,28 @@ void draw_frf(HDC dc, const RECT& p) {
     const std::wstring reference_text=(g_str==&kEn ? L"Average Reference amplitude: " : L"Ср. опора: ")+g.frf.input_name;
     SetTextColor(dc,g_theme->axis_text);
     if (g.frf.show_reference_amplitude) DrawTextW(dc,reference_text.c_str(),-1,&reference_title,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+    // A small familiar grip keeps the splitter discoverable without competing
+    // with the Reference title. Its hit area remains the whole separator.
+    if (g.frf.show_reference_amplitude) {
+        const int center_x=(coefficient_plot.left+coefficient_plot.right)/2;
+        const int center_y=(coefficient_plot.bottom+reference_plot.top)/2;
+        HPEN grip=CreatePen(PS_SOLID,1,g_theme->grid);
+        HGDIOBJ old_grip=SelectObject(dc,grip);
+        for (int offset : {-4,0,4}) {
+            MoveToEx(dc,center_x-8,center_y+offset,nullptr);
+            LineTo(dc,center_x+8,center_y+offset);
+        }
+        SelectObject(dc,old_grip);
+        DeleteObject(grip);
+    }
     RECT xlabel{reference_plot.left, reference_plot.bottom+23, reference_plot.right, reference_plot.bottom+42};
     DrawTextW(dc, g.frf.logarithmic_frequency_axis ? (g_str==&kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (лог.)") :
               (g_str==&kEn ? L"Frequency, Hz (linear scale)" : L"Частота, Гц (лин.)"),
               -1, &xlabel, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
-    SelectObject(dc, font);
+    // Guides and measurement annotations may select another font. All FRF
+    // scale captions and editable X/Y names use the same axis font as Time
+    // and FFT before they are rendered over those annotations.
+    SelectObject(dc, axis_font);
     g.vx0 = g.frf.logarithmic_frequency_axis ? g.frf.log_start : g.frf.frequency_start;
     g.vx1 = g.frf.logarithmic_frequency_axis ? g.frf.log_end : g.frf.frequency_end;
     g.vy0 = low; g.vy1 = high; g.vrect = coefficient_plot; g.vvalid = true;
@@ -403,26 +446,167 @@ void draw_frf(HDC dc, const RECT& p) {
     draw_markers(dc);
     draw_measure(dc);
 
-    // Keep scale meanings above guides, markers and measurements. Otherwise a
-    // moving overlay can temporarily paint over the labels and make them blink.
-    const auto draw_axis_label = [&](const RECT& plot, const std::wstring& text) {
-        SIZE size{};
-        GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
-        RECT background{plot.left + 2, plot.top + 2,
-                        std::min(plot.right - 2, plot.left + size.cx + 10),
-                        plot.top + size.cy + 7};
-        HBRUSH brush=CreateSolidBrush(g_theme->bg_plot);
-        FillRect(dc,&background,brush);
-        DeleteObject(brush);
+    // Reference points have the same frequency axis as KD but a separate,
+    // physical amplitude axis. Draw them here rather than through the common
+    // overlay, whose cached Y mapping intentionally belongs to KD.
+    if (g.frf.show_reference_amplitude) {
+        const int saved_reference_points=SaveDC(dc);
+        IntersectClipRect(dc,reference_plot.left+1,reference_plot.top+1,
+                         reference_plot.right,reference_plot.bottom);
+        HFONT point_font=g.axis_font ? g.axis_font : g.ui_font;
+        HGDIOBJ old_font=SelectObject(dc,point_font);
+        SetBkMode(dc,TRANSPARENT);
+        for (const auto& group : g.point_groups) {
+            if (!group.visible || group.points.empty() || group.mode != PointGroupMode::FRF ||
+                !group.frf_reference_axis) continue;
+            const auto point_x=[&](double frequency) { return mapx(frequency); };
+            const auto point_y=[&](double amplitude) { return map_reference_y(amplitude); };
+            HPEN segment=CreatePen(PS_DASH,1,group.color);
+            HGDIOBJ old_segment=SelectObject(dc,segment);
+            for (std::size_t i=1;i<group.points.size();++i) {
+                MoveToEx(dc,point_x(group.points[i-1].first),point_y(group.points[i-1].second),nullptr);
+                LineTo(dc,point_x(group.points[i].first),point_y(group.points[i].second));
+            }
+            SelectObject(dc,old_segment);
+            DeleteObject(segment);
+            HPEN point_pen=CreatePen(PS_SOLID,2,group.color);
+            HGDIOBJ old_point_pen=SelectObject(dc,point_pen);
+            for (std::size_t i=0;i<group.points.size();++i) {
+                const int x=point_x(group.points[i].first), y=point_y(group.points[i].second);
+                MoveToEx(dc,x-8,y,nullptr); LineTo(dc,x+9,y);
+                MoveToEx(dc,x,y-8,nullptr); LineTo(dc,x,y+9);
+                HBRUSH dot=CreateSolidBrush(group.color);
+                HGDIOBJ old_brush=SelectObject(dc,dot);
+                HGDIOBJ old_pen=SelectObject(dc,GetStockObject(NULL_PEN));
+                Ellipse(dc,x-3,y-3,x+4,y+4);
+                SelectObject(dc,old_pen);
+                SelectObject(dc,old_brush);
+                DeleteObject(dot);
+                if (group.display.number || group.display.x || group.display.y) {
+                    wchar_t label[160]{};
+                    std::wstring text;
+                    if (group.display.number) { swprintf(label,160,L"#%zu ",i+1); text+=label; }
+                    if (group.display.x) { swprintf(label,160,L"%ls=%.5g Hz ",
+                        axis_label_for(AnalysisMode::FRF,true).c_str(),group.points[i].first); text+=label; }
+                    if (group.display.y) { swprintf(label,160,L"%ls=%.5g",
+                        vertical_axis_unit().c_str(),group.points[i].second); text+=label; }
+                    if (!text.empty()) {
+                        SetTextColor(dc,group.color); SetTextAlign(dc,TA_LEFT|TA_BOTTOM);
+                        SIZE size{}; GetTextExtentPoint32W(dc,text.c_str(),static_cast<int>(text.size()),&size);
+                        HBRUSH background=CreateSolidBrush(g_theme->bg_plot);
+                        HGDIOBJ old_background=SelectObject(dc,background);
+                        RoundRect(dc,x+6,y-4-size.cy,x+12+size.cx,y+2,3,3);
+                        SelectObject(dc,old_background); DeleteObject(background);
+                        TextOutW(dc,x+8,y-2,text.c_str(),static_cast<int>(text.size()));
+                    }
+                }
+            }
+            SelectObject(dc,old_point_pen);
+            DeleteObject(point_pen);
+        }
+        SelectObject(dc,old_font);
+        RestoreDC(dc,saved_reference_points);
+    }
+
+    // Render numeric Y scales last as well. Earlier drawing passes clip and
+    // repaint the plots for curves/overlays; keeping the tick labels in this
+    // dedicated gutter makes both FRF scales stable and always readable.
+    const auto draw_y_scale = [&](const RECT& plot, double minimum, double maximum, int divisions) {
+        if (!(maximum > minimum) || plot.bottom <= plot.top) return;
+        const int gutter_left=std::max(0L,plot.left-58);
+        RECT gutter{gutter_left,plot.top,plot.left-3,plot.bottom};
+        HBRUSH gutter_brush=CreateSolidBrush(g_theme->bg_main);
+        FillRect(dc,&gutter,gutter_brush);
+        DeleteObject(gutter_brush);
+
+        const double raw_step=(maximum-minimum)/std::max(1,divisions);
+        const double base=std::pow(10.0,std::floor(std::log10(raw_step)));
+        const double ratio=raw_step/base;
+        const double step=base*(ratio<=1 ? 1 : ratio<=2 ? 2 : ratio<=5 ? 5 : 10);
+        const auto y_at=[&](double value) {
+            return plot.bottom-static_cast<int>(std::lround((value-minimum)/(maximum-minimum)*(plot.bottom-plot.top)));
+        };
+        int previous_top=plot.bottom+3, count=0;
         SetTextColor(dc,g_theme->axis_text);
         SetBkMode(dc,TRANSPARENT);
-        SetTextAlign(dc,TA_LEFT|TA_TOP);
-        TextOutW(dc,plot.left+4,plot.top+3,text.c_str(),static_cast<int>(text.size()));
+        SetTextAlign(dc,TA_RIGHT|TA_TOP);
+        for (double value=std::ceil(minimum/step)*step; value<=maximum; value+=step) {
+            wchar_t text[48]; swprintf(text,48,L"%.5g",value);
+            SIZE size{}; GetTextExtentPoint32W(dc,text,lstrlenW(text),&size);
+            const int y=std::clamp(y_at(value)-size.cy/2,plot.top+2,plot.bottom-size.cy-2);
+            if (y+size.cy+3>previous_top) continue;
+            TextOutW(dc,plot.left-8,y,text,lstrlenW(text));
+            previous_top=y; ++count;
+        }
+        wchar_t top_text[48]; swprintf(top_text,48,L"%.5g",maximum);
+        SIZE top_size{}; GetTextExtentPoint32W(dc,top_text,lstrlenW(top_text),&top_size);
+        if (count<2 && plot.bottom-plot.top>=top_size.cy*2+6) {
+            TextOutW(dc,plot.left-8,plot.top+2,top_text,lstrlenW(top_text));
+        }
     };
-    draw_axis_label(coefficient_plot, g_str==&kEn ? L"KD |H| (dimensionless)" : L"КД |H| (б/р)");
+    draw_y_scale(coefficient_plot,low,high,6);
+    if (g.frf.show_reference_amplitude) draw_y_scale(reference_plot,0.0,reference_high,3);
+
+    const auto draw_vertical_left_axis_label = [&](const RECT& plot, const std::wstring& text) {
+        if (text.empty()) return;
+        LOGFONTW lf{};
+        if (GetObjectW(axis_font,sizeof(lf),&lf)!=sizeof(lf)) return;
+        SIZE size{};
+        GetTextExtentPoint32W(dc,text.c_str(),static_cast<int>(text.size()),&size);
+        lf.lfEscapement=900;
+        lf.lfOrientation=900;
+        HFONT vertical_font=CreateFontIndirectW(&lf);
+        if (!vertical_font) return;
+        HGDIOBJ previous_font=SelectObject(dc,vertical_font);
+        SetTextAlign(dc,TA_LEFT|TA_BASELINE);
+        SetTextColor(dc,g_theme->axis_text);
+        SetBkMode(dc,TRANSPARENT);
+        TextOutW(dc,kVerticalAxisCaptionLeft,(plot.top+plot.bottom+size.cx)/2,
+                 text.c_str(),static_cast<int>(text.size()));
+        SelectObject(dc,previous_font);
+        DeleteObject(vertical_font);
+    };
+    draw_vertical_left_axis_label(coefficient_plot,
+                                  g_str==&kEn ? L"KD |H| (dimensionless)" : L"КД |H| (б/р)");
     if (g.frf.show_reference_amplitude) {
-        draw_axis_label(reference_plot, (g_str==&kEn ? L"AVG Ref. amplitude, " : L"Ср. опора, ") + vertical_axis_unit());
+        draw_vertical_left_axis_label(reference_plot,
+            (g_str==&kEn ? L"AVG Ref. amplitude, " : L"Ср. опора, ") + vertical_axis_unit());
     }
+    // The user coordinate names stay separate from the physical KD/Reference
+    // captions above, just as they do in Time and FFT.
+    const auto draw_user_axis_name = [&](const RECT& plot, const std::wstring& name, bool x_axis) {
+        SIZE size{};
+        GetTextExtentPoint32W(dc,name.c_str(),static_cast<int>(name.size()),&size);
+        const int x=x_axis ? plot.right-4-size.cx : plot.left+4;
+        const int y=x_axis ? plot.bottom-4-size.cy : plot.top+3;
+        HBRUSH brush=CreateSolidBrush(g_theme->bg_plot);
+        RECT background{x-3,y-2,x+size.cx+3,y+size.cy+2};
+        FillRect(dc,&background,brush); DeleteObject(brush);
+        SetTextAlign(dc,TA_LEFT|TA_TOP); SetTextColor(dc,g_theme->axis_text);
+        TextOutW(dc,x,y,name.c_str(),static_cast<int>(name.size()));
+    };
+    draw_user_axis_name(coefficient_plot,axis_label_for(AnalysisMode::FRF,false),false);
+    draw_user_axis_name(g.frf.show_reference_amplitude ? reference_plot : coefficient_plot,
+                        axis_label_for(AnalysisMode::FRF,true),true);
+
+    // Scale gutters and captions are deliberately rendered after the curves.
+    // Restore every edge last, using the last in-bounds pixel for right/bottom
+    // so a frame remains visible when a plot touches the client boundary.
+    const auto redraw_plot_frame = [&](const RECT& plot) {
+        if (plot.right <= plot.left || plot.bottom <= plot.top) return;
+        HPEN edge = CreatePen(PS_SOLID, 1, g_theme->frame);
+        HGDIOBJ old_edge = SelectObject(dc, edge);
+        const int right = plot.right - 1, bottom = plot.bottom - 1;
+        line(dc, plot.left, plot.top, right, plot.top);
+        line(dc, plot.left, bottom, right, bottom);
+        line(dc, plot.left, plot.top, plot.left, bottom);
+        line(dc, right, plot.top, right, bottom);
+        SelectObject(dc, old_edge);
+        DeleteObject(edge);
+    };
+    redraw_plot_frame(coefficient_plot);
+    if (g.frf.show_reference_amplitude) redraw_plot_frame(reference_plot);
+    SelectObject(dc, previous_font);
 }
 
 LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -433,6 +617,51 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     const auto on_reference_divider = [&](int x, int y) {
         return g.frf.show_reference_amplitude && x >= p.left && x <= p.right && y >= p.bottom && y < reference.top;
     };
+    const auto reference_px_to_data = [&](int x, int y, double& frequency, double& amplitude) {
+        if (!inside_reference(x,y)) return false;
+        const int width=reference.right-reference.left, height=reference.bottom-reference.top;
+        const double maximum=frf_reference_y_max();
+        if (width<=0 || height<=0 || !(maximum>0)) return false;
+        frequency=frf_frequency_at_fraction(static_cast<double>(x-reference.left)/width);
+        amplitude=std::clamp(static_cast<double>(reference.bottom-y)/height*maximum,0.0,maximum);
+        return std::isfinite(frequency) && std::isfinite(amplitude);
+    };
+    const auto snap_to_reference_curve = [&](double& frequency, double& amplitude) {
+        const auto& common=g.frf.result.common();
+        if (common.frequencies.empty()) return false;
+        auto it=std::lower_bound(common.frequencies.begin(),common.frequencies.end(),frequency);
+        std::size_t index=it==common.frequencies.end() ? common.frequencies.size()-1 :
+            static_cast<std::size_t>(it-common.frequencies.begin());
+        if (index>0 && (index>=common.frequencies.size() ||
+            frequency-common.frequencies[index-1] < common.frequencies[index]-frequency)) --index;
+        if (index>=common.reference_amplitude.size() || index>=common.reference_amplitude_valid.size() ||
+            !common.reference_amplitude_valid[index] || !std::isfinite(common.reference_amplitude[index])) return false;
+        frequency=common.frequencies[index]; amplitude=common.reference_amplitude[index];
+        return true;
+    };
+    const auto begin_reference_point_drag = [&](int x, int y) {
+        if (g.annotations_locked || !inside_reference(x,y)) return false;
+        const double maximum=frf_reference_y_max();
+        if (!(maximum>0)) return false;
+        const int width=reference.right-reference.left, height=reference.bottom-reference.top;
+        int best_distance=10, group_index=-1, point_index=-1;
+        for (std::size_t group=0;group<g.point_groups.size();++group) {
+            const auto& points=g.point_groups[group];
+            if (!points.visible || points.mode!=PointGroupMode::FRF || !points.frf_reference_axis) continue;
+            for (std::size_t point=0;point<points.points.size();++point) {
+                const int point_x=reference.left+static_cast<int>(frf_frequency_fraction(points.points[point].first)*width);
+                const int point_y=reference.bottom-static_cast<int>(points.points[point].second/maximum*height);
+                const int distance=std::max(std::abs(x-point_x),std::abs(y-point_y));
+                if (distance<best_distance) { best_distance=distance; group_index=static_cast<int>(group); point_index=static_cast<int>(point); }
+            }
+        }
+        if (group_index<0) return false;
+        g.annotation_drag_kind=App::AnnotationDragKind::Point;
+        g.annotation_drag_reference_axis=true;
+        g.annotation_drag_index=group_index; g.annotation_drag_point_index=point_index;
+        g.annotation_drag_point_before=g.point_groups[static_cast<std::size_t>(group_index)].points[static_cast<std::size_t>(point_index)];
+        SetCapture(hwnd); return true;
+    };
     switch (msg) {
         case WM_MOUSEWHEEL: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}; ScreenToClient(hwnd, &pt);
@@ -442,20 +671,22 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 const double current=frf_reference_y_max();
                 g.frf.reference_y_max=std::clamp(current*(up ? .85 : 1/.85),1e-12,1e100);
                 g.frf.reference_auto_y=false;
-                set_status(); invalidate_plot(); changed(); return 0;
+                set_status(); invalidate_plot(); return 0;
             }
             if (GetKeyState(VK_SHIFT) & 0x8000) pan_by(up ? -.1 : .1);
             else if (inside(pt.x,pt.y) && (GetKeyState(VK_CONTROL) & 0x8000)) zoom_y_at(
                 static_cast<double>(p.bottom-pt.y)/(p.bottom-p.top), up ? .85 : 1/.85);
             else if (inside(pt.x,pt.y) && (GetKeyState(VK_MENU) & 0x8000)) pan_y_by(up ? -.1 : .1);
             else zoom_at(static_cast<double>(pt.x-p.left)/(p.right-p.left), up ? .8 : 1.25);
-            changed(); return 0;
+            return 0;
         }
-        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDOWN: {
             if (on_reference_divider(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && g.frf.result.ok) {
                 g_dragging_reference_divider=true; SetCapture(hwnd); return 0;
             }
-            if (inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && (g.pending_line || g.pending_marker || g.measure_mode) && g.vvalid) {
+            if (begin_reference_point_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) ||
+                (inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && begin_annotation_drag(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp)))) return 0;
+            if (!g.annotations_locked && inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && (g.pending_line || g.pending_marker) && g.vvalid) {
                 double frequency=0, coefficient=0;
                 if (!px_to_data(GET_X_LPARAM(lp),GET_Y_LPARAM(lp),frequency,coefficient)) return 0;
                 if (g.pending_line) {
@@ -474,23 +705,23 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     g.markers.push_back(marker);
                     g.active_marker=static_cast<int>(g.markers.size())-1;
                     UndoAction action; action.type=UndoAction::ADD_MARKER; action.marker=marker; push_undo(action);
-                } else if (g.measure_mode) {
-                    if (g.snap_to_data) snap_to_displayed_frf_curve(frequency, coefficient);
-                    bool created=false;
-                    const int group=ensure_point_group_for_measurement((GetKeyState(VK_CONTROL)&0x8000)!=0,&created);
-                    if (group>=0) {
-                        g.point_groups[static_cast<std::size_t>(group)].points.push_back({frequency,coefficient});
-                        UndoAction action; action.type=UndoAction::ADD_POINT; action.point={frequency,coefficient};
-                        action.point_group_index=group; action.point_group_created=created;
-                        action.point_group_state=g.point_groups[static_cast<std::size_t>(group)]; action.point_group_state.points.clear();
-                        push_undo(action); refresh_side_panel_controls();
-                    }
                 }
                 set_status(); sync_menu(); invalidate_plot(); return 0;
+            }
+            const bool lower_reference=inside_reference(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
+            if (!g.annotations_locked && (inside(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) || lower_reference) && g.measure_mode && g.vvalid &&
+                prepare_plot_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp))) {
+                g.point_click_pending=true;
+                g.point_click_reference_axis=lower_reference;
+                g.point_click_x=GET_X_LPARAM(lp);
+                g.point_click_y=GET_Y_LPARAM(lp);
+                SetCapture(hwnd);
+                return 0;
             }
             if (inside(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)) && g.frf.result.ok &&
                 prepare_plot_drag(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) { g.dragging = true; SetCapture(hwnd); }
             return 0;
+        }
         case WM_MOUSEMOVE: {
             if (g_dragging_reference_divider) {
                 const RECT full=plot_rect();
@@ -498,7 +729,28 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.frf.reference_height_fraction=std::clamp(
                     static_cast<double>(full.bottom-GET_Y_LPARAM(lp))/available,.12,.55);
                 invalidate_plot();
-            } else if (g.dragging) {
+            } else if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
+                if (g.annotation_drag_reference_axis) {
+                    double frequency=0, amplitude=0;
+                    if (reference_px_to_data(GET_X_LPARAM(lp),GET_Y_LPARAM(lp),frequency,amplitude)) {
+                        if (g.snap_to_data) snap_to_reference_curve(frequency,amplitude);
+                        const int group=g.annotation_drag_index, point=g.annotation_drag_point_index;
+                        if (group>=0 && point>=0 && static_cast<std::size_t>(group)<g.point_groups.size() &&
+                            static_cast<std::size_t>(point)<g.point_groups[static_cast<std::size_t>(group)].points.size())
+                            g.point_groups[static_cast<std::size_t>(group)].points[static_cast<std::size_t>(point)]={frequency,amplitude};
+                    }
+                } else update_annotation_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
+                invalidate_plot();
+                return 0;
+            } else if (g.point_click_pending) {
+                const int dx=GET_X_LPARAM(lp)-g.point_click_x;
+                const int dy=GET_Y_LPARAM(lp)-g.point_click_y;
+                if (std::abs(dx)<4 && std::abs(dy)<4) return 0;
+                g.point_click_pending=false;
+                g.point_click_reference_axis=false;
+                g.dragging=true;
+            }
+            if (g.dragging) {
                 double *lo, *hi, minb, maxb, minw;
                 if (!active_axis(lo, hi, minb, maxb, minw)) return 0;
                 const double shift = static_cast<double>(GET_X_LPARAM(lp)-g.drag_x)/(p.right-p.left)*(g.drag_hi-g.drag_lo);
@@ -549,13 +801,57 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_LBUTTONUP:
+            if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
+                finish_annotation_drag(true);
+                g.annotation_drag_reference_axis=false;
+                if (GetCapture()==hwnd) ReleaseCapture();
+                set_status(); invalidate_plot(); return 0;
+            }
+            if (g.point_click_pending) {
+                const int point_x=g.point_click_x, point_y=g.point_click_y;
+                const bool reference_axis=g.point_click_reference_axis;
+                g.point_click_pending=false;
+                g.point_click_reference_axis=false;
+                if (GetCapture()==hwnd) ReleaseCapture();
+                double frequency=0, coefficient=0;
+                const bool mapped=reference_axis
+                    ? reference_px_to_data(point_x,point_y,frequency,coefficient)
+                    : px_to_data(point_x,point_y,frequency,coefficient);
+                if (g.measure_mode && mapped) {
+                    if (g.snap_to_data) {
+                        if (reference_axis) snap_to_reference_curve(frequency,coefficient);
+                        else snap_to_displayed_frf_curve(frequency,coefficient);
+                    }
+                    bool created=false;
+                    const int group=ensure_point_group_for_measurement((GetKeyState(VK_CONTROL)&0x8000)!=0,&created,reference_axis);
+                    if (group>=0) {
+                        g.point_groups[static_cast<std::size_t>(group)].points.push_back({frequency,coefficient});
+                        UndoAction action; action.type=UndoAction::ADD_POINT; action.point={frequency,coefficient};
+                        action.point_group_index=group; action.point_group_created=created;
+                        action.point_group_state=g.point_groups[static_cast<std::size_t>(group)]; action.point_group_state.points.clear();
+                        push_undo(action); refresh_side_panel_controls();
+                    }
+                    set_status(); sync_menu(); invalidate_plot();
+                }
+                return 0;
+            }
+            [[fallthrough]];
         case WM_CANCELMODE:
-            g.dragging = false; g_dragging_reference_divider=false;
+            if (g.annotation_drag_kind!=App::AnnotationDragKind::None) finish_annotation_drag(false);
+            g.dragging = false; g.point_click_pending=false; g.point_click_reference_axis=false; g_dragging_reference_divider=false;
             if (GetCapture() == hwnd) ReleaseCapture();
             return 0;
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE) {
+                if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
+                    finish_annotation_drag(false);
+                    g.annotation_drag_reference_axis=false;
+                    if (GetCapture()==hwnd) ReleaseCapture();
+                    invalidate_plot(); return 0;
+                }
                 g.dragging = false;
+                g.point_click_pending = false;
+                g.point_click_reference_axis = false;
                 g_dragging_reference_divider = false;
                 if (GetCapture() == hwnd) ReleaseCapture();
                 if (g.pending_line || g.pending_marker) {
@@ -568,6 +864,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_RBUTTONDOWN:
+            if (g.annotations_locked) return 0;
             if (has_measure_points()) {
                 UndoAction action; action.type=UndoAction::CLEAR_POINTS; action.saved_point_groups=g.point_groups;
                 action.saved_active_point_group=g.active_point_group;

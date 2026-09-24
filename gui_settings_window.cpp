@@ -239,17 +239,13 @@ void refresh_settings_controls() {
     if (HWND gap = GetDlgItem(g.settings_wnd, IDC_SET_GAP_MARKERS)) SetWindowTextW(gap, gap_markers_toggle_text());
     set_toggle_checked(GetDlgItem(g.settings_wnd, IDC_SET_STITCH_GAPS), g.stitch_time_gaps);
     if (HWND stitch = GetDlgItem(g.settings_wnd, IDC_SET_STITCH_GAPS)) SetWindowTextW(stitch, stitch_gaps_toggle_text());
-    if (HWND xlbl = GetDlgItem(g.settings_wnd, IDC_SET_AXIS_X_LABEL_STATIC)) SetWindowTextW(xlbl, axis_x_label_text());
-    if (HWND ylbl = GetDlgItem(g.settings_wnd, IDC_SET_AXIS_Y_LABEL_STATIC)) SetWindowTextW(ylbl, axis_y_label_text());
-    if (HWND xedit = GetDlgItem(g.settings_wnd, IDC_SET_AXIS_X_LABEL_EDIT)) {
-        g.updating_axis_label_edits = true;
-        SetWindowTextW(xedit, g.axis_x_label.c_str());
-        g.updating_axis_label_edits = false;
-    }
-    if (HWND yedit = GetDlgItem(g.settings_wnd, IDC_SET_AXIS_Y_LABEL_EDIT)) {
-        g.updating_axis_label_edits = true;
-        SetWindowTextW(yedit, g.axis_y_label.c_str());
-        g.updating_axis_label_edits = false;
+    const std::pair<int,const std::wstring*> axis_edits[] = {
+        {IDC_SET_TIME_AXIS_X_EDIT,&g.axis_x_label}, {IDC_SET_TIME_AXIS_Y_EDIT,&g.time_axis_y_label},
+        {IDC_SET_FFT_AXIS_X_EDIT,&g.fft_axis_x_label},
+        {IDC_SET_FFT_AXIS_Y_EDIT,&g.fft_axis_y_label}, {IDC_SET_FRF_AXIS_X_EDIT,&g.frf_axis_x_label},
+        {IDC_SET_FRF_AXIS_Y_EDIT,&g.frf_axis_y_label}};
+    for (const auto& [id,value] : axis_edits) if (HWND edit=GetDlgItem(g.settings_wnd,id)) {
+        g.updating_axis_label_edits=true; SetWindowTextW(edit,value->c_str()); g.updating_axis_label_edits=false;
     }
     populate_hotkey_list(g.settings_wnd);
     load_selected_hotkey_controls(g.settings_wnd);
@@ -284,11 +280,16 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             set_toggle_checked(GetDlgItem(hwnd, IDW_LIGHT_MODE), g.light_mode);
             mkcheck(gap_markers_toggle_text(), 28, 98, 278, 28, IDC_SET_GAP_MARKERS);
             mkcheck(stitch_gaps_toggle_text(), 28, 128, 360, 28, IDC_SET_STITCH_GAPS);
-            mk(L"STATIC", axis_x_label_text(), SS_LEFT, 28, 204, 72, 20, IDC_SET_AXIS_X_LABEL_STATIC);
-            install_axis_label_edit(mk(L"EDIT", g.axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 104, 200, 260, 24, IDC_SET_AXIS_X_LABEL_EDIT));
-            mk(L"STATIC", axis_y_label_text(), SS_LEFT, 28, 232, 72, 20, IDC_SET_AXIS_Y_LABEL_STATIC);
-            install_axis_label_edit(mk(L"EDIT", g.axis_y_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 104, 228, 260, 24, IDC_SET_AXIS_Y_LABEL_EDIT));
-
+            // Keep coordinate names visibly separate from the general settings.
+            mk(L"STATIC", en ? L"Time" : L"Время", SS_LEFT, 28, 180, 120, 20, 0);
+            install_axis_label_edit(mk(L"EDIT", g.axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 176, 120, 24, IDC_SET_TIME_AXIS_X_EDIT));
+            install_axis_label_edit(mk(L"EDIT", g.time_axis_y_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 276, 176, 120, 24, IDC_SET_TIME_AXIS_Y_EDIT));
+            mk(L"STATIC", en ? L"Spectrum" : L"Спектр", SS_LEFT, 28, 208, 120, 20, 0);
+            install_axis_label_edit(mk(L"EDIT", g.fft_axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 204, 120, 24, IDC_SET_FFT_AXIS_X_EDIT));
+            install_axis_label_edit(mk(L"EDIT", g.fft_axis_y_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 276, 204, 120, 24, IDC_SET_FFT_AXIS_Y_EDIT));
+            mk(L"STATIC", en ? L"FRF" : L"АЧХ", SS_LEFT, 28, 236, 120, 20, 0);
+            install_axis_label_edit(mk(L"EDIT", g.frf_axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 232, 120, 24, IDC_SET_FRF_AXIS_X_EDIT));
+            install_axis_label_edit(mk(L"EDIT", g.frf_axis_y_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 276, 232, 120, 24, IDC_SET_FRF_AXIS_Y_EDIT));
             mk(L"BUTTON", en ? L"Hotkeys" : L"Горячие клавиши", BS_OWNERDRAW, 12, 342, 510, 188, IDC_SET_GROUP_HOTKEYS);
             mk(L"LISTBOX", L"", LBS_NOTIFY | WS_VSCROLL | WS_BORDER | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
                 24, 366, 240, 146, IDC_SET_HOTKEY_LIST);
@@ -361,16 +362,25 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         refresh_settings_controls();
                     }
                     return 0;
-                case IDC_SET_AXIS_X_LABEL_EDIT:
-                case IDC_SET_AXIS_Y_LABEL_EDIT: {
+                case IDC_SET_TIME_AXIS_X_EDIT:
+                case IDC_SET_TIME_AXIS_Y_EDIT:
+                case IDC_SET_FFT_AXIS_X_EDIT:
+                case IDC_SET_FFT_AXIS_Y_EDIT:
+                case IDC_SET_FRF_AXIS_X_EDIT:
+                case IDC_SET_FRF_AXIS_Y_EDIT: {
                     if (HIWORD(wp) != EN_KILLFOCUS || g.updating_axis_label_edits) return 0;
                     wchar_t buf[128]{};
                     GetWindowTextW(ctl, buf, 128);
-                    const bool is_x = (id == IDC_SET_AXIS_X_LABEL_EDIT);
-                    std::wstring label = normalize_axis_label_text(buf, is_x ? L"X" : L"ед.");
-                    const bool changed = is_x ? g.axis_x_label != label : g.axis_y_label != label;
-                    if (is_x) g.axis_x_label = label;
-                    else g.axis_y_label = label;
+                    const bool y_axis = id == IDC_SET_TIME_AXIS_Y_EDIT || id == IDC_SET_FFT_AXIS_Y_EDIT ||
+                        id == IDC_SET_FRF_AXIS_Y_EDIT;
+                    std::wstring label = normalize_axis_label_text(buf, y_axis ? L"Y" : L"X");
+                    std::wstring* target = id == IDC_SET_TIME_AXIS_X_EDIT ? &g.axis_x_label :
+                        id == IDC_SET_TIME_AXIS_Y_EDIT ? &g.time_axis_y_label :
+                        id == IDC_SET_FFT_AXIS_X_EDIT ? &g.fft_axis_x_label :
+                        id == IDC_SET_FFT_AXIS_Y_EDIT ? &g.fft_axis_y_label :
+                        id == IDC_SET_FRF_AXIS_X_EDIT ? &g.frf_axis_x_label : &g.frf_axis_y_label;
+                    const bool changed = *target != label;
+                    *target = label;
                     if (changed) mark_active_document_dirty();
                     g.updating_axis_label_edits = true;
                     SetWindowTextW(ctl, label.c_str());

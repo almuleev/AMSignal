@@ -72,30 +72,32 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             };
             make(InputLabel, L"STATIC", SS_LEFT, 12, 4, 278, 18);
             make(Input, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 22, 278, 24);
-            make(InputSummary, L"STATIC", SS_LEFT, 12, 47, 278, 17);
-            make(OutputLabel, L"STATIC", SS_LEFT, 12, 66, 278, 18);
-            make(Output, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 84, 278, 24);
-            make(Processing, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 112, 278, 28);
-            make(EstimatorLabel, L"STATIC", SS_LEFT, 12, 144, 130, 18);
-            make(LengthLabel, L"STATIC", SS_LEFT, 156, 144, 134, 18);
-            make(Estimator, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 12, 164, 130, 200);
-            make(Length, L"EDIT", WS_BORDER | ES_NUMBER | WS_TABSTOP, 156, 164, 134, 24);
-            make(Method, L"STATIC", SS_LEFT, 12, 194, 278, 44);
-            make(SmoothingLabel, L"STATIC", SS_LEFT, 12, 242, 92, 18);
-            make(Smoothing, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 108, 240, 182, 200);
-            make(AxisScaleLabel, L"STATIC", SS_LEFT, 12, 268, 92, 18);
-            make(AxisScale, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 108, 266, 182, 100);
-            make(Reference, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 292, 278, 24);
-            make(Source, L"STATIC", SS_LEFT, 12, 318, 278, 28);
-            make(LowLabel, L"STATIC", SS_LEFT, 12, 350, 130, 18);
-            make(HighLabel, L"STATIC", SS_LEFT, 156, 350, 134, 18);
-            make(Low, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 12, 370, 130, 24);
-            make(High, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 156, 370, 134, 24);
-            make(ApplyRange, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 400, 278, 24);
-            make(Calculate, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 430, 122, 24);
-            make(Csv, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 140, 430, 72, 24);
-            make(Png, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 218, 430, 72, 24);
-            make(Hint, L"STATIC", SS_LEFT, 12, 462, 278, 68);
+            make(InputSummary, L"STATIC", SS_LEFT, 12, 47, 278, 24);
+            // The active UI font has descenders that do not fit in a standard
+            // 18px static control. Reserve their full line box before Outputs.
+            make(OutputLabel, L"STATIC", SS_LEFT, 12, 74, 278, 18);
+            make(Output, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 92, 278, 24);
+            make(Processing, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 120, 278, 28);
+            make(EstimatorLabel, L"STATIC", SS_LEFT, 12, 152, 130, 18);
+            make(LengthLabel, L"STATIC", SS_LEFT, 156, 152, 134, 18);
+            make(Estimator, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 12, 172, 130, 200);
+            make(Length, L"EDIT", WS_BORDER | ES_NUMBER | WS_TABSTOP, 156, 172, 134, 24);
+            make(Method, L"STATIC", SS_LEFT, 12, 202, 278, 44);
+            make(SmoothingLabel, L"STATIC", SS_LEFT, 12, 250, 92, 18);
+            make(Smoothing, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 108, 248, 182, 200);
+            make(AxisScaleLabel, L"STATIC", SS_LEFT, 12, 276, 92, 18);
+            make(AxisScale, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 108, 274, 182, 100);
+            make(Reference, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 300, 278, 24);
+            make(Source, L"STATIC", SS_LEFT, 12, 326, 278, 28);
+            make(LowLabel, L"STATIC", SS_LEFT, 12, 358, 130, 18);
+            make(HighLabel, L"STATIC", SS_LEFT, 156, 358, 134, 18);
+            make(Low, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 12, 378, 130, 24);
+            make(High, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 156, 378, 134, 24);
+            make(ApplyRange, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 408, 278, 24);
+            make(Calculate, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 438, 122, 24);
+            make(Csv, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 140, 438, 72, 24);
+            make(Png, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 218, 438, 72, 24);
+            make(Hint, L"STATIC", SS_LEFT, 12, 470, 278, 80);
             install_themed_combo(control(Estimator));
             install_themed_combo(control(Smoothing));
             install_themed_combo(control(AxisScale));
@@ -679,8 +681,8 @@ void refresh_frf_controls(bool repopulate) {
     } else label(Method,g.frf.pending ? tr(L"Calculating…",L"Вычисление…") : L"Hann · L/K/Δf: —");
     EnableWindow(control(Length),g.frf.options.estimator==lvm::FrfEstimator::H1);
     label(Calculate, tr(L"Calculate", L"Рассчитать")); label(Csv, L"CSV"); label(Png, L"PNG");
-    label(Hint, tr(L"KD = |Response / average Reference|, linear (not dB).\nA filter attenuates beyond cutoff; equal processing can cancel in KD.",
-                   L"КД = |отклик / средняя опора|, натуральная величина.\nФильтр ослабляет частоты за срезом.\nОдинаковая обработка может сократиться в КД."));
+    label(Hint, tr(L"KD = Response / average Reference (not dB).\nA filter attenuates beyond cutoff.\nEqual processing can cancel in KD.",
+                   L"КД = отклик / средняя опора (без dB).\nФильтр ослабляет частоты за срезом.\nОдинаковая обработка может сократиться."));
     if (repopulate) {
         SendMessageW(control(Estimator),CB_SETCURSEL,g.frf.options.estimator==lvm::FrfEstimator::H1 ? 0 : 1,0);
         SendMessageW(control(Smoothing),CB_SETCURSEL,smoothing_choice(g.frf.display_smoothing_octaves),0);

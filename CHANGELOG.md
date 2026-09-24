@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+## v0.16.0
+
+### Исправлено
+
+- В АЧХ числовые шкалы, подписи и границы обоих графиков корректно остаются
+  видимыми после расчёта, навигации и изменения масштаба; правую панель при
+  навигации не нужно перерисовывать, поэтому её элементы не мигают.
+- Панель АЧХ больше не обрезает русские и английские служебные подписи;
+  улучшены отступы между строками и высота многострочной подсказки.
+
+### Доработано
+
+- Во всех режимах физические вертикальные шкалы имеют отдельные подписи и
+  единый отступ, а пользовательские X/Y настраиваются независимо для Time,
+  Spectrum и АЧХ. Новые АЧХ используют линейную частотную ось по умолчанию.
+- Нижний график средней опоры АЧХ получил отдельные измерительные точки,
+  собственную физическую шкалу, серый захват разделителя и возможность
+  увеличить его почти до высоты графика КД.
+- Разметка и её история согласованы между Time, Spectrum и АЧХ: точки,
+  маркеры и направляющие не смешиваются между режимами, а проекты сохраняют
+  дополнительные точки средней опоры.
+
+### Новый функционал
+
+- Существующие точки, маркеры, вертикальные и горизонтальные линии можно
+  перетаскивать во всех трёх режимах. Захват объекта имеет приоритет над
+  активным инструментом добавления; Snap применяется при переносе, а перенос
+  является одним действием Undo/Redo.
+- В верхней панели добавлена кнопка `🔒` для блокировки разметки. Она запрещает
+  добавление, перенос и очистку разметки активного документа, не мешая
+  навигации графика; повторное нажатие снимает блокировку.
+
+### Fixed
+
+- FRF numeric scales, labels and plot borders now remain visible after
+  calculation, navigation and zooming. Navigation no longer needs to repaint
+  the right panel, so its controls do not flicker.
+- FRF panel text is no longer clipped in Russian or English; row spacing and
+  the multiline hint height were improved.
+
+### Improved
+
+- Every mode has separate physical vertical-scale captions with consistent
+  spacing, while editable X/Y names are independent for Time, Spectrum and
+  FRF. New FRF views use a linear frequency axis by default.
+- The lower averaged-Reference plot now has its own measurement points,
+  physical scale, grey splitter grip and a resizable height that can closely
+  match the KD plot.
+- Annotation storage and history are aligned across Time, Spectrum and FRF:
+  points, markers and guides remain separate by mode, and projects preserve
+  averaged-Reference points.
+
+### New functionality
+
+- Existing points, markers, vertical guides and horizontal guides can be
+  dragged in every mode. Object capture takes precedence over an active
+  placement tool; Snap is retained during a move, and each move is one
+  Undo/Redo action.
+- A `🔒` toolbar button locks annotations. It prevents adding, moving and
+  clearing annotations in the active document without preventing graph
+  navigation; press it again to unlock.
+
 ## v0.15.5
 
 - Во всех режимах графика добавлена явная подпись вертикальной шкалы: в Time

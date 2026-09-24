@@ -100,7 +100,7 @@ const wchar_t* mode_spectrum_text() {
 }
 
 const wchar_t* mode_frf_text() {
-    return g_str == &kEn ? L"FRF" : L"FRF / АЧХ";
+    return g_str == &kEn ? L"FRF" : L"АЧХ";
 }
 
 const wchar_t* gap_markers_toggle_text() {
@@ -281,14 +281,6 @@ const wchar_t* side_pt_dist_text() {
 
 const wchar_t* side_pt_snap_text() {
     return (g_str == &kEn) ? L"Snap" : L"Привязка";
-}
-
-const wchar_t* axis_x_label_text() {
-    return (g_str == &kEn) ? L"X label:" : L"Буква X:";
-}
-
-const wchar_t* axis_y_label_text() {
-    return (g_str == &kEn) ? L"Y units:" : L"Единицы Y:";
 }
 
 std::wstring to_w(const std::string& s) {

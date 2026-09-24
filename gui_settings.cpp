@@ -137,6 +137,11 @@ void save_runtime_settings_now() {
     write_ini_double(L"ui", L"light_mode_open_end", g.light_mode_open_end);
     WritePrivateProfileStringW(L"ui", L"axis_x_label", g.axis_x_label.c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"axis_y_label", g.axis_y_label.c_str(), g_config_path.c_str());
+    WritePrivateProfileStringW(L"ui", L"time_axis_y_label", g.time_axis_y_label.c_str(), g_config_path.c_str());
+    WritePrivateProfileStringW(L"ui", L"fft_axis_x_label", g.fft_axis_x_label.c_str(), g_config_path.c_str());
+    WritePrivateProfileStringW(L"ui", L"fft_axis_y_label", g.fft_axis_y_label.c_str(), g_config_path.c_str());
+    WritePrivateProfileStringW(L"ui", L"frf_axis_x_label", g.frf_axis_x_label.c_str(), g_config_path.c_str());
+    WritePrivateProfileStringW(L"ui", L"frf_axis_y_label", g.frf_axis_y_label.c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"points", L"x_label", nullptr, g_config_path.c_str());
     WritePrivateProfileStringW(L"points", L"y_label", nullptr, g_config_path.c_str());
     WritePrivateProfileStringW(L"points", L"number", g.pdisp.number ? L"1" : L"0", g_config_path.c_str());
@@ -347,6 +352,11 @@ void load_runtime_settings() {
     // Prior versions stored the decorative default "Y" here. It is not a
     // physical unit, so replace it with the neutral unit placeholder.
     if (g.axis_y_label == L"Y") g.axis_y_label = L"ед.";
+    g.time_axis_y_label = normalize_axis_label_text(read_ini_wstring(L"ui", L"time_axis_y_label", g.time_axis_y_label), L"Y");
+    g.fft_axis_x_label = normalize_axis_label_text(read_ini_wstring(L"ui", L"fft_axis_x_label", g.fft_axis_x_label), L"X");
+    g.fft_axis_y_label = normalize_axis_label_text(read_ini_wstring(L"ui", L"fft_axis_y_label", g.fft_axis_y_label), L"Y");
+    g.frf_axis_x_label = normalize_axis_label_text(read_ini_wstring(L"ui", L"frf_axis_x_label", g.frf_axis_x_label), L"X");
+    g.frf_axis_y_label = normalize_axis_label_text(read_ini_wstring(L"ui", L"frf_axis_y_label", g.frf_axis_y_label), L"Y");
 
     g.marker_color = static_cast<COLORREF>(read_ini_int(
         L"ui", L"marker_color", static_cast<int>(g_theme->marker_color)));
@@ -364,6 +374,12 @@ void load_runtime_settings() {
             hk.fvirt = static_cast<BYTE>(fvirt);
             hk.key = static_cast<WORD>(key);
         }
+    }
+    // A settings file that disables every command is not a meaningful user
+    // configuration; recover the built-in bindings on the next launch.
+    if (std::none_of(g.hotkeys.begin(), g.hotkeys.end(),
+            [](const HotkeyBinding& hk) { return hk.key != 0; })) {
+        g.hotkeys = default_hotkeys();
     }
     load_recent_files_from_ini();
 }

@@ -153,10 +153,6 @@ const wchar_t* side_pt_dist_text();
 
 const wchar_t* side_pt_snap_text();
 
-const wchar_t* axis_x_label_text();
-
-const wchar_t* axis_y_label_text();
-
 std::wstring to_w(const std::string& s);
 
 std::wstring to_w_acp(const std::string& s);

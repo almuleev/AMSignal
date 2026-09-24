@@ -39,6 +39,7 @@ enum {
     IDC_CLOSE_DOCUMENT,
     IDC_CURSOR_TOOL,
     IDC_LINE_MENU,
+    IDC_LOCK_ANNOTATIONS,
 
     // Menu-only commands (no toolbar button).
     IDM_EXIT = 1100,
@@ -136,10 +137,12 @@ enum {
 
     IDC_SET_GAP_MARKERS = 5125,
     IDC_SET_STITCH_GAPS,
-    IDC_SET_AXIS_X_LABEL_STATIC,
-    IDC_SET_AXIS_X_LABEL_EDIT,
-    IDC_SET_AXIS_Y_LABEL_STATIC,
-    IDC_SET_AXIS_Y_LABEL_EDIT,
+    IDC_SET_TIME_AXIS_X_EDIT,
+    IDC_SET_TIME_AXIS_Y_EDIT,
+    IDC_SET_FFT_AXIS_X_EDIT,
+    IDC_SET_FFT_AXIS_Y_EDIT,
+    IDC_SET_FRF_AXIS_X_EDIT,
+    IDC_SET_FRF_AXIS_Y_EDIT,
     IDC_SET_GROUP_GENERAL = 5150,
     IDC_SET_GROUP_HOTKEYS,
 
@@ -166,7 +169,11 @@ inline const int kBottomBar = 28;
 inline const int kAxisBottom = 38;
 
 // room under the plot for the X tick labels + title
-inline const int kAxisLeft = 70;
+// The outer part is reserved for the vertical physical amplitude label; the
+// numeric Y ticks remain in the inner part of this gutter.
+inline const int kAxisLeft = 86;
+// Inset for vertical physical Y-axis captions within the outer gutter.
+inline const int kVerticalAxisCaptionLeft = 18;
 
 inline const int IDC_SPEED_PROMPT_EDIT = 6200;
 

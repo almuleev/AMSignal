@@ -118,6 +118,11 @@ void write_export_metadata(std::ofstream& out,
         write_export_comment(out, L"[graph_settings]", line_end);
         write_export_key_value(out, L"axis_x_label", export_metadata_text(g.axis_x_label), line_end);
         write_export_key_value(out, L"axis_y_label", export_metadata_text(g.axis_y_label), line_end);
+        write_export_key_value(out, L"time_axis_y_label", export_metadata_text(g.time_axis_y_label), line_end);
+        write_export_key_value(out, L"fft_axis_x_label", export_metadata_text(g.fft_axis_x_label), line_end);
+        write_export_key_value(out, L"fft_axis_y_label", export_metadata_text(g.fft_axis_y_label), line_end);
+        write_export_key_value(out, L"frf_axis_x_label", export_metadata_text(g.frf_axis_x_label), line_end);
+        write_export_key_value(out, L"frf_axis_y_label", export_metadata_text(g.frf_axis_y_label), line_end);
         write_export_key_value(out, L"marker_color", export_color_triplet(g.marker_color), line_end);
         write_export_key_value(out, L"smoothing", g.visual_smooth ? L"1" : L"0", line_end);
         write_export_key_value(out, L"distinguish_curves", g.distinguish_curves ? L"1" : L"0", line_end);
@@ -183,7 +188,8 @@ void write_export_metadata(std::ofstream& out,
             std::wstring line = L"group[" + std::to_wstring(i + 1) + L"] name=" + export_metadata_text(group.name);
             line += L", visible=" + std::wstring(group.visible ? L"1" : L"0");
             line += L", color=" + export_color_triplet(group.color);
-            line += L", mode=" + std::wstring(group.mode == PointGroupMode::FRF ? L"frf" :
+            line += L", mode=" + std::wstring(group.mode == PointGroupMode::FRF
+                ? (group.frf_reference_axis ? L"frf_reference" : L"frf") :
                 group.mode == PointGroupMode::Frequency ? L"frequency" : L"time");
             line += L", active=" + std::wstring((i == static_cast<std::size_t>(active_point_group_index_for_mode(group.mode))) ? L"1" : L"0");
             line += L", display=" + export_point_display_text(group.display);
@@ -451,7 +457,18 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
             if (key == "axis_x_label") {
                 g.axis_x_label = normalize_axis_label_text(decode_export_text(value), L"X");
             } else if (key == "axis_y_label") {
-                g.axis_y_label = normalize_axis_label_text(decode_export_text(value), L"Y");
+                g.axis_y_label = normalize_axis_label_text(decode_export_text(value), L"ед.");
+                if (g.axis_y_label == L"Y") g.axis_y_label = L"ед.";
+            } else if (key == "time_axis_y_label") {
+                g.time_axis_y_label = normalize_axis_label_text(decode_export_text(value), L"Y");
+            } else if (key == "fft_axis_x_label") {
+                g.fft_axis_x_label = normalize_axis_label_text(decode_export_text(value), L"X");
+            } else if (key == "fft_axis_y_label") {
+                g.fft_axis_y_label = normalize_axis_label_text(decode_export_text(value), L"Y");
+            } else if (key == "frf_axis_x_label") {
+                g.frf_axis_x_label = normalize_axis_label_text(decode_export_text(value), L"X");
+            } else if (key == "frf_axis_y_label") {
+                g.frf_axis_y_label = normalize_axis_label_text(decode_export_text(value), L"Y");
             } else if (key == "marker_color") {
                 parse_color_triplet(value, g.marker_color);
             } else if (key == "smoothing") {
@@ -586,8 +603,9 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 const std::string mode = lower_copy(trim_copy(mode_text));
                 if (mode == "frequency" || mode == "fft" || mode == "hz") {
                     group.mode = PointGroupMode::Frequency;
-                } else if (mode == "frf") {
+                } else if (mode == "frf" || mode == "frf_reference") {
                     group.mode = PointGroupMode::FRF;
+                    group.frf_reference_axis = (mode == "frf_reference");
                 } else if (mode == "time" || mode == "seconds" || mode == "sec") {
                     group.mode = PointGroupMode::Time;
                 }
