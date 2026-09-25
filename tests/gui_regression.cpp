@@ -497,12 +497,12 @@ void routed_window_messages() {
     g.annotation_selection_kind=App::AnnotationSelectionKind::Point;
     g.annotation_selection_index=0;
     g.annotation_selection_point_index=0;
-    require(delete_selected_annotation() && g.point_groups[0].points.empty(),
-            "Delete removes the selected measurement point");
+    require(delete_selected_annotation() && g.point_groups.empty(),
+            "Delete removes the selected measurement point and its empty group");
     pop_undo();
     require(g.point_groups[0].points.size()==1,"Undo restores a deleted measurement point");
     pop_redo();
-    require(g.point_groups[0].points.empty(),"Redo removes the measurement point again");
+    require(g.point_groups.empty(),"Redo removes the measurement point and its empty group again");
     g.guides={{true,1.0,AnalysisMode::Time}};
     g.annotation_selection_kind=App::AnnotationSelectionKind::Guide;
     g.annotation_selection_index=0;
@@ -686,8 +686,8 @@ void frf_integration() {
     g.frf.apply_processing=false; invalidate_frf(); ensure_current_frf();
     near(lvm::frf_dynamic_coefficient(g.frf.result.common(),8),4,"raw FRF ignores display processing");
     {
-        // Placement tests need empty space: existing annotations are now
-        // intentionally edited before an active placement tool creates more.
+        // Start with no annotations so the following placement/drag sequence
+        // exercises its own marker and guide deterministically.
         g.guides.clear();
         g.markers.clear();
         clear_measure_point_groups();
@@ -714,10 +714,12 @@ void frf_integration() {
         WndProc(g.main,WM_COMMAND,IDM_ADD_MARKER,0);
         require(g.pending_marker,"FRF marker command remains armed in the rendered window");
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x,point_y));
+        handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(point_x,point_y));
         require(!g.markers.empty() && g.markers.back().mode==AnalysisMode::FRF && g.pending_marker,
                 "FRF marker uses frequency and dynamic-coefficient coordinates and stays armed");
         WndProc(g.main,WM_COMMAND,IDM_ADD_VLINE,0);
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x+40,point_y));
+        handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(point_x+40,point_y));
         require(!g.guides.empty() && g.guides.back().mode==AnalysisMode::FRF && g.pending_line==1,
                 "FRF line stays armed just like the marker tool");
         handle_frf_input(g.main,WM_KEYDOWN,VK_ESCAPE,0);
