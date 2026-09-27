@@ -708,22 +708,21 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (inside_reference(pt.x,pt.y) && (GetKeyState(VK_CONTROL) & 0x8000)) {
                 double low=0, high=1;
                 frf_reference_y_range(low,high);
-                const double fraction=std::clamp(static_cast<double>(reference.bottom-pt.y)/(reference.bottom-reference.top),0.0,1.0);
-                const double span=std::clamp((high-low)*(up ? .85 : 1/.85),1e-12,1e100);
-                const double anchor=low+fraction*(high-low);
-                g.frf.reference_y_min=anchor-fraction*span;
-                g.frf.reference_y_max=g.frf.reference_y_min+span;
+                // Reference follows KD/Spectrum scale semantics: retain a
+                // zero baseline and change only the upper Y boundary.
+                g.frf.reference_y_min=0.0;
+                g.frf.reference_y_max=std::clamp(high*(up ? .85 : 1/.85),1e-12,1e100);
                 g.frf.reference_auto_y=false;
                 set_status(); invalidate_plot(); return 0;
             }
             if (inside_reference(pt.x,pt.y) && (GetKeyState(VK_MENU) & 0x8000)) {
-                // Match KD's Alt+wheel vertical pan, while keeping the
-                // Reference Y range independent. Both plots share X only.
+                // Match KD's Alt+wheel vertical scale adjustment while
+                // retaining the physical zero baseline for Reference.
                 double low=0, high=1;
                 frf_reference_y_range(low,high);
-                const double shift=(high-low)*(up ? -.1 : .1);
-                g.frf.reference_y_min=low+shift;
-                g.frf.reference_y_max=high+shift;
+                const double shift=high*(up ? -.1 : .1);
+                g.frf.reference_y_min=0.0;
+                g.frf.reference_y_max=std::max(1e-12,high+shift);
                 g.frf.reference_auto_y=false;
                 set_status(); invalidate_plot(); return 0;
             }
@@ -775,11 +774,18 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     static_cast<double>(full.bottom-GET_Y_LPARAM(lp))/available,.12,.55);
                 invalidate_plot();
             } else if (g_dragging_reference_plot) {
-                // The averaged Reference shares its X view with KD. A drag
-                // over the lower plot therefore changes only its own Y range.
+                // The averaged Reference and KD must always show the same
+                // frequency window. Dragging the lower plot pans that shared
+                // X view, while its vertical component affects Reference Y.
+                double *lo, *hi, minb, maxb, minw;
+                if (!active_axis(lo,hi,minb,maxb,minw)) return 0;
+                const double x_shift=static_cast<double>(GET_X_LPARAM(lp)-g.drag_x)/(p.right-p.left)*(g.drag_hi-g.drag_lo);
+                *lo=g.drag_lo-x_shift; *hi=g.drag_hi-x_shift;
+                clamp_range(*lo,*hi,minb,maxb,minw);
+                sync_frf_frequency_limits();
                 const double y_shift=static_cast<double>(GET_Y_LPARAM(lp)-g.drag_y)/(reference.bottom-reference.top)*(g.drag_y_hi-g.drag_y_lo);
-                g.frf.reference_y_min=g.drag_y_lo+y_shift;
-                g.frf.reference_y_max=g.drag_y_hi+y_shift;
+                g.frf.reference_y_min=0.0;
+                g.frf.reference_y_max=std::max(1e-12,g.drag_y_hi+y_shift);
                 g.frf.reference_auto_y=false;
                 changed();
             } else if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {

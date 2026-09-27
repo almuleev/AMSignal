@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.16.4
+
+### Исправлено
+
+- Перетаскивание нижнего графика средней опоры в АЧХ снова панорамирует общую
+  с КД частотную ось X. Его вертикальная составляющая меняет только верхнюю
+  границу независимой Y-шкалы опоры, сохраняя нулевую базу — так же, как КД и
+  Spectrum.
+
+### Fixed
+
+- Dragging the lower averaged-Reference graph in FRF again pans the frequency
+  X axis shared with KD. Its vertical component changes only the upper bound
+  of the Reference's independent Y scale while retaining a zero baseline,
+  matching KD and Spectrum.
+
 ## v0.16.3
 
 ### Исправлено

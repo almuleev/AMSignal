@@ -717,6 +717,9 @@ void frf_integration() {
         const RECT reference_chart=frf_reference_plot_rect(chart);
         const int reference_x=(reference_chart.left+reference_chart.right)/2;
         const int reference_y=(reference_chart.top+reference_chart.bottom)/2;
+        // Leave horizontal room on both sides so the drag verifies the shared
+        // frequency pan rather than clamping at the full-range boundary.
+        zoom_at(.5,.8);
         const double frequency_start_before_reference_drag=g.frf.frequency_start;
         const double frequency_end_before_reference_drag=g.frf.frequency_end;
         const double log_start_before_reference_drag=g.frf.log_start;
@@ -728,14 +731,21 @@ void frf_integration() {
         handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(reference_x+20,reference_y+12));
         double reference_after_low=0, reference_after_high=0;
         frf_reference_y_range(reference_after_low,reference_after_high);
-        require(!g.frf.reference_auto_y && reference_after_low>reference_before_low &&
-                std::fabs((reference_after_high-reference_after_low)-(reference_before_high-reference_before_low))<1e-9,
-                "dragging averaged Reference pans only its vertical range");
-        require(g.frf.frequency_start==frequency_start_before_reference_drag &&
-                g.frf.frequency_end==frequency_end_before_reference_drag &&
-                g.frf.log_start==log_start_before_reference_drag &&
-                g.frf.log_end==log_end_before_reference_drag,
-                "dragging averaged Reference never changes the shared frequency view");
+        require(!g.frf.reference_auto_y && reference_after_low==0.0 &&
+                reference_after_high>reference_before_high,
+                "dragging averaged Reference adjusts its scale from a zero baseline like KD");
+        require(g.frf.frequency_start!=frequency_start_before_reference_drag ||
+                g.frf.frequency_end!=frequency_end_before_reference_drag ||
+                g.frf.log_start!=log_start_before_reference_drag ||
+                g.frf.log_end!=log_end_before_reference_drag,
+                "dragging averaged Reference pans the shared frequency view with KD");
+        // The following annotation scenarios use the original centered view.
+        // Restore it after this navigation-specific assertion so they remain
+        // independent from the drag test.
+        g.frf.frequency_start=frequency_start_before_reference_drag;
+        g.frf.frequency_end=frequency_end_before_reference_drag;
+        g.frf.log_start=log_start_before_reference_drag;
+        g.frf.log_end=log_end_before_reference_drag;
         g.frf.auto_y=true;
         WndProc(g.main,WM_COMMAND,IDC_AUTOY,0);
         require(g.frf.auto_y && g.frf.reference_auto_y,
