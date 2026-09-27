@@ -197,6 +197,7 @@ void exports() {
     g.frf.show_reference_amplitude = false;
     g.frf.reference_height_fraction = .42;
     g.frf.reference_auto_y = false;
+    g.frf.reference_y_min = -1.5;
     g.frf.reference_y_max = 7.5;
     rebuild_formula_cache_from_state();
     const auto project_path = test_dir / "roundtrip.AMSig";
@@ -212,6 +213,7 @@ void exports() {
     require(!g.frf.apply_processing, "project restores the FRF raw-channel choice");
     require(!g.frf.logarithmic_frequency_axis && !g.frf.show_reference_amplitude &&
             std::fabs(g.frf.reference_height_fraction-.42)<1e-9 && !g.frf.reference_auto_y &&
+            std::fabs(g.frf.reference_y_min+1.5)<1e-9 &&
             std::fabs(g.frf.reference_y_max-7.5)<1e-9,
             "project restores FRF axis and Reference graph display settings");
 
@@ -711,6 +713,20 @@ void frf_integration() {
         g.vvalid=true; g.vrect=chart; g.vx0=g.frf.log_start; g.vx1=g.frf.log_end;
         g.vy0=frf_low; g.vy1=frf_high;
         const int point_x=(chart.left+chart.right)/2, point_y=(chart.top+chart.bottom)/2;
+        g.measure_mode=false; g.pending_line=0; g.pending_marker=false;
+        const RECT reference_chart=frf_reference_plot_rect(chart);
+        const int reference_x=(reference_chart.left+reference_chart.right)/2;
+        const int reference_y=(reference_chart.top+reference_chart.bottom)/2;
+        double reference_before_low=0, reference_before_high=0;
+        frf_reference_y_range(reference_before_low,reference_before_high);
+        handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(reference_x,reference_y));
+        handle_frf_input(g.main,WM_MOUSEMOVE,0,MAKELPARAM(reference_x,reference_y+12));
+        handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(reference_x,reference_y+12));
+        double reference_after_low=0, reference_after_high=0;
+        frf_reference_y_range(reference_after_low,reference_after_high);
+        require(!g.frf.reference_auto_y && reference_after_low>reference_before_low &&
+                std::fabs((reference_after_high-reference_after_low)-(reference_before_high-reference_before_low))<1e-9,
+                "dragging averaged Reference pans only its vertical range");
         WndProc(g.main,WM_COMMAND,IDM_ADD_MARKER,0);
         require(g.pending_marker,"FRF marker command remains armed in the rendered window");
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x,point_y));
@@ -750,9 +766,6 @@ void frf_integration() {
         const double snapped_frequency=g.point_groups.back().points.back().first;
         require(std::find(g.frf.result.common().frequencies.begin(),g.frf.result.common().frequencies.end(),snapped_frequency) !=
                 g.frf.result.common().frequencies.end(),"FRF point snapping selects an actual response-frequency bin");
-        const RECT reference_chart=frf_reference_plot_rect(chart);
-        const int reference_x=(reference_chart.left+reference_chart.right)/2;
-        const int reference_y=(reference_chart.top+reference_chart.bottom)/2;
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(reference_x,reference_y));
         handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(reference_x,reference_y));
         require(!g.point_groups.empty() && g.point_groups.back().mode==PointGroupMode::FRF &&
@@ -915,8 +928,11 @@ void frf_multi_channels() {
             "FRF divider allows KD and averaged Reference plots to have nearly equal heights");
     g.frf.reference_height_fraction=.25;
     const double reference_auto_max=frf_reference_y_max();
-    g.frf.reference_auto_y=false; g.frf.reference_y_max=reference_auto_max*.5;
-    near(frf_reference_y_max(),reference_auto_max*.5,"Reference graph has an independent vertical scale");
+    g.frf.reference_auto_y=false; g.frf.reference_y_min=-reference_auto_max*.25; g.frf.reference_y_max=reference_auto_max*.5;
+    double reference_low=0, reference_high=0;
+    frf_reference_y_range(reference_low,reference_high);
+    near(reference_low,-reference_auto_max*.25,"Reference graph can pan independently below zero");
+    near(reference_high,reference_auto_max*.5,"Reference graph has an independent vertical scale");
     g.frf.show_reference_amplitude=false;
     require(frf_coefficient_plot_rect(full_plot).bottom==full_plot.bottom &&
             frf_reference_plot_rect(full_plot).top==full_plot.bottom,

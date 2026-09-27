@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.16.2
+
+### Новый функционал
+
+- Нижний график средней опоры в АЧХ получил независимый перемещаемый диапазон
+  Y: `Ctrl`+колесо масштабирует его вокруг указателя, а `Alt`+колесо и
+  перетаскивание панорамируют. Частотная ось X остаётся синхронизированной с
+  графиком КД.
+
+### Доработано
+
+- Ручные границы Y нижнего графика сохраняются в проекте `.AMSig`, поэтому
+  выбранный вид опоры восстанавливается после повторного открытия файла.
+
+### New functionality
+
+- The lower averaged-Reference graph in FRF now has an independently movable
+  Y range: `Ctrl`+mouse wheel zooms around the pointer, while `Alt`+mouse
+  wheel and dragging pan it. Its X frequency view remains synchronized with
+  the KD graph.
+
+### Improved
+
+- Manual lower-Reference Y limits are saved in `.AMSig` projects, restoring
+  the chosen view after reopening a file.
+
 ## v0.16.1
 
 ### Исправлено

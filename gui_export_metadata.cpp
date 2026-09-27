@@ -141,6 +141,7 @@ void write_export_metadata(std::ofstream& out,
         write_export_key_value(out, L"frf_show_reference_amplitude", g.frf.show_reference_amplitude ? L"1" : L"0", line_end);
         write_export_key_value(out, L"frf_reference_height_fraction", format_edit_number(g.frf.reference_height_fraction), line_end);
         write_export_key_value(out, L"frf_reference_auto_y", g.frf.reference_auto_y ? L"1" : L"0", line_end);
+        write_export_key_value(out, L"frf_reference_y_min", format_optional_edit_number(g.frf.reference_y_min), line_end);
         write_export_key_value(out, L"frf_reference_y_max", format_optional_edit_number(g.frf.reference_y_max), line_end);
         write_export_key_value(out, L"play_speed", format_edit_number(g.play_speed), line_end);
         write_export_key_value(out, L"point_display", export_point_display_text(g.pdisp), line_end);
@@ -508,9 +509,12 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                     g.frf.reference_height_fraction=std::clamp(fraction,.12,.55);
             } else if (key == "frf_reference_auto_y") {
                 parse_bool(value, g.frf.reference_auto_y);
+            } else if (key == "frf_reference_y_min") {
+                double ymin=0;
+                if (parse_double(value,ymin) && std::isfinite(ymin)) g.frf.reference_y_min=ymin;
             } else if (key == "frf_reference_y_max") {
                 double ymax=0;
-                if (parse_double(value,ymax) && std::isfinite(ymax) && ymax>0)
+                if (parse_double(value,ymax) && std::isfinite(ymax))
                     g.frf.reference_y_max=ymax;
             } else if (key == "play_speed") {
                 double speed = g.play_speed;

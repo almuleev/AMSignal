@@ -16,6 +16,7 @@
 namespace gui {
 namespace {
 bool g_dragging_reference_divider = false;
+bool g_dragging_reference_plot = false;
 constexpr int kReferenceDividerGap = 26;
 double dynamic_coefficient(const lvm::FrfResult& r, std::size_t k) {
     return lvm::frf_dynamic_coefficient(r, k);
@@ -121,17 +122,30 @@ bool snap_to_displayed_frf_curve(double& frequency, double& coefficient) {
     return snap_to_displayed_frf_curve_impl(frequency, coefficient);
 }
 
-double frf_reference_y_max() {
+void frf_reference_y_range(double& low, double& high) {
     const auto& common=g.frf.result.common();
     const double f0=frf_frequency_at_fraction(0), f1=frf_frequency_at_fraction(1);
-    double high=0;
+    double auto_high=0;
     for (std::size_t k=1;k<common.frequencies.size() && k<common.reference_amplitude.size();++k) {
         if (common.frequencies[k]<f0 || common.frequencies[k]>f1 ||
             k>=common.reference_amplitude_valid.size() || !common.reference_amplitude_valid[k]) continue;
-        high=std::max(high,common.reference_amplitude[k]);
+        auto_high=std::max(auto_high,common.reference_amplitude[k]);
     }
-    if (!(high>0) || !std::isfinite(high)) high=1;
-    return g.frf.reference_auto_y ? high*1.08 : std::max(1e-12,g.frf.reference_y_max);
+    if (!(auto_high>0) || !std::isfinite(auto_high)) auto_high=1;
+    if (g.frf.reference_auto_y) {
+        low=0.0;
+        high=auto_high*1.08;
+        return;
+    }
+    low=std::isfinite(g.frf.reference_y_min) ? g.frf.reference_y_min : 0.0;
+    high=std::isfinite(g.frf.reference_y_max) ? g.frf.reference_y_max : low+1.0;
+    if (!(high>low)) high=low+1.0;
+}
+
+double frf_reference_y_max() {
+    double low=0, high=1;
+    frf_reference_y_range(low,high);
+    return high;
 }
 void frf_y_range(double& low, double& high) {
     // KD is a linear amplitude ratio. Keep its baseline at zero in automatic
@@ -216,10 +230,11 @@ void draw_frf(HDC dc, const RECT& p) {
     const auto mapy = [&](double v) { return coefficient_plot.bottom - static_cast<int>(std::clamp((v - low) / (high - low), -1.0, 2.0) * height); };
     const auto& common=g.frf.result.common();
     const double f0 = frf_frequency_at_fraction(0), f1 = frf_frequency_at_fraction(1);
-    const double reference_high=frf_reference_y_max();
+    double reference_low=0, reference_high=1;
+    frf_reference_y_range(reference_low,reference_high);
     const int reference_height=std::max(1L,reference_plot.bottom-reference_plot.top);
     const auto map_reference_y=[&](double value) {
-        return reference_plot.bottom-static_cast<int>(std::clamp(value/reference_high,-1.0,2.0)*reference_height);
+        return reference_plot.bottom-static_cast<int>(std::clamp((value-reference_low)/(reference_high-reference_low),-1.0,2.0)*reference_height);
     };
 
     // In grayscale mode the response-to-symbol mapping lives in its own band,
@@ -300,13 +315,14 @@ void draw_frf(HDC dc, const RECT& p) {
         SetTextAlign(dc,TA_RIGHT|TA_TOP);
         TextOutW(dc,coefficient_plot.left-8,coefficient_plot.top+2,coefficient_high_text,lstrlenW(coefficient_high_text));
     }
-    const double reference_raw_step=reference_high/3;
+    const double reference_raw_step=(reference_high-reference_low)/3;
     const double reference_base=std::pow(10.0,std::floor(std::log10(reference_raw_step)));
     const double reference_ratio=reference_raw_step/reference_base;
     const double reference_step=reference_base*(reference_ratio<=1 ? 1 : reference_ratio<=2 ? 2 : reference_ratio<=5 ? 5 : 10);
     int reference_last_label_top=reference_plot.bottom+3;
     int reference_label_count=0;
-    for (double value=0;g.frf.show_reference_amplitude && value<=reference_high;value+=reference_step) {
+    for (double value=std::ceil(reference_low/reference_step)*reference_step;
+         g.frf.show_reference_amplitude && value<=reference_high;value+=reference_step) {
         const int y=map_reference_y(value);
         line(dc,reference_plot.left,y,reference_plot.right,y);
         wchar_t text[48]; swprintf(text,48,L"%.5g",value);
@@ -562,7 +578,7 @@ void draw_frf(HDC dc, const RECT& p) {
         }
     };
     draw_y_scale(coefficient_plot,low,high,6);
-    if (g.frf.show_reference_amplitude) draw_y_scale(reference_plot,0.0,reference_high,3);
+    if (g.frf.show_reference_amplitude) draw_y_scale(reference_plot,reference_low,reference_high,3);
 
     const auto draw_vertical_left_axis_label = [&](const RECT& plot, const std::wstring& text) {
         if (text.empty()) return;
@@ -637,10 +653,11 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     const auto reference_px_to_data = [&](int x, int y, double& frequency, double& amplitude) {
         if (!inside_reference(x,y)) return false;
         const int width=reference.right-reference.left, height=reference.bottom-reference.top;
-        const double maximum=frf_reference_y_max();
-        if (width<=0 || height<=0 || !(maximum>0)) return false;
+        double low=0, high=1;
+        frf_reference_y_range(low,high);
+        if (width<=0 || height<=0 || !(high>low)) return false;
         frequency=frf_frequency_at_fraction(static_cast<double>(x-reference.left)/width);
-        amplitude=std::clamp(static_cast<double>(reference.bottom-y)/height*maximum,0.0,maximum);
+        amplitude=std::clamp(low+static_cast<double>(reference.bottom-y)/height*(high-low),low,high);
         return std::isfinite(frequency) && std::isfinite(amplitude);
     };
     const auto snap_to_reference_curve = [&](double& frequency, double& amplitude) {
@@ -658,8 +675,9 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     };
     const auto begin_reference_point_drag = [&](int x, int y) {
         if (g.annotations_locked || !inside_reference(x,y)) return false;
-        const double maximum=frf_reference_y_max();
-        if (!(maximum>0)) return false;
+        double low=0, high=1;
+        frf_reference_y_range(low,high);
+        if (!(high>low)) return false;
         const int width=reference.right-reference.left, height=reference.bottom-reference.top;
         int best_distance=10, group_index=-1, point_index=-1;
         for (std::size_t group=0;group<g.point_groups.size();++group) {
@@ -667,7 +685,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!points.visible || points.mode!=PointGroupMode::FRF || !points.frf_reference_axis) continue;
             for (std::size_t point=0;point<points.points.size();++point) {
                 const int point_x=reference.left+static_cast<int>(frf_frequency_fraction(points.points[point].first)*width);
-                const int point_y=reference.bottom-static_cast<int>(points.points[point].second/maximum*height);
+                const int point_y=reference.bottom-static_cast<int>((points.points[point].second-low)/(high-low)*height);
                 const int distance=std::max(std::abs(x-point_x),std::abs(y-point_y));
                 if (distance<best_distance) { best_distance=distance; group_index=static_cast<int>(group); point_index=static_cast<int>(point); }
             }
@@ -688,8 +706,24 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if ((!inside(pt.x, pt.y) && !inside_reference(pt.x, pt.y)) || !g.frf.result.ok) return 0;
             const bool up = GET_WHEEL_DELTA_WPARAM(wp) > 0;
             if (inside_reference(pt.x,pt.y) && (GetKeyState(VK_CONTROL) & 0x8000)) {
-                const double current=frf_reference_y_max();
-                g.frf.reference_y_max=std::clamp(current*(up ? .85 : 1/.85),1e-12,1e100);
+                double low=0, high=1;
+                frf_reference_y_range(low,high);
+                const double fraction=std::clamp(static_cast<double>(reference.bottom-pt.y)/(reference.bottom-reference.top),0.0,1.0);
+                const double span=std::clamp((high-low)*(up ? .85 : 1/.85),1e-12,1e100);
+                const double anchor=low+fraction*(high-low);
+                g.frf.reference_y_min=anchor-fraction*span;
+                g.frf.reference_y_max=g.frf.reference_y_min+span;
+                g.frf.reference_auto_y=false;
+                set_status(); invalidate_plot(); return 0;
+            }
+            if (inside_reference(pt.x,pt.y) && (GetKeyState(VK_MENU) & 0x8000)) {
+                // Match KD's Alt+wheel vertical pan, while keeping the
+                // Reference Y range independent. Both plots share X only.
+                double low=0, high=1;
+                frf_reference_y_range(low,high);
+                const double shift=(high-low)*(up ? -.1 : .1);
+                g.frf.reference_y_min=low+shift;
+                g.frf.reference_y_max=high+shift;
                 g.frf.reference_auto_y=false;
                 set_status(); invalidate_plot(); return 0;
             }
@@ -722,6 +756,13 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 SetCapture(hwnd);
                 return 0;
             }
+            if (lower_reference && g.frf.result.ok &&
+                prepare_plot_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp))) {
+                frf_reference_y_range(g.drag_y_lo,g.drag_y_hi);
+                g_dragging_reference_plot=true;
+                SetCapture(hwnd);
+                return 0;
+            }
             if (inside(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)) && g.frf.result.ok &&
                 prepare_plot_drag(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) { g.dragging = true; SetCapture(hwnd); }
             return 0;
@@ -733,6 +774,18 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.frf.reference_height_fraction=std::clamp(
                     static_cast<double>(full.bottom-GET_Y_LPARAM(lp))/available,.12,.55);
                 invalidate_plot();
+            } else if (g_dragging_reference_plot) {
+                double *lo, *hi, minb, maxb, minw;
+                if (!active_axis(lo,hi,minb,maxb,minw)) return 0;
+                const double x_shift=static_cast<double>(GET_X_LPARAM(lp)-g.drag_x)/(p.right-p.left)*(g.drag_hi-g.drag_lo);
+                *lo=g.drag_lo-x_shift; *hi=g.drag_hi-x_shift;
+                clamp_range(*lo,*hi,minb,maxb,minw);
+                sync_frf_frequency_limits();
+                const double y_shift=static_cast<double>(GET_Y_LPARAM(lp)-g.drag_y)/(reference.bottom-reference.top)*(g.drag_y_hi-g.drag_y_lo);
+                g.frf.reference_y_min=g.drag_y_lo+y_shift;
+                g.frf.reference_y_max=g.drag_y_hi+y_shift;
+                g.frf.reference_auto_y=false;
+                changed();
             } else if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
                 if (g.annotation_drag_reference_axis) {
                     double frequency=0, amplitude=0;
@@ -870,7 +923,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             [[fallthrough]];
         case WM_CANCELMODE:
             if (g.annotation_drag_kind!=App::AnnotationDragKind::None) finish_annotation_drag(false);
-            g.dragging = false; g.point_click_pending=false; g.point_click_reference_axis=false; g_dragging_reference_divider=false;
+            g.dragging = false; g_dragging_reference_plot=false; g.point_click_pending=false; g.point_click_reference_axis=false; g_dragging_reference_divider=false;
             if (GetCapture() == hwnd) ReleaseCapture();
             return 0;
         case WM_KEYDOWN:
@@ -889,6 +942,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     invalidate_plot(); return 0;
                 }
                 g.dragging = false;
+                g_dragging_reference_plot = false;
                 g.point_click_pending = false;
                 g.point_click_reference_axis = false;
                 g_dragging_reference_divider = false;

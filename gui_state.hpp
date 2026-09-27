@@ -83,6 +83,7 @@ struct FrfState {
     bool show_reference_amplitude = true;
     double reference_height_fraction = .25;
     bool reference_auto_y = true;
+    double reference_y_min = 0.0;
     double reference_y_max = 1.0;
     // Display-only logarithmic smoothing band; 0 leaves the curve unsmoothed.
     double display_smoothing_octaves = 1.0 / 12.0;
