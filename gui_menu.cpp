@@ -264,7 +264,7 @@ void sync_menu() {
     chk(IDM_ADD_MARKER, g.pending_marker);
     chk(IDM_ADD_VLINE, g.pending_line == 1);
     chk(IDM_ADD_HLINE, g.pending_line == 2);
-    chk(IDC_AUTOY, g.mode == AnalysisMode::FRF ? g.frf.auto_y : g.auto_y);
+    chk(IDC_AUTOY, g.mode == AnalysisMode::FRF ? (g.frf.auto_y && g.frf.reference_auto_y) : g.auto_y);
     chk(IDM_THEME, g_theme == &kDarkTheme);
     chk(IDM_LANG_RU, g_str == &kRu);
     chk(IDM_LANG_EN, g_str == &kEn);

@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.16.3
+
+### Исправлено
+
+- В АЧХ кнопка **Автомасштабирование** теперь возвращает автоматические
+  Y-диапазоны одновременно для КД и средней опоры. Если вручную изменена
+  только шкала опоры, кнопка больше не переводит её в ручной режим повторно.
+- Перетаскивание нижнего графика средней опоры изменяет только его собственную
+  шкалу Y. Общая с КД ось частоты X не смещается даже при диагональном движении
+  мыши.
+- Состояние кнопки и пункта меню автомасштаба в АЧХ учитывает обе вертикальные
+  шкалы, поэтому не показывает Auto, когда одна из них уже изменена вручную.
+
+### Fixed
+
+- In FRF, **Auto-scale** now restores automatic Y ranges for both KD and the
+  averaged Reference. If only the Reference scale was changed manually, the
+  control no longer switches it back to manual mode.
+- Dragging the lower averaged-Reference graph changes only its own Y scale.
+  The frequency X axis shared with KD does not move, even during a diagonal
+  drag.
+- The FRF Auto-scale button and menu state now account for both vertical
+  scales, so Auto is not shown while either scale has been adjusted manually.
+
 ## v0.16.2
 
 ### Новый функционал

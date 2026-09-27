@@ -297,8 +297,18 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 case IDC_AUTOY:
                     if (g.mode == AnalysisMode::FRF) {
-                        frf_y_range(g.frf.y_min, g.frf.y_max);
-                        g.frf.auto_y = !g.frf.auto_y;
+                        // A manually changed lower Reference scale must make
+                        // this control restore Auto, even when KD stayed Auto.
+                        const bool enable_auto=!g.frf.auto_y || !g.frf.reference_auto_y;
+                        if (enable_auto) {
+                            g.frf.auto_y=true;
+                            g.frf.reference_auto_y=true;
+                        } else {
+                            frf_y_range(g.frf.y_min, g.frf.y_max);
+                            frf_reference_y_range(g.frf.reference_y_min, g.frf.reference_y_max);
+                            g.frf.auto_y=false;
+                            g.frf.reference_auto_y=false;
+                        }
                         sync_menu(); set_status(); InvalidateRect(hwnd, nullptr, TRUE); return 0;
                     }
                     g.auto_y = !g.auto_y;

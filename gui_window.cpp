@@ -379,7 +379,7 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             } else if (btn == g.measure) {
                 active = g.measure_mode;
             } else if (btn == g.autoy) {
-                active = g.mode == AnalysisMode::FRF ? g.frf.auto_y : g.auto_y;
+                active = g.mode == AnalysisMode::FRF ? (g.frf.auto_y && g.frf.reference_auto_y) : g.auto_y;
             } else if (btn == g.mode_time) {
                 active = (g.mode == AnalysisMode::Time);
             } else if (btn == g.mode_frf) {

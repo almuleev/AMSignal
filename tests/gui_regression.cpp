@@ -717,16 +717,29 @@ void frf_integration() {
         const RECT reference_chart=frf_reference_plot_rect(chart);
         const int reference_x=(reference_chart.left+reference_chart.right)/2;
         const int reference_y=(reference_chart.top+reference_chart.bottom)/2;
+        const double frequency_start_before_reference_drag=g.frf.frequency_start;
+        const double frequency_end_before_reference_drag=g.frf.frequency_end;
+        const double log_start_before_reference_drag=g.frf.log_start;
+        const double log_end_before_reference_drag=g.frf.log_end;
         double reference_before_low=0, reference_before_high=0;
         frf_reference_y_range(reference_before_low,reference_before_high);
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(reference_x,reference_y));
-        handle_frf_input(g.main,WM_MOUSEMOVE,0,MAKELPARAM(reference_x,reference_y+12));
-        handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(reference_x,reference_y+12));
+        handle_frf_input(g.main,WM_MOUSEMOVE,0,MAKELPARAM(reference_x+20,reference_y+12));
+        handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(reference_x+20,reference_y+12));
         double reference_after_low=0, reference_after_high=0;
         frf_reference_y_range(reference_after_low,reference_after_high);
         require(!g.frf.reference_auto_y && reference_after_low>reference_before_low &&
                 std::fabs((reference_after_high-reference_after_low)-(reference_before_high-reference_before_low))<1e-9,
                 "dragging averaged Reference pans only its vertical range");
+        require(g.frf.frequency_start==frequency_start_before_reference_drag &&
+                g.frf.frequency_end==frequency_end_before_reference_drag &&
+                g.frf.log_start==log_start_before_reference_drag &&
+                g.frf.log_end==log_end_before_reference_drag,
+                "dragging averaged Reference never changes the shared frequency view");
+        g.frf.auto_y=true;
+        WndProc(g.main,WM_COMMAND,IDC_AUTOY,0);
+        require(g.frf.auto_y && g.frf.reference_auto_y,
+                "FRF Auto-scale restores both automatic Y ranges after manual Reference navigation");
         WndProc(g.main,WM_COMMAND,IDM_ADD_MARKER,0);
         require(g.pending_marker,"FRF marker command remains armed in the rendered window");
         handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(point_x,point_y));

@@ -45,7 +45,7 @@ void refresh_active_document_ui() {
     refresh_open_document_selector();
     if (g.autoy) {
         SendMessageW(g.autoy, BM_SETCHECK,
-                     (g.mode == AnalysisMode::FRF ? g.frf.auto_y : g.auto_y) ? BST_CHECKED : BST_UNCHECKED, 0);
+                     (g.mode == AnalysisMode::FRF ? (g.frf.auto_y && g.frf.reference_auto_y) : g.auto_y) ? BST_CHECKED : BST_UNCHECKED, 0);
     }
     rebuild_checks();
     refresh_side_panel_controls();
