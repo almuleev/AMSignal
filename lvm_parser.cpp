@@ -85,9 +85,10 @@ bool is_axis_label(const std::string& text) {
     return text == "Time" || text == "X_Value" || text == "X" || text == "Comment";
 }
 
-std::string sanitize_channel_label(const std::string& raw, std::size_t fallback_index) {
+std::string sanitize_channel_label(const std::string& raw, std::size_t fallback_index, bool& generated) {
     std::string label = strip(raw);
     if (label.empty()) {
+        generated = true;
         return "Channel_" + std::to_string(fallback_index + 1);
     }
     const auto bracket = label.find('[');
@@ -101,8 +102,10 @@ std::string sanitize_channel_label(const std::string& raw, std::size_t fallback_
         if (!prefix.empty()) label = prefix;
     }
     if (label.empty() || is_axis_label(label)) {
+        generated = true;
         return "Channel_" + std::to_string(fallback_index + 1);
     }
+    generated = false;
     return label;
 }
 
@@ -744,10 +747,13 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
     std::vector<double>& time_col = columns[0];
     std::vector<std::vector<double>> kept_channels;
     std::vector<std::string> kept_names;
+    std::vector<char> kept_generated_names;
     for (std::size_t i = 1; i < columns.size(); ++i) {
         if (i < column_has_value.size() && column_has_value[i]) {
             const std::string raw_label = (i < column_labels.size()) ? column_labels[i] : "";
-            kept_names.push_back(sanitize_channel_label(raw_label, kept_channels.size()));
+            bool generated = false;
+            kept_names.push_back(sanitize_channel_label(raw_label, kept_channels.size(), generated));
+            kept_generated_names.push_back(generated ? 1 : 0);
             kept_channels.push_back(std::move(columns[i]));
         }
     }
@@ -772,6 +778,7 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         }
     }
     ds.names = std::move(kept_names);
+    ds.generated_names = std::move(kept_generated_names);
     ds.frequency_axis = is_frequency_data(column_labels, ds.export_comments);
     if (ds.frequency_axis) {
         for (std::size_t i = 0; i < ds.time.size(); ++i) {
@@ -816,6 +823,7 @@ std::vector<std::string> drop_duplicate_time_channels(Dataset& ds,
     std::vector<std::string> dropped;
     std::vector<std::vector<double>> kept_channels;
     std::vector<std::string> kept_names;
+    std::vector<char> kept_generated_names;
 
     std::vector<std::size_t> keep;
     for (std::size_t c = 0; c < ds.channels.size(); ++c) {
@@ -840,12 +848,17 @@ std::vector<std::string> drop_duplicate_time_channels(Dataset& ds,
 
     if (dropped.empty()) return dropped;
     for (std::size_t c : keep) {
-        kept_names.push_back(c < ds.names.size() ? std::move(ds.names[c]) : "Channel_" + std::to_string(c + 1));
+        const bool generated = c < ds.generated_names.size() && ds.generated_names[c];
+        kept_names.push_back(generated ? "Channel_" + std::to_string(kept_names.size() + 1)
+                                       : c < ds.names.size() ? std::move(ds.names[c])
+                                                             : "Channel_" + std::to_string(kept_names.size() + 1));
+        kept_generated_names.push_back(generated ? 1 : 0);
         kept_channels.push_back(std::move(ds.channels[c]));
     }
 
     ds.channels = std::move(kept_channels);
     ds.names = std::move(kept_names);
+    ds.generated_names = std::move(kept_generated_names);
     return dropped;
 }
 

@@ -61,6 +61,7 @@ struct Dataset {
     std::vector<double> time;                  // first column (X / time)
     std::vector<double> raw_time;              // original first column before any normalization
     std::vector<std::string> names;            // channel names, e.g. "Channel_1"
+    std::vector<char> generated_names;          // names assigned for missing/axis labels
     std::vector<std::vector<double>> channels; // one vector per channel, aligned with time
     std::vector<std::string> export_comments;  // optional `# ...` metadata from exported files
     ParseStats stats;

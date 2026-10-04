@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.16.5
+
+### Исправлено
+
+- После удаления повторяющихся столбцов времени автоматически выданные имена
+  каналов `Channel_N` нумеруются подряд в порядке оставшихся каналов. Имена,
+  явно заданные в исходном файле, сохраняются без изменений.
+- Добавлена регрессионная проверка чередующихся столбцов времени и каналов,
+  включая случай с явно заданными именами.
+
+### Fixed
+
+- After duplicate time columns are removed, automatically generated `Channel_N`
+  names are numbered consecutively in the order of the remaining channels.
+  Names explicitly provided by the source file remain unchanged.
+- Added regression coverage for interleaved time and signal columns, including
+  explicitly named channels.
+
 ## v0.16.4
 
 ### Исправлено

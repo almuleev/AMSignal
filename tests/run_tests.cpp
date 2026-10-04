@@ -185,7 +185,32 @@ void test_drop_duplicate_time() {
     const std::vector<double> raw_time = ds.time;
     const auto dropped = lvm::drop_duplicate_time_channels(ds, raw_time);
     check(dropped.size() == 1 && dropped[0] == "Channel_1", "Channel_1 dropped as time dup");
-    check(ds.channel_count() == 1 && ds.names[0] == "Channel_2", "Channel_2 remains");
+    check(ds.channel_count() == 1 && ds.names[0] == "Channel_1", "generated name follows remaining channel order");
+}
+
+void test_generated_names_after_interleaved_time_columns() {
+    std::printf("test_generated_names_after_interleaved_time_columns\n");
+    const TempFile unnamed("interleaved_unnamed.lvm",
+        "***End_of_Header***\n"
+        "X_Value\t\tX_Value\t\tX_Value\t\n"
+        "0\t10\t0\t20\t0\t30\n"
+        "1\t11\t1\t21\t1\t31\n");
+    auto ds = lvm::read_lvm_file(unnamed.path);
+    check(ds.ok && ds.channel_count() == 5, "interleaved unnamed columns parse");
+    lvm::drop_duplicate_time_channels(ds, ds.raw_time);
+    check(ds.names == std::vector<std::string>{"Channel_1", "Channel_2", "Channel_3"},
+          "generated names are sequential after duplicate time columns are removed");
+
+    const TempFile named("interleaved_explicit.lvm",
+        "***End_of_Header***\n"
+        "X_Value\tChannel_1\tX_Value\tChannel_3\n"
+        "0\t10\t0\t20\n"
+        "1\t11\t1\t21\n");
+    ds = lvm::read_lvm_file(named.path);
+    check(ds.ok, "explicit channel names parse");
+    lvm::drop_duplicate_time_channels(ds, ds.raw_time);
+    check(ds.names == std::vector<std::string>{"Channel_1", "Channel_3"},
+          "explicit channel names are preserved");
 }
 
 void test_interleaved_channel_names() {
@@ -908,6 +933,7 @@ int main(int argc, char** argv) {
     test_make_monotonic_backward_jump();
     test_drop_duplicate_time();
     test_interleaved_channel_names();
+    test_generated_names_after_interleaved_time_columns();
     test_reference_test_lvm();
     test_fft_peak();
     test_fft_nyquist_amplitude();
