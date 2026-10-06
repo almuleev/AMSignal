@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.16.6
+
+### Производительность
+
+- Проверки отмены radix-2 вынесены из внутреннего арифметического цикла
+  между блоками не более 16384 butterfly без перезапуска рекуррентного twiddle.
+- Bluestein переиспользует один завершённый план chirp и FFT ядра свёртки
+  на поток, до 64 MiB. При смене длины старый план освобождается; отменённый
+  план не публикуется, большие планы остаются временными.
+- На test1.lvm (8 каналов, 337132 отсчёта; GCC 14.2.0, `-O2`, Ryzen 5 5600X)
+  медиана полного FFT снизилась с 4103,07 до 938,38 мс, а H1/coherence
+  одной пары при L=2048, Hann, 50% overlap и remove_mean=false —
+  со 133,81 до 40,91 мс. Это результаты одной серии, не универсальная гарантия.
+- Длина записи, частотная сетка и настройки анализа сохранены. Проверенные
+  FFT, комплексный H1, coherence и маски совпали с прежним ядром побайтово.
+- Добавлены регрессии границ блоков, холодных/повторных/заменённых планов,
+  отмены и независимых кэшей потоков. Прошли 314 проверок ядра и 333 GUI-проверки.
+
+### Performance
+
+- Radix-2 cancellation checks now run between chunks of at most 16384
+  butterflies, outside the arithmetic loop, without restarting recurrent twiddles.
+- Bluestein reuses one completed chirp/convolution-kernel FFT plan per thread,
+  up to 64 MiB. Changing the length releases the previous plan; cancelled plans
+  are not published, and larger plans remain temporary.
+- On test1.lvm (8 channels, 337132 samples; GCC 14.2.0, `-O2`, Ryzen 5 5600X),
+  median full-record FFT time decreased from 4103.07 to 938.38 ms. Single-pair
+  H1/coherence with L=2048, Hann, 50% overlap and remove_mean=false decreased
+  from 133.81 to 40.91 ms. These are measurements from one series, not a universal guarantee.
+- Record length, frequency grid and analysis settings are preserved. Tested FFT,
+  complex H1, coherence and masks match the previous kernel byte for byte.
+- Added regression coverage for chunk boundaries, cold/warm/replaced plans,
+  cancellation and independent thread caches. All 314 core and 333 GUI checks passed.
+
 ## v0.16.5
 
 ### Исправлено

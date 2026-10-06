@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "analysis.hpp"
+#include "fft.hpp"
 #include "frf_analysis.hpp"
 #include "frf_worker.hpp"
 #include <chrono>
@@ -911,6 +912,61 @@ void test_frf() {
     check(!worker.take_result(),"cancelled FRF result is not published");
 }
 
+void test_fft_chunks_and_plans() {
+    std::printf("test_fft_chunks_and_plans\n");
+    constexpr double pi = 3.14159265358979323846;
+    // Odd/even lengths, a warm plan, then eviction and a new input at the
+    // previous length: compare complex values with an independent direct DFT.
+    int pass = 0;
+    for (std::size_t n : {15u, 30u, 30u, 29u, 15u, 32u}) {
+        std::vector<std::complex<double>> input(n);
+        const double scale = 1 + .1*pass++;
+        for (std::size_t j = 0; j < n; ++j) input[j] = {scale*std::sin(.7*j), std::cos(.3*j)};
+        const auto result = lvm::dft(input);
+        double error = 0;
+        for (std::size_t k = 0; k < n; ++k) {
+            std::complex<double> expected{};
+            for (std::size_t j = 0; j < n; ++j) {
+                const double angle = -2*pi*k*j/n;
+                expected += input[j] * std::complex<double>(std::cos(angle), std::sin(angle));
+            }
+            error = std::max(error, std::abs(result[k]-expected));
+        }
+        check(error < 1e-10, "cold/warm/replaced plan agrees with complex direct DFT");
+    }
+    for (std::size_t n : {8192u, 32768u, 131072u}) {
+        std::vector<std::complex<double>> data(n);
+        for (std::size_t j = 0; j < n; ++j) data[j] = {std::sin(.01*j), std::cos(.07*j)};
+        const auto original = data;
+        lvm::fft_radix2(data, false);
+        lvm::fft_radix2(data, true);
+        double error = 0;
+        for (std::size_t j = 0; j < n; ++j) error = std::max(error,std::abs(data[j]-original[j]));
+        check(error < 1e-9, "chunk boundaries preserve forward/inverse FFT normalisation");
+    }
+    std::atomic<bool> cancel{true};
+    for (std::size_t n : {16u, 15u, 29u}) {
+        std::vector<std::complex<double>> input(n, {1, 2});
+        bool stopped = false;
+        try { (void)lvm::dft(input, &cancel); } catch (const std::runtime_error&) { stopped = true; }
+        check(stopped, "cancelled radix-2/cached/new plan stops before publishing output");
+        const auto result = lvm::dft(input);
+        check(std::abs(result.front()-std::complex<double>(n,2*n)) < 1e-10,
+              "a cancelled call cannot poison the next plan or result");
+    }
+    // Different inputs/lengths on independent threads must not share a plan.
+    std::vector<std::thread> threads;
+    std::vector<unsigned char> correct(3,0);
+    for (std::size_t i = 0; i < correct.size(); ++i) threads.emplace_back([&,i] {
+        const std::size_t n = 15+2*i;
+        std::vector<std::complex<double>> input(n, {double(i+1), -1});
+        const auto first = lvm::dft(input), second = lvm::dft(input);
+        correct[i] = first == second && std::abs(first.front()-std::complex<double>(n*(i+1),-double(n))) < 1e-10;
+    });
+    for (auto& thread : threads) thread.join();
+    check(std::all_of(correct.begin(),correct.end(),[](auto v){return v!=0;}), "plan caches are independent across threads");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -922,6 +978,7 @@ int main(int argc, char** argv) {
     }
     test_data_integrity_regressions();
     test_spectrum_integrity_regressions();
+    test_fft_chunks_and_plans();
     test_fft_irregular_timestamps();
     test_fft_gap_regressions();
     test_minmax_and_spectrum_import();
