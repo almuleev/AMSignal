@@ -54,7 +54,7 @@ bool read_segment_length() {
     double value=0;
     if (!parse_wide_double_text(text,value) || !std::isfinite(value) || value<0 || value>100000000 ||
         std::floor(value)!=value || (value!=0 && (value<4 || std::fmod(value,2)!=0))) {
-        MessageBoxW(g.frf_panel, tr(L"Use 0 (Auto), or an even L >= 4.", L"Укажите 0 (Auto) или чётное L ≥ 4."), L"FRF", MB_OK);
+        MessageBoxW(g.frf_panel, tr(L"Use 0 (Auto), or an even L >= 4.", L"Укажите 0 (Авто) или чётное L ≥ 4."), L"FRF", MB_OK);
         return false;
     }
     g.frf.options.segment_length=static_cast<std::size_t>(value);
@@ -109,7 +109,7 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
             }
             SendMessageW(control(Estimator), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"H1 (Welch)"));
-            SendMessageW(control(Estimator), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Direct Y/X"));
+            SendMessageW(control(Estimator), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(tr(L"Direct Y/X", L"Прямой Y/X")));
             const wchar_t* const smoothing_en[] = {L"Off",L"1/24 octave",L"1/12 octave",L"1/6 octave",L"1/3 octave"};
             const wchar_t* const smoothing_ru[] = {L"Без сглаживания",L"1/24 октавы",L"1/12 октавы",L"1/6 октавы",L"1/3 октавы"};
             const wchar_t* const* smoothing_text = g_str == &kEn ? smoothing_en : smoothing_ru;
@@ -619,22 +619,22 @@ std::wstring frf_status_text() {
     if (!g.frf.result.ok) return gui::frf_error_text(g.frf.result.error);
     wchar_t buf[256]{};
     const auto& r = g.frf.result.common();
-    swprintf(buf, 256, L"FRF: %.6g–%.6g Hz | N=%zu | Fs=%.6g Hz | Hann | %ls",
+    swprintf(buf, 256, tr(L"FRF: %.6g–%.6g Hz | N=%zu | Fs=%.6g Hz | Hann | %ls", L"АЧХ: %.6g–%.6g Гц | N=%zu | Fs=%.6g Гц | Hann | %ls"),
         g.frf.frequency_start, g.frf.frequency_end,
         r.sample_count, 1.0 / r.sample_dt,
         g.frf.apply_processing ? tr(L"Processed", L"С обработкой") : tr(L"Raw", L"Исходные"));
     std::wstring text = buf;
     if (r.gaps_ignored) text = tr(L"Warning: Gaps ignored | ",
-        L"Внимание: пропуски проигнорированы (Gaps ignored) | ") + text;
+        L"Внимание: пропуски времени не учтены | ") + text;
     wchar_t method[160]{};
-    swprintf(method,160,L" | %ls L=%zu K=%zu Δf=%.6g Hz overlap=%.0f%%",
-        r.options.estimator==lvm::FrfEstimator::H1 ? L"H1" : L"Direct",
+    swprintf(method,160,tr(L" | %ls L=%zu K=%zu Δf=%.6g Hz overlap=%.0f%%", L" | %ls L=%zu K=%zu Δf=%.6g Гц перекрытие=%.0f%%"),
+        r.options.estimator==lvm::FrfEstimator::H1 ? L"H1" : tr(L"Direct", L"Прямой"),
         r.segment_length,r.averages,1.0/(r.sample_dt*r.segment_length),
         100.0*r.overlap_samples/r.segment_length);
     text+=method;
     for (std::size_t i=0;i<g.frf.result.responses.size();++i)
         if (!g.frf.result.responses[i].ok) text+=L" | "+g.frf.output_names[i]+L": "+gui::frf_error_text(g.frf.result.responses[i].error);
-    if (r.averages<2) text+=tr(L" | Coherence unavailable: K < 2",L" | Coherence недоступна: K < 2");
+    if (r.averages<2) text+=tr(L" | Coherence unavailable: K < 2",L" | Когерентность недоступна: K < 2");
     return text;
 }
 
@@ -661,28 +661,28 @@ void layout_frf_panel() {
 
 void refresh_frf_controls(bool repopulate) {
     if (!g.frf_panel) return;
-    label(InputLabel, tr(L"Supports / Reference", L"Опоры"));
+    label(InputLabel, tr(L"Reference channels", L"Опоры"));
     label(OutputLabel, tr(L"Responses", L"Отклики"));
     label(Processing, tr(L"Apply channel processing", L"Применять обработку каналов"));
-    label(LowLabel, L"F min, Hz"); label(HighLabel, L"F max, Hz");
+    label(LowLabel, tr(L"Min frequency, Hz", L"Мин. частота, Гц")); label(HighLabel, tr(L"Max frequency, Hz", L"Макс. частота, Гц"));
     label(ApplyRange, tr(L"Apply frequency range", L"Применить диапазон частот"));
-    label(EstimatorLabel, tr(L"Estimator",L"Метод")); label(LengthLabel,L"L (0 = Auto)");
+    label(EstimatorLabel, tr(L"Estimator",L"Метод")); label(LengthLabel,tr(L"L (0 = Auto)", L"L (0 = Авто)"));
     label(SmoothingLabel, tr(L"Smoothing",L"Сглаживание"));
     label(AxisScaleLabel, tr(L"Frequency axis",L"Ось частоты"));
-    label(Reference, tr(L"Show average Reference",L"Показывать среднюю опору"));
+    label(Reference, tr(L"Show mean reference",L"Показывать среднюю опору"));
     const auto& r=g.frf.result.common();
     wchar_t details[192]{};
     if (r.segment_length && !g.frf.pending) {
-        swprintf(details,192,L"%ls · Hann · L=%zu · K=%zu\nΔf=%.6g Hz · overlap=%.0f%% (%zu)",
-            r.options.estimator==lvm::FrfEstimator::H1 ? L"H1" : L"Direct",
+        swprintf(details,192,tr(L"%ls · Hann · L=%zu · K=%zu\nΔf=%.6g Hz · overlap=%.0f%% (%zu)", L"%ls · Hann · L=%zu · K=%zu\nΔf=%.6g Гц · перекрытие=%.0f%% (%zu)"),
+            r.options.estimator==lvm::FrfEstimator::H1 ? L"H1" : tr(L"Direct", L"Прямой"),
             r.segment_length,r.averages,1.0/(r.sample_dt*r.segment_length),
             100.0*r.overlap_samples/r.segment_length,r.overlap_samples);
         label(Method,details);
     } else label(Method,g.frf.pending ? tr(L"Calculating…",L"Вычисление…") : L"Hann · L/K/Δf: —");
     EnableWindow(control(Length),g.frf.options.estimator==lvm::FrfEstimator::H1);
     label(Calculate, tr(L"Calculate", L"Рассчитать")); label(Csv, L"CSV"); label(Png, L"PNG");
-    label(Hint, tr(L"KD = Response / average Reference (not dB).\nA filter attenuates beyond cutoff.\nEqual processing can cancel in KD.",
-                   L"КД = отклик / средняя опора (без dB).\nФильтр ослабляет частоты за срезом.\nОдинаковая обработка может сократиться."));
+    label(Hint, tr(L"|H|: response relative to mean reference.\nLinear magnitude, not dB.\nEqual filters can cancel in |H|.",
+                   L"|H|: отклик относительно средней опоры.\nМодуль в линейной шкале, не дБ.\nОдинаковые фильтры могут сократиться."));
     if (repopulate) {
         SendMessageW(control(Estimator),CB_SETCURSEL,g.frf.options.estimator==lvm::FrfEstimator::H1 ? 0 : 1,0);
         SendMessageW(control(Smoothing),CB_SETCURSEL,smoothing_choice(g.frf.display_smoothing_octaves),0);
@@ -690,7 +690,7 @@ void refresh_frf_controls(bool repopulate) {
         label(Length,std::to_wstring(g.frf.options.segment_length).c_str());
     }
     const auto button_text=[&](const std::vector<int>& channels,bool reference) {
-        if (channels.empty()) return std::wstring(reference ? tr(L"Choose supports…",L"Выбрать опоры…") :
+        if (channels.empty()) return std::wstring(reference ? tr(L"Choose reference channels…",L"Выбрать опоры…") :
             tr(L"Choose responses…",L"Выбрать отклики…"));
         std::wstring names;
         for (int channel:channels) {
@@ -710,7 +710,7 @@ void refresh_frf_controls(bool repopulate) {
     };
     label(Input,button_text(g.frf.inputs,true).c_str());
     label(Output,button_text(g.frf.outputs,false).c_str());
-    label(InputSummary,g.frf.inputs.size()>1 ? (tr(L"AVG of ",L"Среднее из ")+std::to_wstring(g.frf.inputs.size())+
+    label(InputSummary,g.frf.inputs.size()>1 ? (tr(L"Mean of ",L"Среднее из ")+std::to_wstring(g.frf.inputs.size())+
         tr(L" channels",L" каналов")).c_str() : L"");
     if (g.frf.view_initialized) {
         label(Low, format_edit_number(g.frf.frequency_start).c_str());

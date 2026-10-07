@@ -203,7 +203,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     std::wstring error;
                     std::vector<FormulaToken> compiled;
                     if (!read_formula_edit(g.side_global_formula_edit, formula, compiled, error)) {
-                        std::wstring message = (g_str == &kEn) ? L"Invalid global coefficient:\n" : L"Некорректный общий коэффициент:\n";
+                        std::wstring message = (g_str == &kEn) ? L"Invalid global formula:\n" : L"Некорректная общая формула:\n";
                         message += error;
                         MessageBoxW(hwnd, message.c_str(), settings_window_title(), MB_OK | MB_ICONWARNING);
                         return 0;

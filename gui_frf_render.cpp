@@ -214,7 +214,7 @@ void draw_frf(HDC dc, const RECT& p) {
     if (!g.frf.result.ok || g.frf.pending) {
         RECT r = p; InflateRect(&r, -24, -24);
         std::wstring text = frf_status_text();
-        if (text.empty()) text = g_str == &kEn ? L"Select Supports and Responses, then Calculate." : L"Выберите опоры и отклики и нажмите «Рассчитать».";
+        if (text.empty()) text = g_str == &kEn ? L"Select reference channels and responses, then Calculate." : L"Выберите опоры и отклики и нажмите «Рассчитать».";
         DrawTextW(dc, text.c_str(), -1, &r, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
         SelectObject(dc, previous_font); g.vvalid = false; return;
     }
@@ -436,7 +436,7 @@ void draw_frf(HDC dc, const RECT& p) {
     RestoreDC(dc,reference_saved);
 
     RECT reference_title{reference_plot.left,coefficient_plot.bottom+4,reference_plot.right,reference_plot.top-3};
-    const std::wstring reference_text=(g_str==&kEn ? L"Average Reference amplitude: " : L"Ср. опора: ")+g.frf.input_name;
+    const std::wstring reference_text=(g_str==&kEn ? L"Mean reference amplitude: " : L"Ср. опора: ")+g.frf.input_name;
     SetTextColor(dc,g_theme->axis_text);
     if (g.frf.show_reference_amplitude) DrawTextW(dc,reference_text.c_str(),-1,&reference_title,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     // A small familiar grip keeps the splitter discoverable without competing
@@ -519,10 +519,10 @@ void draw_frf(HDC dc, const RECT& p) {
                     wchar_t label[160]{};
                     std::wstring text;
                     if (group.display.number) { swprintf(label,160,L"#%zu ",i+1); text+=label; }
-                    if (group.display.x) { swprintf(label,160,L"%ls=%.5g Hz ",
+                    if (group.display.x) { swprintf(label,160,g_str==&kEn ? L"%ls=%.5g Hz " : L"%ls=%.5g Гц ",
                         axis_label_for(AnalysisMode::FRF,true).c_str(),group.points[i].first); text+=label; }
-                    if (group.display.y) { swprintf(label,160,L"%ls=%.5g",
-                        vertical_axis_unit().c_str(),group.points[i].second); text+=label; }
+                    if (group.display.y) { swprintf(label,160,L"A=%.5g %ls",
+                        group.points[i].second,vertical_axis_unit().c_str()); text+=label; }
                     if (!text.empty()) {
                         SetTextColor(dc,group.color); SetTextAlign(dc,TA_LEFT|TA_BOTTOM);
                         SIZE size{}; GetTextExtentPoint32W(dc,text.c_str(),static_cast<int>(text.size()),&size);
@@ -533,6 +533,16 @@ void draw_frf(HDC dc, const RECT& p) {
                         TextOutW(dc,x+8,y-2,text.c_str(),static_cast<int>(text.size()));
                     }
                 }
+            }
+            for (std::size_t i=1;i<group.points.size();++i) {
+                const auto& previous=group.points[i-1];
+                const auto& current=group.points[i];
+                const auto text=point_difference_text(group,current.first-previous.first,current.second-previous.second);
+                if (text.empty()) continue;
+                SetTextColor(dc,group.color); SetTextAlign(dc,TA_CENTER|TA_BOTTOM);
+                TextOutW(dc,(point_x(previous.first)+point_x(current.first))/2,
+                    (point_y(previous.second)+point_y(current.second))/2-6,
+                    text.c_str(),static_cast<int>(text.size()));
             }
             SelectObject(dc,old_point_pen);
             DeleteObject(point_pen);
@@ -600,10 +610,10 @@ void draw_frf(HDC dc, const RECT& p) {
         DeleteObject(vertical_font);
     };
     draw_vertical_left_axis_label(coefficient_plot,
-                                  g_str==&kEn ? L"KD |H| (dimensionless)" : L"КД |H| (б/р)");
+                                  g_str==&kEn ? L"FRF magnitude |H|" : L"АЧХ |H|");
     if (g.frf.show_reference_amplitude) {
         draw_vertical_left_axis_label(reference_plot,
-            (g_str==&kEn ? L"AVG Ref. amplitude, " : L"Ср. опора, ") + vertical_axis_unit());
+            (g_str==&kEn ? L"Mean ref. amplitude, " : L"Ср. опора, ") + vertical_axis_unit());
     }
     // The user coordinate names stay separate from the physical KD/Reference
     // captions above, just as they do in Time and FFT.
@@ -842,15 +852,15 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 wchar_t text[160]{};
                 if (nearest<g.frf.result.responses.size()) {
                     const auto& result=g.frf.result.responses[nearest];
-                    const wchar_t* suffix=g.frf.display_smoothing_octaves>0 ? L" (сгл.)" : L"";
-                    swprintf(text,160,L" | f = %.6g Hz | КД%s = %.6g",fs[k],suffix,values[nearest][k]);
+                    const wchar_t* suffix=g.frf.display_smoothing_octaves>0 ? (g_str==&kEn ? L" (smoothed)" : L" (сгл.)") : L"";
+                    swprintf(text,160,g_str==&kEn ? L" | f = %.6g Hz | Magnitude%s = %.6g" : L" | f = %.6g Гц | |H|%s = %.6g",fs[k],suffix,values[nearest][k]);
                     g.status_detail_text=frf_curve_label(nearest)+text;
                     if (k<result.coherence_valid.size() && result.coherence_valid[k]) {
-                        swprintf(text,160,L" | Coherence = %.4f",result.coherence[k]);
+                        swprintf(text,160,g_str==&kEn ? L" | Coherence = %.4f" : L" | Когерентность = %.4f",result.coherence[k]);
                         g.status_detail_text+=text;
-                    } else g.status_detail_text+=L" | Coherence: —";
+                    } else g.status_detail_text+=(g_str==&kEn ? L" | Coherence: —" : L" | Когерентность: —");
                 } else {
-                    swprintf(text,160,L"f = %.6g Hz | КД: —",fs[k]);
+                    swprintf(text,160,g_str==&kEn ? L"f = %.6g Hz | Magnitude: —" : L"f = %.6g Гц | |H|: —",fs[k]);
                     g.status_detail_text=text;
                 }
                 RECT status{0, p.bottom+kAxisBottom, 0, 0};

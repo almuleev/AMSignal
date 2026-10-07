@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.16.8
+
+### Интерфейс и измерительные подписи
+
+- Согласованы русские и английские названия: `Auto scale`, `Spectrum (FFT)` /
+  `Спектр (БПФ)`, `Filter family` / `Семейство фильтра`, `ФНЧ`/`ФВЧ`,
+  общая формула для всех каналов и отдельное сглаживание линий.
+- В FRF входная роль называется `Reference channels`; подсказка описывает
+  отклик относительно опоры. Ось модуля обозначена `FRF magnitude |H|` /
+  `АЧХ |H|` без безусловного утверждения о безразмерности.
+- Локализованы границы частоты, прямой метод, автоматическая длина сегмента,
+  перекрытие, когерентность и показания под курсором. Убраны русские `КД`,
+  `ΔКД` и `(сгл.)` из английских показаний; стандартное `ед.` выводится как `units`.
+- Обратная разность частот `1/Δf` теперь имеет единицу секунды; `1/Δt`
+  сохраняет герцы. Подпись переключателя зависит от режима; при совпадении X
+  обратная разность на графике отображается как `—` вместо нуля.
+- Общий формат подписей разностей применяется к Time, FFT и обоим графикам
+  FRF. Нижний график средней опоры показывает `A` и `ΔA` с единицами амплитуды,
+  верхний — `Δ|H|`. Числовое расстояние координат явно обозначено
+  `d (условн.)` / `d (coord.)` и не является физическим замером.
+- Семейство фильтра вынесено на отдельную полноширинную строку панели.
+- Численное ядро FFT/FRF и формат сохранённых проектов не изменены.
+  Добавлены шесть проверок единиц и подписей: всего проходят 340 GUI-проверок.
+
+### Interface and measurement labels
+
+- Aligned Russian and English names: `Auto scale`, `Spectrum (FFT)` /
+  `Спектр (БПФ)`, `Filter family` / `Семейство фильтра`, Russian low-/high-pass
+  filter abbreviations, the global formula for all channels, and line smoothing.
+- FRF inputs are named `Reference channels`; the tooltip describes response
+  relative to reference. The magnitude axis reads `FRF magnitude |H|` /
+  `АЧХ |H|` without assuming every input/output ratio is dimensionless.
+- Localized frequency limits, the direct estimator, automatic segment length,
+  overlap, coherence, and cursor readouts. Removed Russian KD/difference/smoothing
+  labels from English readouts; the default amplitude unit is displayed as `units`.
+- Reciprocal frequency separation `1/Δf` now uses seconds; `1/Δt` retains
+  hertz. The toggle follows the current mode; equal X coordinates show `—`
+  instead of a zero reciprocal separation on the plot.
+- A shared difference formatter serves Time, FFT and both FRF plots. The mean
+  reference plot displays `A` and `ΔA` with amplitude units; the upper plot
+  displays `Δ|H|`. Numerical coordinate distance is explicitly labelled
+  `d (условн.)` / `d (coord.)` and is not a physical measurement.
+- The filter family selector has its own full-width row.
+- FFT/FRF numerical kernels and saved-project formats are unchanged.
+  Six new unit/label checks bring the passing GUI suite to 340 checks.
+
 ## v0.16.7
 
 ### Производительность

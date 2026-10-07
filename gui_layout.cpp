@@ -152,8 +152,9 @@ void layout() {
     place_scrolled(g.side_filter_mode_label, panel_x, fy + 2, 76, 20, filter_viewport_top, show_filter);
     place_scrolled(g.side_filter_mode, panel_x + 80, fy, max(84, content_w - 80), 26, filter_viewport_top, show_filter);
     fy += 32;
-    place_scrolled(g.side_filter_topology_label, panel_x, fy + 2, 76, 20, filter_viewport_top, show_filter);
-    place_scrolled(g.side_filter_topology, panel_x + 80, fy, max(84, content_w - 80), 26, filter_viewport_top, show_filter);
+    place_scrolled(g.side_filter_topology_label, panel_x, fy, content_w, 20, filter_viewport_top, show_filter);
+    fy += 22;
+    place_scrolled(g.side_filter_topology, panel_x, fy, content_w, 26, filter_viewport_top, show_filter);
     fy += 34;
     place_scrolled(g.side_filter_low_label, panel_x, fy, max(72, content_w - 92), 20, filter_viewport_top, show_filter);
     place_scrolled(g.side_filter_low_value, panel_x + max(72, content_w - 92) + 6, fy, 86, 20, filter_viewport_top, show_filter);

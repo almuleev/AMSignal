@@ -4,6 +4,7 @@
 namespace gui {
 
 enum class AnalysisMode;
+struct PointGroup;
 
 struct LegendItem { int channel; RECT rect; };
 
@@ -30,6 +31,10 @@ std::wstring axis_label_for(AnalysisMode mode, bool x_axis);
 
 // Localized label for amplitude scales; used by Time and FFT.
 std::wstring amplitude_axis_label();
+
+// Differences use the physical units of the group's axes. Coordinate distance
+// is explicitly arbitrary; unlike dx/dy, it is not a physical measurement.
+std::wstring point_difference_text(const PointGroup& group, double dx, double dy);
 
 void draw_legend(HDC dc, const RECT& p);
 

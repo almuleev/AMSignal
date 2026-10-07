@@ -332,8 +332,8 @@ const wchar_t* guide_prompt_title_text(bool vertical) {
 
 const wchar_t* guide_prompt_label_text(bool vertical) {
     if (g.mode == AnalysisMode::FRF) {
-        if (g_str == &kEn) return vertical ? L"Enter frequency, Hz:" : L"Enter linear KD = |H|:";
-        return vertical ? L"Введите частоту, Гц:" : L"Введите КД = |H| в натуральной величине:";
+        if (g_str == &kEn) return vertical ? L"Enter frequency, Hz:" : L"Enter linear FRF magnitude |H|:";
+        return vertical ? L"Введите частоту, Гц:" : L"Введите модуль АЧХ |H| в линейной шкале:";
     }
     if (g.mode == AnalysisMode::FFT) {
         if (g_str == &kEn) return vertical ? L"Enter frequency, Hz:" : L"Enter amplitude:";

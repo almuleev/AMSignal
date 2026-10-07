@@ -133,7 +133,8 @@ void draw_text(HDC dc, int x, int y, const wchar_t* s, UINT align) {
 }
 
 std::wstring vertical_axis_unit() {
-    return normalize_axis_label_text(g.axis_y_label, L"ед.");
+    const auto unit = normalize_axis_label_text(g.axis_y_label, L"ед.");
+    return g_str == &kEn && unit == L"ед." ? L"units" : unit;
 }
 
 std::wstring axis_label_for(AnalysisMode mode, bool x_axis) {
@@ -150,6 +151,42 @@ std::wstring axis_label_for(AnalysisMode mode, bool x_axis) {
 
 std::wstring amplitude_axis_label() {
     return (g_str == &kEn ? L"Amplitude, " : L"Амплитуда, ") + vertical_axis_unit();
+}
+
+std::wstring point_difference_text(const PointGroup& group, double dx, double dy) {
+    const bool frequency = group.mode != PointGroupMode::Time;
+    wchar_t text[128]{};
+    std::wstring label;
+    if (group.display.dx) {
+        swprintf(text,128,frequency ? L"Δf=%.5g" : L"Δt=%.5g",dx);
+        label += text;
+        label += frequency ? g_str->unit_hz : g_str->unit_sec;
+        label += L" ";
+    }
+    if (group.display.dy) {
+        const bool reference = group.mode == PointGroupMode::FRF && group.frf_reference_axis;
+        const wchar_t* format = reference ? L"ΔA=%.5g" :
+            (group.mode == PointGroupMode::FRF ? L"Δ|H|=%.5g" : L"Δy=%.5g");
+        swprintf(text,128,format,dy);
+        label += text;
+        if (reference) label += L" " + vertical_axis_unit();
+        label += L" ";
+    }
+    if (group.display.inv_dt) {
+        // Equal X positions have no finite reciprocal separation.
+        if (dx == 0) label += frequency ? L"1/Δf=— " : L"1/Δt=— ";
+        else {
+            swprintf(text,128,frequency ?
+                (g_str == &kEn ? L"1/Δf=%.5g s " : L"1/Δf=%.5g с ") : g_str->fmt_pt_invdt,1.0/dx);
+            label += text;
+            if (!frequency) label += L" ";
+        }
+    }
+    if (group.display.dist) {
+        swprintf(text,128,g_str->fmt_pt_dist,std::hypot(dx,dy));
+        label += text;
+    }
+    return label;
 }
 
 void draw_user_axis_names(HDC dc, const RECT& p, AnalysisMode mode) {
@@ -464,7 +501,7 @@ void draw_guides(HDC dc) {
             const int Y = my(gl.value);
             if (Y < p.top || Y > p.bottom) continue;
             MoveToEx(dc, p.left, Y, nullptr); LineTo(dc, p.right, Y);
-            if (g.mode==AnalysisMode::FRF) swprintf(b,48,L"КД=%.5g",gl.value);
+            if (g.mode==AnalysisMode::FRF) swprintf(b,48,L"|H|=%.5g",gl.value);
             else swprintf(b, 48, g_str->fmt_y, gl.value);
             SetTextAlign(dc, TA_LEFT | TA_BOTTOM);
             SIZE ts;
@@ -683,26 +720,7 @@ void draw_measure(HDC dc) {
             if (i >= 1) {
                 const double dx = group.points[i].first - group.points[i - 1].first;
                 const double dy = group.points[i].second - group.points[i - 1].second;
-                std::wstring dl;
-                if (group.display.dx) { swprintf(b, 96, g_str->fmt_pt_dx, dx); dl += b; dl += xunit; dl += L" "; }
-                if (group.display.dy) {
-                    if (g.mode==AnalysisMode::FRF) swprintf(b,96,L"ΔКД=%.5g",dy);
-                    else swprintf(b, 96, g_str->fmt_pt_dy, dy);
-                    dl += b;
-                }
-                if (group.display.inv_dt) {
-                    const double inv = (dx != 0.0) ? 1.0 / dx : 0.0;
-                    if ((g.mode == AnalysisMode::FFT) || (g.mode == AnalysisMode::FRF)) {
-                        swprintf(b, 96, g_str == &kEn ? L"1/Δf=%.5g Hz" : L"1/Δf=%.5g Гц", inv);
-                    } else {
-                        swprintf(b, 96, g_str->fmt_pt_invdt, inv);
-                    }
-                    dl += b;
-                    dl += L" ";
-                }
-                if (group.display.dist) {
-                    swprintf(b, 96, g_str->fmt_pt_dist, std::sqrt(dx * dx + dy * dy)); dl += b;
-                }
+                const std::wstring dl = point_difference_text(group, dx, dy);
                 if (!dl.empty()) {
                     const int mxp = (mx(group.points[i].first) + mx(group.points[i - 1].first)) / 2;
                     const int myp = (my(group.points[i].second) + my(group.points[i - 1].second)) / 2;

@@ -1,19 +1,20 @@
 // Text: native viewer implementation.
 #include "gui_text.hpp"
+#include "gui_state.hpp"
 
 namespace gui {
 
 const Strings kRu = {
     L"AMSignal",
-    L"Открыть", L"PNG", L"Сохранить как…", L"Старт", L"Стоп", L"Точки", L"Сброс", L"АвтоМасштаб",
+    L"Открыть", L"PNG", L"Сохранить как…", L"Старт", L"Стоп", L"Точки", L"Сброс", L"Автомасштаб",
     L"Время: %zu каналов, %zu отсчётов, %.6g–%.6g с", L"Спектр: %zu каналов, верхняя частота %.6g Гц | %.6g–%.6g Гц", L" | Масштаб Y: авто", L" | Масштаб Y: фикс.", L" | Линий: %zu", L" | Маркеров: %zu", L" | Скорость: %.4gx",
     L"Время, c", L"Частота, Гц",
-    L"Δx=%.5g", L"Δy=%.5g", L"1/Δt=%.5g Гц", L"d=%.5g",
+    L"Δx=%.5g", L"Δy=%.5g", L"1/Δt=%.5g Гц", L"d (условн.)=%.5g",
     L"Горячие клавиши — AMSignal",
     L"Нет данных", L"Сначала откройте файл.", L"Не удалось сохранить PNG.", L"Ошибка чтения",
     L"AMSignal",
     L"Недавние файлы", L"Горячие клавиши", L"Начать работу",
-    L"Открыть файл…", L"PNG", L"Старт", L"Стоп", L"Режим измерения точек", L"Сбросить вид", L"АвтоМасштаб",
+    L"Открыть файл…", L"PNG", L"Старт", L"Стоп", L"Режим измерения точек", L"Сбросить вид", L"Автомасштаб",
     L"Русский", L"English", L"Язык",
     L"Лёгкий режим",
     L"   |   Лёгкий режим: открыт только выбранный временной фрагмент",
@@ -48,15 +49,15 @@ const Strings kRu = {
 
 const Strings kEn = {
     L"AMSignal",
-    L"Open", L"PNG", L"Save as…", L"▶ Play", L"⏸ Pause", L"Points", L"Reset", L"Auto zoom",
+    L"Open", L"PNG", L"Save as…", L"▶ Play", L"⏸ Pause", L"Points", L"Reset", L"Auto scale",
     L"Time: %zu channels, %zu samples, %.6g–%.6g s", L"Spectrum: %zu channels, upper frequency %.6g Hz | %.6g–%.6g Hz", L" | Y scale: auto", L" | Y scale: fixed", L" | Lines: %zu", L" | Markers: %zu", L" | Speed: %.4gx",
     L"Time, s", L"Frequency, Hz",
-    L"Δx=%.5g", L"Δy=%.5g", L"1/Δt=%.5g Hz", L"d=%.5g",
+    L"Δx=%.5g", L"Δy=%.5g", L"1/Δt=%.5g Hz", L"d (coord.)=%.5g",
     L"Keyboard shortcuts — AMSignal",
     L"No data", L"Open a file first.", L"Failed to save PNG.", L"Read error",
     L"AMSignal",
     L"Recent files", L"Keyboard shortcuts", L"Start working",
-    L"Open file…", L"PNG", L"Playback", L"Pause", L"Measurement point mode", L"Reset view", L"Auto zoom",
+    L"Open file…", L"PNG", L"Playback", L"Pause", L"Measurement point mode", L"Reset view", L"Auto scale",
     L"Русский", L"English", L"Language",
     L"Light mode",
     L"   |   Light mode: only the selected time fragment is open",
@@ -128,15 +129,15 @@ const wchar_t* filter_mode_label_text() {
 }
 
 const wchar_t* filter_topology_label_text() {
-    return (g_str == &kEn) ? L"Topology:" : L"Топология:";
+    return (g_str == &kEn) ? L"Filter family:" : L"Семейство фильтра:";
 }
 
 const wchar_t* filter_mode_lowpass_text() {
-    return (g_str == &kEn) ? L"Low-pass" : L"НЧ";
+    return (g_str == &kEn) ? L"Low-pass" : L"ФНЧ";
 }
 
 const wchar_t* filter_mode_highpass_text() {
-    return (g_str == &kEn) ? L"High-pass" : L"ВЧ";
+    return (g_str == &kEn) ? L"High-pass" : L"ФВЧ";
 }
 
 const wchar_t* filter_mode_bandpass_text() {
@@ -164,11 +165,11 @@ const wchar_t* filter_topology_linkwitz_text() {
 }
 
 const wchar_t* side_global_formula_label_text() {
-    return (g_str == &kEn) ? L"Global coefficient for all charts:" : L"Общий коэффициент для всех графиков:";
+    return (g_str == &kEn) ? L"Global formula for all channels:" : L"Общая формула для всех каналов:";
 }
 
 const wchar_t* side_global_formula_apply_text() {
-    return (g_str == &kEn) ? L"Apply to all charts" : L"Применить ко всем графикам";
+    return (g_str == &kEn) ? L"Apply to all channels" : L"Применить ко всем каналам";
 }
 
 const wchar_t* side_channel_formula_label_text() {
@@ -272,11 +273,11 @@ const wchar_t* side_pt_dy_text() {
 }
 
 const wchar_t* side_pt_invdt_text() {
-    return L"1/Δt";
+    return g.mode == AnalysisMode::Time ? L"1/Δt" : L"1/Δf";
 }
 
 const wchar_t* side_pt_dist_text() {
-    return L"d";
+    return g_str == &kEn ? L"d (coord.)" : L"d (условн.)";
 }
 
 const wchar_t* side_pt_snap_text() {

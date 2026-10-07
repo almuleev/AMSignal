@@ -1149,6 +1149,32 @@ void mode_button_text() {
     g_str = &kEn;
 }
 
+void measurement_label_units() {
+    reset_document({"A"}, {0,1}, {{1,2}});
+    PointGroup group;
+    group.mode=PointGroupMode::Frequency;
+    group.display={}; group.display.inv_dt=true;
+    require(point_difference_text(group,4,0).find(L"1/Δf=0.25 s")!=std::wstring::npos,
+            "reciprocal frequency separation is in seconds");
+    require(point_difference_text(group,0,0).find(L"1/Δf=—")!=std::wstring::npos,
+            "coincident frequencies have no finite reciprocal separation");
+    group.mode=PointGroupMode::Time;
+    require(point_difference_text(group,4,0).find(L"1/Δt=0.25 Hz")!=std::wstring::npos,
+            "reciprocal time separation is in hertz");
+    group.mode=PointGroupMode::FRF; group.frf_reference_axis=true;
+    group.display.inv_dt=false; group.display.dy=true;
+    g.axis_y_label=L"m/s²";
+    require(point_difference_text(group,4,2).find(L"ΔA=2 m/s²")!=std::wstring::npos,
+            "reference differences retain physical amplitude units");
+    group.frf_reference_axis=false;
+    require(point_difference_text(group,4,2).find(L"Δ|H|=2")!=std::wstring::npos,
+            "upper FRF differences describe magnitude");
+    g_str=&kRu; group.display.inv_dt=true;
+    require(point_difference_text(group,4,2).find(L"1/Δf=0.25 с")!=std::wstring::npos,
+            "Russian reciprocal frequency units use seconds");
+    g_str=&kEn;
+}
+
 void multiple_open_documents() {
     reset_document({"first"}, {0, 1, 2}, {{1, 2, 3}});
     g.file_name = L"first.lvm";
@@ -1194,6 +1220,7 @@ int main() {
         light_mode_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
         light_mode_fft_visibility();
         routed_window_messages();
+        measurement_label_units();
         frf_integration();
         frf_multi_channels();
         frf_gap_stitching();
