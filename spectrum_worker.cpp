@@ -3,11 +3,16 @@
 
 namespace lvm {
 SpectrumWorker::~SpectrumWorker() {
+    shutdown();
+}
+
+void SpectrumWorker::shutdown() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = true;
         if (active_cancel_) active_cancel_->store(true);
         pending_.reset();
+        result_.reset();
     }
     ready_.notify_one();
     if (thread_.joinable()) thread_.join();
@@ -17,6 +22,7 @@ void SpectrumWorker::submit(Dataset data, std::vector<std::size_t> channels, std
                             std::vector<AffineTransform> transforms) {
     auto flag = std::make_shared<std::atomic<bool>>(false);
     std::lock_guard<std::mutex> lock(mutex_);
+    if (stopping_) return;
     if (!thread_.joinable()) thread_ = std::thread(&SpectrumWorker::run, this);
     if (active_cancel_) active_cancel_->store(true);
     if (pending_) pending_->cancelled->store(true);

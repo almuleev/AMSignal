@@ -9,6 +9,7 @@
 #include "gui_loading.hpp"
 #include "gui_playback.hpp"
 #include "gui_settings.hpp"
+#include "gui_spectrum.hpp"
 #include "gui_state.hpp"
 #include "gui_text.hpp"
 #include "gui_theme.hpp"
@@ -138,6 +139,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
         }
     }
     if (g.accel) DestroyAcceleratorTable(g.accel);
+    // Join the background caller before function-static analysis pools are
+    // destroyed. WM_DESTROY cancels work but does not join the caller.
+    g_spectrum_worker.shutdown();
     unload_program_logo();
     Gdiplus::GdiplusShutdown(g_gdiplus_token);
     return 0;

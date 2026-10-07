@@ -11,6 +11,168 @@ namespace {
 void check_cancel(const std::atomic<bool>* cancel) {
     if (cancel && cancel->load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled.");
 }
+long double reference_threshold(const std::vector<long double>& xx, double peak,
+                                std::size_t L, std::size_t averages, const FrfOptions& options) {
+    const long double maximum=*std::max_element(xx.begin()+1,xx.end());
+    const long double roundoff=static_cast<long double>(peak)*32*std::numeric_limits<double>::epsilon()*L;
+    return std::max(roundoff*roundoff*averages,maximum*options.reference_threshold*options.reference_threshold);
+}
+
+// All accumulation remains long double and in segment order. The first
+// completed response owns common display arrays; subsequent results copy them.
+void finish_frf(FrfResult& r, const std::vector<long double>& xx,
+                const std::vector<long double>& yy, const std::vector<std::complex<long double>>& xy,
+                long double window_sum, long double threshold, const std::atomic<bool>* cancel,
+                const FrfResult* common = nullptr) {
+    const std::size_t L=r.segment_length, bins=L/2+1;
+    if (common) {
+        r.frequencies=common->frequencies;
+        r.reference_amplitude=common->reference_amplitude;
+        r.reference_amplitude_valid=common->reference_amplitude_valid;
+    } else {
+        r.frequencies.resize(bins);
+        r.reference_amplitude.assign(bins,std::numeric_limits<double>::quiet_NaN());
+        r.reference_amplitude_valid.assign(bins,0);
+    }
+    r.transfer.resize(bins); r.valid.assign(bins,0);
+    r.coherence.assign(bins,std::numeric_limits<double>::quiet_NaN()); r.coherence_valid.assign(bins,0);
+    bool any=false;
+    for (std::size_t k=0;k<bins;++k) {
+        if ((k & 0xffff)==0) check_cancel(cancel);
+        if (!common) {
+            r.frequencies[k]=(static_cast<double>(k)/L)/r.sample_dt;
+            if (k && window_sum>0 && xx[k]>=0) {
+                const long double amplitude=2*std::sqrt(xx[k]/r.averages)/window_sum;
+                if (std::isfinite(amplitude)) {
+                    r.reference_amplitude[k]=static_cast<double>(amplitude);
+                    r.reference_amplitude_valid[k]=1;
+                }
+            }
+        }
+        if (!k || xx[k]<=threshold) continue;
+        const auto h=xy[k]/xx[k];
+        const std::complex<double> value{static_cast<double>(h.real()),static_cast<double>(h.imag())};
+        if (!std::isfinite(std::abs(value))) continue;
+        r.transfer[k]=value;
+        if (r.options.estimator==FrfEstimator::H1 && r.averages>=2 && yy[k]>0) {
+            const long double c=std::norm((xy[k]/std::sqrt(xx[k]))/std::sqrt(yy[k]));
+            if (std::isfinite(c)) {
+                r.coherence[k]=static_cast<double>(std::clamp(c,0.0L,1.0L)); r.coherence_valid[k]=1;
+            }
+        }
+        r.valid[k]=1; any=true;
+    }
+    r.ok=any; if (!any) r.error=FrfError::WeakReference;
+}
+
+FrfBatchResult compute_shared_frf(const FrfSamples& s,
+                                 const std::vector<std::vector<double>>& responses,
+                                 const FrfOptions& options, const std::atomic<bool>* cancel) {
+    FrfBatchResult batch; batch.options=options;
+    const std::size_t n=s.reference.size();
+    FrfError error=FrfError::None;
+    if ((options.estimator!=FrfEstimator::Direct && options.estimator!=FrfEstimator::H1) ||
+        options.window!=FrfWindow::Hann || !std::isfinite(options.reference_threshold) ||
+        options.reference_threshold<=0 || options.reference_threshold>=1 ||
+        (options.segment_length && (options.segment_length<4 || options.segment_length%2))) error=FrfError::InvalidOptions;
+    std::size_t L=options.estimator==FrfEstimator::Direct ? n : options.segment_length;
+    if (!L) { const std::size_t target=std::max<std::size_t>(4,n/4); L=4; while (L<=target/2) L*=2; }
+    if (error==FrfError::None && (L>n || L<4)) error=FrfError::TooShort;
+    if (error==FrfError::None && L>static_cast<std::size_t>(std::numeric_limits<int>::max()/2)) error=FrfError::Overflow;
+    batch.responses.resize(responses.size());
+    struct Accum { std::vector<long double> yy; std::vector<std::complex<long double>> xy; };
+    std::vector<Accum> accum(responses.size());
+    const std::size_t bins=L/2+1, overlap=options.estimator==FrfEstimator::H1 ? L/2 : 0, hop=L-overlap;
+    std::size_t active=0;
+    for (std::size_t c=0;c<responses.size();++c) {
+        auto& r=batch.responses[c]; r.options=options;
+        r.sample_dt=s.sample_dt; r.source_start=s.source_start; r.source_end=s.source_end;
+        r.sample_count=s.source_count ? s.source_count : n; r.gaps_ignored=s.gaps_ignored;
+        if (responses[c].size()!=n) { r.error=FrfError::InvalidChannels; continue; }
+        if (error!=FrfError::None) { r.error=error; continue; }
+        r.segment_length=L; r.overlap_samples=overlap;
+        for (std::size_t i=0;i<n;++i) {
+            if ((i & 0xffff)==0) check_cancel(cancel);
+            if (!std::isfinite(responses[c][i])) { r.error=FrfError::MissingValues; break; }
+        }
+        if (r.error!=FrfError::None) continue;
+        accum[c].yy.assign(bins,0); accum[c].xy.resize(bins); ++active;
+    }
+    if (!active) { batch.error=batch.responses.front().error; return batch; }
+    std::vector<long double> xx(bins,0);
+    std::vector<double> window(L);
+    std::vector<std::complex<double>> x(L), y(L);
+    for (std::size_t j=0;j<L;++j) {
+        if ((j & 0xffff)==0) check_cancel(cancel);
+        window[j]=.5-.5*std::cos(2*std::acos(-1.0)*j/L);
+    }
+    long double window_sum=0; for (double value:window) window_sum+=value;
+    double peak=0;
+    for (std::size_t at=0; n-at>=L; at+=hop) {
+        check_cancel(cancel);
+        long double sx=0;
+        for (std::size_t j=0;j<L;++j) {
+            if ((j & 0xffff)==0) check_cancel(cancel);
+            sx+=s.reference[at+j]; peak=std::max(peak,std::abs(s.reference[at+j]));
+        }
+        const long double mx=options.remove_mean ? sx/L : 0;
+        for (std::size_t j=0;j<L;++j) {
+            if ((j & 0xffff)==0) check_cancel(cancel);
+            x[j]=static_cast<double>((s.reference[at+j]-mx)*window[j]);
+        }
+        x=dft(x,cancel);
+        bool reference_ok=true;
+        for (std::size_t k=0;k<bins;++k) {
+            if ((k & 0xffff)==0) check_cancel(cancel);
+            if (!std::isfinite(std::abs(x[k]))) { reference_ok=false; break; }
+            const std::complex<long double> a=x[k]; xx[k]+=std::norm(a);
+        }
+        if (!reference_ok) {
+            for (auto& r:batch.responses) if (r.error==FrfError::None) r.error=FrfError::Overflow;
+            break;
+        }
+        for (std::size_t c=0;c<responses.size();++c) {
+            auto& r=batch.responses[c]; if (r.error!=FrfError::None) continue;
+            check_cancel(cancel);
+            long double sy=0;
+            for (std::size_t j=0;j<L;++j) {
+                if ((j & 0xffff)==0) check_cancel(cancel);
+                sy+=responses[c][at+j];
+            }
+            const long double my=options.remove_mean ? sy/L : 0;
+            for (std::size_t j=0;j<L;++j) {
+                if ((j & 0xffff)==0) check_cancel(cancel);
+                y[j]=static_cast<double>((responses[c][at+j]-my)*window[j]);
+            }
+            y=dft(y,cancel);
+            for (std::size_t k=0;k<bins;++k) {
+                if ((k & 0xffff)==0) check_cancel(cancel);
+                if (!std::isfinite(std::abs(y[k]))) { r.error=FrfError::Overflow; --active; break; }
+                const std::complex<long double> a=x[k], b=y[k];
+                accum[c].yy[k]+=std::norm(b); accum[c].xy[k]+=std::conj(a)*b;
+            }
+            if (r.error==FrfError::None) ++r.averages;
+        }
+        if (!active || options.estimator==FrfEstimator::Direct) break;
+    }
+    const FrfResult* common=nullptr;
+    long double threshold=0;
+    for (std::size_t c=0;c<responses.size();++c) {
+        auto& r=batch.responses[c]; if (r.error!=FrfError::None) continue;
+        // Every surviving response has the same K and reference statistics.
+        if (!common) {
+            threshold=reference_threshold(xx,peak,L,r.averages,options);
+            finish_frf(r,xx,accum[c].yy,accum[c].xy,window_sum,threshold,cancel);
+            common=&r;
+        } else {
+            finish_frf(r,xx,accum[c].yy,accum[c].xy,window_sum,threshold,cancel,common);
+        }
+        if (r.ok) batch.ok=true;
+    }
+    if (!batch.ok) batch.error=batch.responses.front().error;
+    return batch;
+}
+
 }
 const char* frf_error_text(FrfError e) {
     switch (e) {
@@ -207,6 +369,8 @@ FrfBatchResult analyze_frf_batch(FrfBatchInput input, const FrfOptions& options,
     auto samples=prepare_frf_samples(pair,cancel);
     pair={};
     if (samples.error!=FrfError::None) { batch.error=samples.error; return batch; }
+    if (input.responses.size()>1)
+        return compute_shared_frf(samples,input.responses,options,cancel);
     batch.responses.reserve(input.responses.size());
     for (auto& response:input.responses) {
         check_cancel(cancel);

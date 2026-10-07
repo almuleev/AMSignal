@@ -1198,9 +1198,12 @@ int main() {
         frf_multi_channels();
         frf_gap_stitching();
         frf_loaded_document_defaults();
+        g_spectrum_worker.shutdown();
+        require(!g_spectrum_worker.take_result(),"GUI exit joins the FFT caller before analysis pool teardown");
         std::cout << checks << " GUI integration checks passed\n";
         return 0;
     } catch(const std::exception& ex) {
+        g_spectrum_worker.shutdown();
         std::cerr << "FAIL after " << checks << " checks: " << ex.what() << '\n';
         return 1;
     }

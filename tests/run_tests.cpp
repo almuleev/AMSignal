@@ -7,6 +7,7 @@
 #include <random>
 #include <cstdio>
 #include <fstream>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "fft.hpp"
 #include "frf_analysis.hpp"
 #include "frf_worker.hpp"
+#include "spectrum_worker.hpp"
 #include <chrono>
 #include "export_helpers.hpp"
 #include "gap_details.hpp"
@@ -746,6 +748,43 @@ void test_frf_multi() {
         result=worker.take_result(); if(!result) std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     check(result && result->generation==41 && result->frf.ok && result->frf.responses.size()==1,"worker replaces the whole batch atomically");
+
+    const auto same_values=[](const std::vector<double>& a,const std::vector<double>& b) {
+        if (a.size()!=b.size()) return false;
+        for (std::size_t k=0;k<a.size();++k)
+            if (a[k]!=b[k] && !(std::isnan(a[k]) && std::isnan(b[k]))) return false;
+        return true;
+    };
+    // Exercise both window-mean policies, non-radix-2 segments and Direct.
+    // Compare complete outputs, including independently invalid coherence bins.
+    for (bool remove_mean:{false,true}) for (std::size_t length:{256,254,0}) {
+        auto opts=options; opts.remove_mean=remove_mean; opts.segment_length=length;
+        if (!length) opts.estimator=lvm::FrfEstimator::Direct;
+        const auto shared=lvm::analyze_frf_batch(batch,opts);
+        for (std::size_t c=0;c<batch.responses.size();++c) {
+            const auto expected=lvm::analyze_frf({batch.time,average,batch.responses[c]},opts);
+            const auto& actual=shared.responses[c];
+            check(actual.ok==expected.ok && actual.error==expected.error &&
+                  actual.frequencies==expected.frequencies && actual.transfer==expected.transfer &&
+                  actual.valid==expected.valid && same_values(actual.coherence,expected.coherence) &&
+                  actual.coherence_valid==expected.coherence_valid &&
+                  same_values(actual.reference_amplitude,expected.reference_amplitude) &&
+                  actual.reference_amplitude_valid==expected.reference_amplitude_valid &&
+                  actual.averages==expected.averages,
+                  "shared reference matches every pair array/mask for H1 and Direct");
+        }
+    }
+    bad=batch; bad.responses[0][100]=std::numeric_limits<double>::infinity();
+    const auto infinite=lvm::analyze_frf_batch(bad,options);
+    check(infinite.ok && infinite.responses[0].error==lvm::FrfError::MissingValues &&
+          infinite.responses[1].transfer==r.responses[1].transfer,
+          "infinite Response is independent of valid Responses");
+    bad=batch; for(auto& ref:bad.references) for(auto& value:ref) value=0;
+    const auto zero=lvm::analyze_frf_batch(bad,options);
+    check(!zero.ok && zero.error==lvm::FrfError::WeakReference &&
+          zero.responses[0].valid==zero.responses[1].valid &&
+          same_values(zero.responses[0].reference_amplitude,zero.responses[1].reference_amplitude),
+          "zero common reference retains identical masks and amplitude graphs");
 }
 
 void test_frf() {
@@ -967,6 +1006,46 @@ void test_fft_chunks_and_plans() {
     check(std::all_of(correct.begin(),correct.end(),[](auto v){return v!=0;}), "plan caches are independent across threads");
 }
 
+void test_fft_channel_pool() {
+    lvm::Dataset data;
+    data.names={"skip","first","second"}; data.channels.resize(3);
+    for (std::size_t i=0;i<65537;++i) {
+        data.time.push_back(i/1024.0);
+        data.channels[0].push_back(std::nan(""));
+        data.channels[1].push_back(std::sin(.13*i));
+        data.channels[2].push_back(3*std::cos(.07*i));
+    }
+    data.channels[1][10]=std::nan(""); // Existing mean-fill policy is retained.
+    const double untouched=data.channels[2][100];
+    const auto calculate=[&] { return lvm::compute_spectrum(data,0); };
+    auto a=std::async(std::launch::async,calculate);
+    auto b=std::async(std::launch::async,calculate);
+    const auto first=a.get(), second=b.get();
+    check(first.ok && first.names==std::vector<std::string>{"first","second"} &&
+          first.source_channels==std::vector<std::size_t>{1,2} &&
+          first.freqs==second.freqs && first.amp==second.amp,
+          "concurrent pool callers preserve channel order and skipped channels");
+    for (std::size_t c=1;c<3;++c) {
+        auto single=data; single.names={data.names[c]}; single.channels={data.channels[c]};
+        const auto expected=lvm::compute_spectrum(single,0);
+        check(expected.ok && expected.freqs==first.freqs && expected.amp[0]==first.amp[c-1],
+              "parallel arbitrary-length FFT exactly matches one-channel sequential path");
+    }
+    check(std::isnan(data.channels[1][10]) && data.channels[2][100]==untouched,
+          "channel pool leaves source arrays untouched");
+    data.channels[2][10]=std::numeric_limits<double>::infinity();
+    const auto failed=lvm::compute_spectrum(data,0);
+    check(!failed.ok && failed.error=="Channel contains infinite values." &&
+          failed.names==std::vector<std::string>{"first"},
+          "parallel failure retains the sequential error and completed prefix");
+    data.channels[2][10]=0;
+    lvm::SpectrumWorker worker;
+    worker.submit(data,{0,1,2},90);
+    worker.shutdown(); worker.shutdown();
+    worker.submit(data,{0,1,2},91);
+    check(!worker.take_result(),"terminal shutdown joins work, clears results and ignores new submissions");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -979,6 +1058,7 @@ int main(int argc, char** argv) {
     test_data_integrity_regressions();
     test_spectrum_integrity_regressions();
     test_fft_chunks_and_plans();
+    test_fft_channel_pool();
     test_fft_irregular_timestamps();
     test_fft_gap_regressions();
     test_minmax_and_spectrum_import();

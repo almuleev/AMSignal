@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.16.7
+
+### Производительность
+
+- Пакетный FRF переиспользует окно, FFT средней опоры, Sxx, порог слабого
+  входа и спектр опоры в одном проходе по сегментам. Syy/Sxy, комплексный H1,
+  coherence и ошибки остаются отдельными для каждого отклика. Одиночный
+  отклик сохраняет прежний путь; FFT всех сегментов не сохраняются.
+- Независимые каналы больших FFT вычисляются общим пулом до четырёх участников,
+  включая вызывающий поток. Малые записи, один канал и занятый пул используют
+  последовательный путь. Параллелизм ограничен оценкой рабочих массивов и кэшей;
+  результаты и ошибки собираются в исходном порядке после завершения задач.
+- Длина DFT, сетка, нормировка, настройки анализа и точность накоплений сохранены.
+- На test1.lvm, Ryzen 5 5600X, GCC 14.2.0, `-O2`, после прогрева и семи
+  повторов: FFT восьми каналов N=262144 — 151,05 → 51,59 мс,
+  N=337132 — 595,03 → 327,46 мс; пакетный H1/coherence с одной опорой
+  и семью откликами, L=2048, Hann, 50% overlap, remove_mean=false —
+  210,36 → 135,87 мс. База этих замеров — v0.16.6; это не универсальная гарантия.
+- Пик commit процесса для полного FFT вырос с 122 до 256 MiB; бюджет
+  планировщика 384 MiB не является ограничением памяти всего приложения.
+  Все 26 случаев совпали с базой побайтно. Контроль одиночных путей в одном
+  процессе не подтвердил существенного ухудшения.
+- Выход GUI явно отменяет и завершает FFT-worker до разрушения общего пула.
+  Прошли 340 численных и 334 GUI-проверки, полные сборки CLI и GUI.
+
+### Performance
+
+- Batch FRF reuses the window, averaged-reference FFT, Sxx, weak-input threshold
+  and reference spectrum in one segment pass. Each response retains its own
+  Syy/Sxy, complex H1, coherence and errors. Single-response calculations keep
+  their previous path; segment FFTs are not retained as a bank.
+- Independent channels in large FFTs use one pool with up to four participants,
+  including the caller. Small inputs, single channels and contending callers
+  use the sequential path. Estimated workspaces/caches bound scheduling;
+  ordered results and errors are collected after all jobs finish.
+- DFT length, frequency grid, normalization, settings and accumulation precision
+  are preserved.
+- On test1.lvm, Ryzen 5 5600X, GCC 14.2.0, `-O2`, after warm-up and seven
+  repeats: eight-channel FFT N=262144 — 151.05 → 51.59 ms,
+  N=337132 — 595.03 → 327.46 ms; batch H1/coherence with one reference
+  and seven responses, L=2048, Hann, 50% overlap, remove_mean=false —
+  210.36 → 135.87 ms. These measurements use v0.16.6 as baseline and are not
+  a universal speed guarantee.
+- Full-record FFT peak process commit increased from 122 to 256 MiB; the
+  384 MiB scheduling allowance is not a process memory limit. All 26 cases
+  matched the baseline byte for byte. In-process single-path controls did not
+  confirm a substantial regression.
+- GUI exit explicitly cancels and joins the FFT worker before pool destruction.
+  Passed 340 numerical and 334 GUI checks, plus full CLI and GUI builds.
+
 ## v0.16.6
 
 ### Производительность

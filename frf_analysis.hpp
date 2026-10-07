@@ -62,6 +62,8 @@ struct FrfResult {
 
 // Array-only batch: arithmetic mean of references before Welch, one result
 // per response in the original order. Channel identities belong to the caller.
+// Multiple responses share reference FFT/Sxx in one segment pass; no bank of
+// all segment FFTs is retained. A single response keeps the pair estimator path.
 struct FrfBatchInput {
     std::vector<double> time;
     std::vector<std::vector<double>> references, responses;

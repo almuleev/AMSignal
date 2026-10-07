@@ -17,6 +17,9 @@ public:
     void submit(Dataset data, std::vector<std::size_t> source_channels, std::uint64_t generation,
                 std::vector<AffineTransform> transforms = {});
     void cancel();
+    // Terminal, idempotent cancel+join. Call before destroying process-wide
+    // analysis resources; subsequent submissions are ignored.
+    void shutdown();
     std::optional<Result> take_result();
 private:
     struct Request {
