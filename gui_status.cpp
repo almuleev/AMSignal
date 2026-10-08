@@ -157,7 +157,7 @@ std::wstring toolbar_hover_text(HWND btn) {
     if (btn == g.autoy) return g_str->hover_autoy;
     if (btn == g.sidepanel_btn) return en ? L"Show or hide the right-side work panel" : L"Показать или скрыть рабочую панель справа";
     if (btn == g.mode_frf) return en ? L"Response / Reference frequency response" : L"Частотная характеристика отклика относительно опоры";
-    if (btn == g.mode_time) return en ? L"Switch to Time view" : L"Переключить в режим времени";
+    if (btn == g.mode_time) return en ? L"Switch to Signal view" : L"Переключить в режим сигнала";
     if (btn == g.mode_freq) return en ? L"Switch to FFT spectrum" : L"Переключить в режим спектра БПФ";
     if (btn == g.marker_btn) return en ? L"Place a marker on the plot" : L"Поставить маркер на график";
     if (btn == g.vline_btn) return en ? L"Place a vertical guide line" : L"Поставить вертикальную линию";

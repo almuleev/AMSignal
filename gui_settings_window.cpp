@@ -281,7 +281,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mkcheck(gap_markers_toggle_text(), 28, 98, 278, 28, IDC_SET_GAP_MARKERS);
             mkcheck(stitch_gaps_toggle_text(), 28, 128, 360, 28, IDC_SET_STITCH_GAPS);
             // Keep coordinate names visibly separate from the general settings.
-            mk(L"STATIC", en ? L"Time" : L"Время", SS_LEFT, 28, 180, 120, 20, 0);
+            mk(L"STATIC", en ? L"Signal" : L"Сигнал", SS_LEFT, 28, 180, 120, 20, 0);
             install_axis_label_edit(mk(L"EDIT", g.axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 176, 120, 24, IDC_SET_TIME_AXIS_X_EDIT));
             install_axis_label_edit(mk(L"EDIT", g.time_axis_y_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 276, 176, 120, 24, IDC_SET_TIME_AXIS_Y_EDIT));
             mk(L"STATIC", en ? L"Spectrum" : L"Спектр", SS_LEFT, 28, 208, 120, 20, 0);

@@ -10,7 +10,6 @@
 #include "gui_side_panel.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_ids.hpp"
-#include "gui_export.hpp"
 
 namespace gui {
 lvm::FrfWorker g_frf_worker;
@@ -21,7 +20,8 @@ namespace {
 enum {
     InputLabel = 7100, Input, InputSummary, OutputLabel, Output, Processing,
     LowLabel, Low, HighLabel, High, ApplyRange, Method, Source,
-    Calculate, Csv, Png, Hint, EstimatorLabel, Estimator, LengthLabel, Length,
+    Calculate, // Internal command for Enter in L; no corresponding button.
+    Hint = 7116, EstimatorLabel, Estimator, LengthLabel, Length,
     SmoothingLabel, Smoothing, AxisScaleLabel, AxisScale, Reference
 };
 constexpr double smoothing_choices[] = {0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0};
@@ -94,10 +94,7 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             make(Low, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 12, 378, 130, 24);
             make(High, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 156, 378, 134, 24);
             make(ApplyRange, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 408, 278, 24);
-            make(Calculate, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 438, 122, 24);
-            make(Csv, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 140, 438, 72, 24);
-            make(Png, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 218, 438, 72, 24);
-            make(Hint, L"STATIC", SS_LEFT, 12, 470, 278, 80);
+            make(Hint, L"STATIC", SS_LEFT, 12, 438, 278, 80);
             install_themed_combo(control(Estimator));
             install_themed_combo(control(Smoothing));
             install_themed_combo(control(AxisScale));
@@ -168,10 +165,6 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     MessageBoxW(hwnd, tr(L"Use 0 < F min < F max within the calculated frequency range.",
                         L"Укажите 0 < F min < F max в пределах рассчитанных частот."), L"FRF", MB_OK | MB_ICONINFORMATION);
                 }
-            } else if (id == Csv) {
-                save_as_dialog();
-            } else if (id == Png) {
-                save_png_dialog();
             }
             return 0;
         }
@@ -649,7 +642,7 @@ void create_frf_panel(HWND parent, HINSTANCE instance) {
 
 void layout_frf_panel() {
     if (!g.frf_panel) return;
-    const bool show = g.mode == AnalysisMode::FRF && g.side_panel_visible && !welcome_visible() && !g.frf_point_settings_open;
+    const bool show = g.mode == AnalysisMode::FRF && g.side_panel_visible && !welcome_visible() && g.side_panel_tab == 0;
     ShowWindow(g.frf_panel, show ? SW_SHOW : SW_HIDE);
     if (show) {
         RECT r; GetClientRect(g.main, &r);
@@ -680,7 +673,6 @@ void refresh_frf_controls(bool repopulate) {
         label(Method,details);
     } else label(Method,g.frf.pending ? tr(L"Calculating…",L"Вычисление…") : L"Hann · L/K/Δf: —");
     EnableWindow(control(Length),g.frf.options.estimator==lvm::FrfEstimator::H1);
-    label(Calculate, tr(L"Calculate", L"Рассчитать")); label(Csv, L"CSV"); label(Png, L"PNG");
     label(Hint, tr(L"|H|: response relative to mean reference.\nLinear magnitude, not dB.\nEqual filters can cancel in |H|.",
                    L"|H|: отклик относительно средней опоры.\nМодуль в линейной шкале, не дБ.\nОдинаковые фильтры могут сократиться."));
     if (repopulate) {
@@ -722,7 +714,6 @@ void refresh_frf_controls(bool repopulate) {
         g.frf.source_start, g.frf.source_end);
     label(Source, source);
     const bool ready = g.frf.result.ok && !g.frf.pending;
-    EnableWindow(control(Csv), ready); EnableWindow(control(Png), ready);
     EnableWindow(control(ApplyRange), ready);
     InvalidateRect(control(Processing), nullptr, TRUE);
     InvalidateRect(control(Reference), nullptr, TRUE);

@@ -770,7 +770,6 @@ void set_mode(AnalysisMode mode) {
     }
     if (mode == AnalysisMode::FRF) {
         g.frf_point_settings_open = g.side_panel_tab == 1;
-        if (!g.frf_point_settings_open) g.side_panel_tab = 0;
         normalize_active_point_group();
         if (PointGroup* group = active_point_group()) {
             g.marker_color = group->color;

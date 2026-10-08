@@ -329,7 +329,7 @@ HMENU make_menu() {
     append_menu_popup_owner_draw(bar, file, text(L"File", L"Файл"));
 
     const HMENU view = CreatePopupMenu();
-    const std::wstring mode_time_text = menu_text(text(L"Time", L"Время"), IDM_MODE_TIME);
+    const std::wstring mode_time_text = menu_text(text(L"Signal", L"Сигнал"), IDM_MODE_TIME);
     const std::wstring mode_freq_text = menu_text(text(L"Spectrum (FFT)", L"Спектр (БПФ)"), IDM_MODE_FREQ);
     const std::wstring zoom_in_text = menu_text(text(L"Zoom in", L"Увеличить"), IDC_ZOOMIN);
     const std::wstring zoom_out_text = menu_text(text(L"Zoom out", L"Уменьшить"), IDC_ZOOMOUT);
@@ -337,7 +337,7 @@ HMENU make_menu() {
     const std::wstring start_text = menu_text(text(L"Go to start", L"В начало"), IDC_GOTO_START);
     const std::wstring end_text = menu_text(text(L"Go to end", L"В конец"), IDC_GOTO_END);
     const std::wstring autoy_text = menu_text(text(L"Auto scale", L"Автомасштабирование"), IDC_AUTOY);
-    const std::wstring smooth_text = menu_text(text(L"Line smoothing", L"Сглаживание линий"), IDM_VISMOOTH);
+    const std::wstring smooth_text = menu_text(text(L"Channel smoothing", L"Сглаживание каналов"), IDM_VISMOOTH);
     const std::wstring curve_symbols_text = menu_text(
         text(L"Curve symbols for grayscale", L"Фигуры кривых для Ч/Б"), IDM_CURVE_SYMBOLS);
     const std::wstring vpan_text = menu_text(text(L"Vertical pan", L"Вертикальное панорамирование"), IDM_VPAN);

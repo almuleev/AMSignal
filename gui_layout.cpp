@@ -5,6 +5,7 @@
 #include "gui_side_panel.hpp"
 #include "gui_state.hpp"
 #include "gui_status.hpp"
+#include "gui_text.hpp"
 
 namespace gui {
 
@@ -74,22 +75,15 @@ void layout() {
     MoveWindow(g.hide_all_btn, panel_x + 92, kTopBar + 42, 86, 28, FALSE);
     const int tab_gap = 4;
     const int tab_w = max(84, (content_w - tab_gap * 2) / 3);
-    if (g.mode == AnalysisMode::FRF) {
-        const int frf_tab_w = max(84, (content_w - tab_gap) / 2);
-        if (g.side_tab_channels) MoveWindow(g.side_tab_channels, panel_x, kTopBar + 8, frf_tab_w, 28, FALSE);
-        if (g.side_tab_points) MoveWindow(g.side_tab_points, panel_x + frf_tab_w + tab_gap,
-            kTopBar + 8, frf_tab_w, 28, FALSE);
-    } else {
-        if (g.side_tab_channels) MoveWindow(g.side_tab_channels, panel_x, kTopBar + 8, tab_w, 28, FALSE);
-        if (g.side_tab_points) MoveWindow(g.side_tab_points, panel_x + tab_w + tab_gap, kTopBar + 8, tab_w, 28, FALSE);
-        if (g.side_tab_filter) MoveWindow(g.side_tab_filter, panel_x + (tab_w + tab_gap) * 2, kTopBar + 8, tab_w, 28, FALSE);
-    }
+    if (g.side_tab_channels) MoveWindow(g.side_tab_channels, panel_x, kTopBar + 8, tab_w, 28, FALSE);
+    if (g.side_tab_points) MoveWindow(g.side_tab_points, panel_x + tab_w + tab_gap, kTopBar + 8, tab_w, 28, FALSE);
+    if (g.side_tab_filter) MoveWindow(g.side_tab_filter, panel_x + (tab_w + tab_gap) * 2, kTopBar + 8, tab_w, 28, FALSE);
     apply_side_panel_visibility();
 
     const bool show_channels = g.side_panel_visible && g.side_panel_tab == 0 && !welcome_visible() && g.mode != AnalysisMode::FRF;
     const bool show_points = g.side_panel_visible && g.side_panel_tab == 1 && !welcome_visible() &&
         (g.mode != AnalysisMode::FRF || g.frf_point_settings_open);
-    const bool show_filter = g.side_panel_visible && g.side_panel_tab == 2 && !welcome_visible() && g.mode != AnalysisMode::FRF;
+    const bool show_filter = g.side_panel_visible && g.side_panel_tab == 2 && !welcome_visible();
     const int channels_content_top = channels_viewport_top;
     const int points_content_top = points_viewport_top;
     const int filter_viewport_top = points_viewport_top;
@@ -149,12 +143,14 @@ void layout() {
     fy += 24;
     place_scrolled(g.side_filter_enable, panel_x, fy, content_w, 24, filter_viewport_top, show_filter);
     fy += 30;
-    place_scrolled(g.side_filter_mode_label, panel_x, fy + 2, 76, 20, filter_viewport_top, show_filter);
-    place_scrolled(g.side_filter_mode, panel_x + 80, fy, max(84, content_w - 80), 26, filter_viewport_top, show_filter);
+    const int filter_label_w = g_str == &kEn ? 88 : 140;
+    const int filter_control_x = panel_x + filter_label_w + 4;
+    const int filter_control_w = max(84, content_w - filter_label_w - 4);
+    place_scrolled(g.side_filter_mode_label, panel_x, fy + 2, filter_label_w, 20, filter_viewport_top, show_filter);
+    place_scrolled(g.side_filter_mode, filter_control_x, fy, filter_control_w, 26, filter_viewport_top, show_filter);
     fy += 32;
-    place_scrolled(g.side_filter_topology_label, panel_x, fy, content_w, 20, filter_viewport_top, show_filter);
-    fy += 22;
-    place_scrolled(g.side_filter_topology, panel_x, fy, content_w, 26, filter_viewport_top, show_filter);
+    place_scrolled(g.side_filter_topology_label, panel_x, fy + 2, filter_label_w, 20, filter_viewport_top, show_filter);
+    place_scrolled(g.side_filter_topology, filter_control_x, fy, filter_control_w, 26, filter_viewport_top, show_filter);
     fy += 34;
     place_scrolled(g.side_filter_low_label, panel_x, fy, max(72, content_w - 92), 20, filter_viewport_top, show_filter);
     place_scrolled(g.side_filter_low_value, panel_x + max(72, content_w - 92) + 6, fy, 86, 20, filter_viewport_top, show_filter);

@@ -145,7 +145,7 @@ std::wstring command_name(int command) {
         case IDC_SAVE_PROJECT: return en ? L"Save project" : L"Сохранить проект";
         case IDM_UNDO: return en ? L"Undo" : L"Отменить";
         case IDM_REDO: return en ? L"Redo" : L"Повторить";
-        case IDM_MODE_TIME: return en ? L"Time view" : L"Режим времени";
+        case IDM_MODE_TIME: return en ? L"Signal view" : L"Режим сигнала";
         case IDM_MODE_FREQ: return en ? L"Spectrum (FFT) view" : L"Режим спектра (БПФ)";
         case IDM_MODE_FRF: return en ? L"FRF view" : L"Режим FRF / АЧХ";
         case IDC_MEASURE: return en ? L"Measurement points" : L"Точки измерения";
@@ -155,7 +155,7 @@ std::wstring command_name(int command) {
         case IDM_ADD_VLINE_EXACT: return en ? L"Vertical line (exact)" : L"Вертикальная линия (точно)";
         case IDM_ADD_HLINE_EXACT: return en ? L"Horizontal line (exact)" : L"Горизонтальная линия (точно)";
         case IDC_AUTOY: return en ? L"Auto scale" : L"Автомасштабирование";
-        case IDM_VISMOOTH: return en ? L"Line smoothing" : L"Сглаживание линий";
+        case IDM_VISMOOTH: return en ? L"Channel smoothing" : L"Сглаживание каналов";
         case IDM_CURVE_SYMBOLS: return en ? L"Curve symbols for grayscale" : L"Фигуры кривых для Ч/Б";
         case IDM_VPAN: return en ? L"Vertical pan" : L"Вертикальное панорамирование";
         case IDM_THEME: return en ? L"Dark theme" : L"Тёмная тема";

@@ -19,6 +19,7 @@
 #include "../gui_render.hpp"
 #include "../gui_render_data.hpp"
 #include "../gui_spectrum.hpp"
+#include "../gui_side_panel.hpp"
 #include "../gui_state.hpp"
 #include "../gui_state_history.hpp"
 #include "../gui_status.hpp"
@@ -708,6 +709,8 @@ void frf_integration() {
         create_frf_panel(g.main,GetModuleHandleW(nullptr));
         layout();
         require(g.frf_panel!=nullptr,"FRF panel is embedded in the existing main window");
+        require(!GetDlgItem(g.frf_panel,7113) && !GetDlgItem(g.frf_panel,7114) && !GetDlgItem(g.frf_panel,7115),
+                "FRF panel omits Calculate, CSV and PNG buttons");
         double frf_low=0, frf_high=0; frf_y_range(frf_low,frf_high);
         const RECT chart=plot_rect();
         g.vvalid=true; g.vrect=chart; g.vx0=g.frf.log_start; g.vx1=g.frf.log_end;
@@ -862,6 +865,9 @@ void frf_integration() {
         }
         require(g.frf.result.ok && !g.frf.pending,"main-window timer accepts the FRF worker result");
         SetWindowTextW(GetDlgItem(g.frf_panel,7120),L"128");
+        SendMessageW(GetDlgItem(g.frf_panel,7120),WM_KEYDOWN,VK_RETURN,0);
+        require(g.frf.options.segment_length==128 && g.frf.pending,
+                "Enter in L applies the length and schedules FRF without a Calculate button");
         SendMessageW(GetDlgItem(g.frf_panel,7118),CB_SETCURSEL,0,0);
         SendMessageW(g.frf_panel,WM_COMMAND,MAKEWPARAM(7118,CBN_SELCHANGE),0);
         const auto h1_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
@@ -1131,7 +1137,7 @@ void status_bar_text() {
     g.mode = AnalysisMode::Time;
     g.auto_y = true;
     set_status();
-    require(g.status_text.find(L"Time: 1 channels, 2 samples, 0–1 s | Y scale: auto") != std::wstring::npos,
+    require(g.status_text.find(L"Signal: 1 channels, 2 samples, 0–1 s | Y scale: auto") != std::wstring::npos,
             "time status uses a separated, correctly named Y-scale segment");
     require(g.status_tooltip_text == g.status_text,
             "status tooltip retains the complete untruncated status text");
@@ -1139,14 +1145,67 @@ void status_bar_text() {
 
 void mode_button_text() {
     g_str = &kEn;
-    require(std::wstring(mode_time_text()) == L"Time" && std::wstring(mode_spectrum_text()) == L"Spectrum" &&
+    require(std::wstring(mode_time_text()) == L"Signal" && std::wstring(mode_spectrum_text()) == L"Spectrum" &&
                 std::wstring(mode_frf_text()) == L"FRF",
             "English mode buttons use compact labels rather than status format templates");
     g_str = &kRu;
-    require(std::wstring(mode_time_text()) == L"Время" && std::wstring(mode_spectrum_text()) == L"Спектр" &&
+    require(std::wstring(mode_time_text()) == L"Сигнал" && std::wstring(mode_spectrum_text()) == L"Спектр" &&
                 std::wstring(mode_frf_text()) == L"АЧХ",
             "Russian mode buttons use compact labels rather than status format templates");
     g_str = &kEn;
+}
+
+void frf_filter_tab() {
+    reset_document({"Reference", "Response"}, {0, .01, .02, .03}, {{1,2,3,4},{2,4,6,8}});
+    struct Window {
+        HWND hwnd=CreateWindowExW(0,L"STATIC",L"FRF tabs",WS_POPUP|WS_CLIPCHILDREN,
+            0,0,980,500,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+        ~Window() { g.main=nullptr; if(hwnd) DestroyWindow(hwnd); }
+    } window;
+    require(window.hwnd!=nullptr,"FRF filter tab test window");
+    g.main=window.hwnd;
+    g.side_panel_visible=true;
+    g.ui_font=reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    const auto child=[&](const wchar_t* cls,int id) {
+        return CreateWindowExW(0,cls,L"",WS_CHILD,0,0,10,10,g.main,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);
+    };
+    g.side_tab_channels=child(L"BUTTON",IDC_SIDE_TAB_CHANNELS);
+    g.side_tab_points=child(L"BUTTON",IDC_SIDE_TAB_POINTS);
+    g.side_tab_filter=child(L"BUTTON",IDC_SIDE_TAB_FILTER);
+    g.side_filter_enable=child(L"BUTTON",IDC_SIDE_FILTER_ENABLE);
+    g.side_filter_controls.push_back(g.side_filter_enable);
+    HWND point_control=child(L"STATIC",IDC_SIDE_PT_NUM);
+    g.side_point_controls.push_back(point_control);
+    create_frf_panel(g.main,GetModuleHandleW(nullptr));
+    const auto shown=[](HWND h) { return (GetWindowLongPtrW(h,GWL_STYLE)&WS_VISIBLE)!=0; };
+    // No roles are selected, so changing modes/settings does not launch a worker.
+    g.side_panel_tab=2;
+    set_mode(AnalysisMode::FRF);
+    require(g.side_panel_tab==2 && shown(g.side_tab_filter),"FRF preserves and exposes the selected filter tab");
+    require(shown(g.side_filter_enable) && !shown(g.frf_panel),"filter tab shows document controls without the FRF panel");
+    RECT channels{},points{},filter{};
+    GetWindowRect(g.side_tab_channels,&channels); GetWindowRect(g.side_tab_points,&points); GetWindowRect(g.side_tab_filter,&filter);
+    require(channels.right<=points.left && points.right<=filter.left && channels.top==filter.top,
+        "three FRF tabs occupy one nonoverlapping row");
+    WndProc(g.main,WM_COMMAND,MAKEWPARAM(IDC_SIDE_FILTER_ENABLE,BN_CLICKED),0);
+    require(g.noise_threshold_enabled,"FRF filter control changes the shared document filter");
+    pop_undo();
+    require(!g.noise_threshold_enabled,"document filter changes from FRF are undoable");
+    WndProc(g.main,WM_COMMAND,IDC_SIDE_TAB_POINTS,0);
+    require(shown(point_control) && !shown(g.side_filter_enable) && !shown(g.frf_panel),
+        "FRF points tab hides both filter and calculation controls");
+    WndProc(g.main,WM_COMMAND,IDC_SIDE_TAB_CHANNELS,0);
+    require(shown(g.frf_panel) && !shown(point_control) && !shown(g.side_filter_enable),
+        "FRF channels tab restores only the calculation panel");
+    WndProc(g.main,WM_COMMAND,IDC_SIDE_TAB_FILTER,0);
+    require(g.side_panel_tab==2 && shown(g.side_filter_enable) && !shown(g.frf_panel),
+        "filter tab opens after visiting the other FRF tabs");
+    MoveWindow(g.main,0,0,980,220,FALSE); layout();
+    require(g.side_scroll_max>0,"FRF filter panel can scroll in a short window");
+    g.side_panel_visible=false; layout();
+    require(!shown(g.side_tab_filter) && !shown(g.side_filter_enable) && !shown(g.frf_panel),
+        "hiding the side panel also hides the FRF filter tab and controls");
 }
 
 void measurement_label_units() {
@@ -1221,6 +1280,7 @@ int main() {
         light_mode_fft_visibility();
         routed_window_messages();
         measurement_label_units();
+        frf_filter_tab();
         frf_integration();
         frf_multi_channels();
         frf_gap_stitching();

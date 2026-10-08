@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.16.9
+
+### Названия режимов и панель FRF
+
+- Режим «Время» / `Time` переименован в «Сигнал» / `Signal` в кнопке,
+  меню, статусе, подсказках, справочнике горячих клавиш и настройках осей.
+  Физическая ось времени и заголовки экспорта сохраняют прежние названия.
+- «Сглаживание линий» / `Line smoothing` переименовано в
+  «Сглаживание каналов» / `Channel smoothing`.
+- Список семейства фильтра снова расположен справа от подписи, как список
+  режима; оба списка выровнены в общей колонке с учётом языка интерфейса.
+- В FRF добавлена третья вкладка «Фильтр» / `Filter` рядом с «Каналы» и
+  «Точки». Она использует общий фильтр всех каналов текущего документа,
+  поддерживает Undo и прокрутку. Выбранная вкладка сохраняется при входе
+  в FRF. Пересчёт с фильтром зависит от переключателя обработки каналов.
+- Удалены отдельные кнопки Calculate, CSV и PNG из правой панели FRF;
+  подсказка сдвинута вверх. Enter в поле L продолжает запускать расчёт,
+  экспорт доступен через общие команды приложения.
+- Добавлены 13 GUI-проверок вкладок, общего фильтра, Undo, прокрутки,
+  отсутствия удалённых кнопок и расчёта по Enter; обновлены проверки названий.
+  Всего успешно проходят 353 GUI-проверки. Численные ядра и форматы проектов
+  не изменены.
+
+### Mode names and FRF panel
+
+- Renamed the Time mode to Signal in the toolbar, menu, status, tooltips,
+  shortcut reference and axis settings. Physical time-axis labels and export
+  headers retain their existing names.
+- Renamed Line smoothing to Channel smoothing in both interface languages.
+- Restored the filter-family selector to the right of its label, like the
+  mode selector. Both selectors share a column with language-aware label widths.
+- Added a third Filter tab beside Channels and Points in FRF. It uses the
+  current document's shared filter for all channels, with Undo and scrolling.
+  Entering FRF preserves the selected tab. Applying the filter to FRF remains
+  controlled by the channel-processing toggle.
+- Removed separate Calculate, CSV and PNG buttons from the FRF panel and
+  moved the hint up. Enter in L still starts calculation; export remains
+  available through the application's shared commands.
+- Added 13 GUI checks covering tabs, the shared filter, Undo, scrolling,
+  removed buttons and Enter-triggered calculation; updated mode-name checks.
+  All 353 GUI checks pass. Numerical kernels and project formats are unchanged.
+
 ## v0.16.8
 
 ### Интерфейс и измерительные подписи
