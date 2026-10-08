@@ -512,7 +512,12 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             // --- Legend click handling (toggle / solo) ---
-            if (mx >= g_legend_box.left && mx < g_legend_box.right &&
+            if (g.show_channel_legend && mx >= g_legend_close_box.left && mx < g_legend_close_box.right &&
+                my >= g_legend_close_box.top && my < g_legend_close_box.bottom) {
+                SendMessageW(hwnd, WM_COMMAND, IDM_CHANNEL_LEGEND, 0);
+                return 0;
+            }
+            if (g.show_channel_legend && mx >= g_legend_box.left && mx < g_legend_box.right &&
                 my >= g_legend_box.top && my < g_legend_box.bottom) {
                 for (const auto& li : g_legend_items) {
                     if (mx >= li.rect.left && mx < li.rect.right &&

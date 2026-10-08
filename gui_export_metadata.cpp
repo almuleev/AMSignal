@@ -126,6 +126,7 @@ void write_export_metadata(std::ofstream& out,
         write_export_key_value(out, L"marker_color", export_color_triplet(g.marker_color), line_end);
         write_export_key_value(out, L"smoothing", g.visual_smooth ? L"1" : L"0", line_end);
         write_export_key_value(out, L"distinguish_curves", g.distinguish_curves ? L"1" : L"0", line_end);
+        write_export_key_value(out, L"show_channel_legend", g.show_channel_legend ? L"1" : L"0", line_end);
         write_export_key_value(out, L"vertical_pan", g.vertical_pan ? L"1" : L"0", line_end);
         write_export_key_value(out, L"snap_to_data", g.snap_to_data ? L"1" : L"0", line_end);
         write_export_key_value(out, L"show_gap_markers", g.show_gap_markers ? L"1" : L"0", line_end);
@@ -476,6 +477,8 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 parse_bool(value, g.visual_smooth);
             } else if (key == "distinguish_curves") {
                 parse_bool(value, g.distinguish_curves);
+            } else if (key == "show_channel_legend") {
+                parse_bool(value, g.show_channel_legend);
             } else if (key == "vertical_pan") {
                 parse_bool(value, g.vertical_pan);
             } else if (key == "snap_to_data") {

@@ -258,6 +258,9 @@ void sync_menu() {
     chk(IDM_MODE_FRF, g.mode == AnalysisMode::FRF);
     chk(IDM_VISMOOTH, g.visual_smooth);
     chk(IDM_CURVE_SYMBOLS, g.distinguish_curves);
+    chk(IDM_CHANNEL_LEGEND, g.show_channel_legend);
+    EnableMenuItem(g.menu, IDM_CHANNEL_LEGEND, MF_BYCOMMAND |
+        (g.mode == AnalysisMode::FRF ? MF_GRAYED : MF_ENABLED));
     chk(IDM_VPAN, g.vertical_pan);
     chk(IDC_MEASURE, g.measure_mode);
     chk(IDC_CURSOR_TOOL, !g.measure_mode && !g.pending_marker && g.pending_line == 0);
@@ -356,6 +359,7 @@ HMENU make_menu() {
     append_menu_item_owner_draw(view, IDC_AUTOY, autoy_text);
     append_menu_item_owner_draw(view, IDM_VISMOOTH, smooth_text);
     append_menu_item_owner_draw(view, IDM_CURVE_SYMBOLS, curve_symbols_text);
+    append_menu_item_owner_draw(view, IDM_CHANNEL_LEGEND, text(L"Channel legend", L"Легенда каналов"));
     append_menu_item_owner_draw(view, IDM_VPAN, vpan_text);
     append_menu_item_owner_draw(view, IDC_PLAY, play_text);
     append_menu_item_owner_draw(view, IDM_SPEED_CUSTOM, speed_menu_text());

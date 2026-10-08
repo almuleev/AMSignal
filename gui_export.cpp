@@ -9,6 +9,7 @@
 #include "gui_theme.hpp"
 #include "gui_text.hpp"
 #include "gui_layout.hpp"
+#include "gui_ids.hpp"
 #include "gui_processing.hpp"
 #include "gui_render.hpp"
 #include "gui_spectrum.hpp"
@@ -51,7 +52,9 @@ bool save_png(const std::wstring& path) {
     if (g.mode == AnalysisMode::FRF && (!g.frf.result.ok || g.frf.pending)) return false;
     RECT pr = plot_rect();
     int W = (pr.right - pr.left) + 90;
-    int H = (pr.bottom - pr.top) + 60;
+    const int top_margin = 14 + kAxisNameTop;
+    const int bottom_margin = kAxisBottom + 18; // leave room for the PNG credit
+    int H = (pr.bottom - pr.top) + top_margin + bottom_margin;
     if (W < 400) W = 1000;
     if (H < 240) H = 600;
 
@@ -66,7 +69,7 @@ bool save_png(const std::wstring& path) {
     DeleteObject(bg);
     SelectObject(mem, reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
     SetBkMode(mem, TRANSPARENT);
-    RECT inner = {70, 14, W - 20, H - 46};
+    RECT inner = {70, top_margin, W - 20, H - bottom_margin};
     draw_chart(mem, inner);
     draw_png_credit(mem, W, H);
 

@@ -58,6 +58,7 @@ enum {
     IDM_SETTINGS,
     IDW_START = 1114,   // welcome screen: start working
     IDM_CURVE_SYMBOLS = 1115,
+    IDM_CHANNEL_LEGEND = 1116,
 
     // Playback speed menu items.
     IDM_SPEED_00001 = 1300,
@@ -165,10 +166,11 @@ inline const int kRightPanel = 312;
 
 inline const int kBottomBar = 28;
 
-// status-bar strip at the very bottom
-inline const int kAxisBottom = 38;
+// Separate rows for numeric X ticks, the physical caption and the editable X name.
+inline const int kAxisBottom = 66;
+inline const int kAxisNameTop = 22;
+inline const int kAxisNameXOffset = 44;
 
-// room under the plot for the X tick labels + title
 // The outer part is reserved for the vertical physical amplitude label; the
 // numeric Y ticks remain in the inner part of this gutter.
 inline const int kAxisLeft = 86;

@@ -98,6 +98,7 @@ void changed() {
     // the bottom status bar: it contains text that does not change on zoom.
     RECT dirty=plot_rect();
     dirty.left=0; // include the physical captions and numeric Y-scale gutter
+    dirty.top-=kAxisNameTop;
     dirty.bottom+=kAxisBottom;
     InvalidateRect(g.main,&dirty,FALSE);
 }
@@ -203,6 +204,7 @@ RECT frf_reference_plot_rect(const RECT& full) {
 
 void draw_frf(HDC dc, const RECT& p) {
     g_legend_items.clear(); g_legend_box = {};
+    g_legend_close_box = {};
     g.visible_gap_markers.clear();
     HBRUSH bg = CreateSolidBrush(g_theme->bg_plot);
     FillRect(dc, &p, bg); DeleteObject(bg);
@@ -615,22 +617,8 @@ void draw_frf(HDC dc, const RECT& p) {
         draw_vertical_left_axis_label(reference_plot,
             (g_str==&kEn ? L"Mean ref. amplitude, " : L"Ср. опора, ") + vertical_axis_unit());
     }
-    // The user coordinate names stay separate from the physical KD/Reference
-    // captions above, just as they do in Time and FFT.
-    const auto draw_user_axis_name = [&](const RECT& plot, const std::wstring& name, bool x_axis) {
-        SIZE size{};
-        GetTextExtentPoint32W(dc,name.c_str(),static_cast<int>(name.size()),&size);
-        const int x=x_axis ? plot.right-4-size.cx : plot.left+4;
-        const int y=x_axis ? plot.bottom-4-size.cy : plot.top+3;
-        HBRUSH brush=CreateSolidBrush(g_theme->bg_plot);
-        RECT background{x-3,y-2,x+size.cx+3,y+size.cy+2};
-        FillRect(dc,&background,brush); DeleteObject(brush);
-        SetTextAlign(dc,TA_LEFT|TA_TOP); SetTextColor(dc,g_theme->axis_text);
-        TextOutW(dc,x,y,name.c_str(),static_cast<int>(name.size()));
-    };
-    draw_user_axis_name(coefficient_plot,axis_label_for(AnalysisMode::FRF,false),false);
-    draw_user_axis_name(g.frf.show_reference_amplitude ? reference_plot : coefficient_plot,
-                        axis_label_for(AnalysisMode::FRF,true),true);
+    // The shared outer rows also stay clear of the FRF legend and divider.
+    draw_user_axis_names(dc, p, AnalysisMode::FRF);
 
     // Scale gutters and captions are deliberately rendered after the curves.
     // Restore every edge last, using the last in-bounds pixel for right/bottom

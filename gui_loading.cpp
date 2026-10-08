@@ -158,6 +158,7 @@ void apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
     }
     if (g.autoy) { SendMessageW(g.autoy, BM_SETCHECK, BST_CHECKED, 0); InvalidateRect(g.autoy, nullptr, FALSE); }
     if (g.menu) CheckMenuItem(g.menu, IDC_AUTOY, MF_BYCOMMAND | MF_CHECKED);
+    g.show_channel_legend = true;
     apply_export_metadata_from_comments(g.ds.export_comments);
     bool reloaded_ini_formulas = false;
     if (!g.light_mode && g.formula_ini_deferred) {

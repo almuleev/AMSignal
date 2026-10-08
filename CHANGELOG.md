@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.16.10
+
+### Легенда каналов и оформление осей
+
+- Легенду каналов в режимах «Сигнал» и «Спектр» можно скрыть крестиком
+  и вернуть через «Вид → Легенда каналов». Скрытие сразу освобождает область
+  для мыши и не меняет видимость самих каналов.
+- Видимость легенды хранится отдельно у каждого документа, входит в Undo/Redo
+  и сохраняется в графических метаданных проекта `.AMSig`. Старые проекты
+  и новые файлы по умолчанию показывают легенду. PNG учитывает её видимость.
+  В FRF пункт недоступен; отдельная полоса обозначений Ч/Б-кривых сохранена.
+- У пользовательских названий X/Y убраны непрозрачные подложки. Y расположена
+  над общей областью графика, X — справа в отдельной строке ниже числовых
+  делений и физического названия оси. Оформление едино для Сигнала, Спектра
+  и АЧХ, в том числе с показанным и скрытым графиком средней опоры.
+- Названия используют общий осевой шрифт и цвет текущей темы; длинный текст
+  сокращается многоточием в пределах ширины графика. Поля окна и PNG
+  резервируют место для названий, физических подписей и подписи экспорта;
+  инвалидация включает верхнюю строку Y.
+- Добавлены проверки легенды, истории, состояния документов, сохранения
+  проекта, PNG и пиксельные проверки размещения названий во всех режимах,
+  обеих темах и при узком графике. Всего проходят 396 GUI-проверок;
+  тестовые PNG проверены визуально. Обновлены правила работы и карта модулей.
+
+### Channel legend and axis appearance
+
+- The channel legend in Signal and Spectrum can be hidden with its close
+  control and restored through View → Channel legend. Hiding immediately
+  releases its mouse hit areas without changing channel visibility.
+- Legend visibility belongs to each document, supports Undo/Redo and is
+  stored in `.AMSig` project graph metadata. Older projects and new files
+  show the legend by default. PNG exports follow its visibility. The command
+  is disabled in FRF; the separate grayscale curve legend remains unchanged.
+- Removed opaque backgrounds from editable X/Y names. Y sits above the
+  overall plot area; X is right-aligned in its own row below numeric ticks
+  and the physical axis caption. Signal, Spectrum and FRF share this layout,
+  including FRF with its mean-reference graph shown or hidden.
+- Names use the shared axis font and the current theme's axis color. Long
+  names are ellipsized within the plot width. Window and PNG margins reserve
+  space for names, physical captions and the export credit; invalidation
+  includes the outer Y row.
+- Added legend, history, document state, project roundtrip and PNG checks,
+  plus pixel checks for names in all modes, both themes and narrow plots.
+  All 396 GUI checks pass; generated PNGs were visually inspected.
+  Updated repository guidance and the module map.
+
 ## v0.16.9
 
 ### Названия режимов и панель FRF

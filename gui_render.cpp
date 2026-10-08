@@ -23,6 +23,7 @@ namespace gui {
 std::vector<LegendItem> g_legend_items;
 
 RECT g_legend_box = {0,0,0,0};
+RECT g_legend_close_box = {};
 
 namespace {
 constexpr wchar_t kStatusAuthorCredit[] = L"AMSignal · Alexander Muleev · al.muleev@gmail.com";
@@ -120,6 +121,7 @@ void invalidate_plot() {
     // Include it when an asynchronous FRF result arrives; otherwise Windows
     // keeps the old gutter pixels until an unrelated repaint occurs.
     pr.left = 0;
+    pr.top -= kAxisNameTop;
     RECT rc; GetClientRect(g.main, &rc);
     pr.bottom = rc.bottom; // include status bar
     InvalidateRect(g.main, &pr, FALSE);
@@ -190,28 +192,21 @@ std::wstring point_difference_text(const PointGroup& group, double dx, double dy
 }
 
 void draw_user_axis_names(HDC dc, const RECT& p, AnalysisMode mode) {
-    HFONT font = g.axis_font ? g.axis_font : g.ui_font;
-    HGDIOBJ old_font = SelectObject(dc, font);
+    const int saved = SaveDC(dc);
+    HFONT font = g.axis_font ? g.axis_font :
+        (g.ui_font ? g.ui_font : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
+    SelectObject(dc, font);
     SetTextColor(dc, g_theme->axis_text);
     SetBkMode(dc, TRANSPARENT);
-    const auto draw_name = [&](const std::wstring& text, int x, int y) {
-        if (text.empty()) return;
-        SIZE size{};
-        GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
-        RECT background{x - 3, y - 2, x + size.cx + 3, y + size.cy + 2};
-        HBRUSH brush = CreateSolidBrush(g_theme->bg_plot);
-        FillRect(dc, &background, brush);
-        DeleteObject(brush);
-        SetTextAlign(dc, TA_LEFT | TA_TOP);
-        TextOutW(dc, x, y, text.c_str(), static_cast<int>(text.size()));
-    };
+    SetTextAlign(dc, TA_LEFT | TA_TOP);
     const std::wstring y_name = axis_label_for(mode, false);
     const std::wstring x_name = axis_label_for(mode, true);
-    draw_name(y_name, p.left + 4, p.top + 4);
-    SIZE x_size{};
-    GetTextExtentPoint32W(dc, x_name.c_str(), static_cast<int>(x_name.size()), &x_size);
-    draw_name(x_name, p.right - 4 - x_size.cx, p.bottom - 4 - x_size.cy);
-    SelectObject(dc, old_font);
+    RECT y_row{p.left, p.top - kAxisNameTop, p.right, p.top - 4};
+    RECT x_row{p.left, p.bottom + kAxisNameXOffset, p.right, p.bottom + kAxisBottom - 4};
+    constexpr UINT flags = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
+    DrawTextW(dc, y_name.c_str(), static_cast<int>(y_name.size()), &y_row, flags | DT_LEFT);
+    DrawTextW(dc, x_name.c_str(), static_cast<int>(x_name.size()), &x_row, flags | DT_RIGHT);
+    RestoreDC(dc, saved);
 }
 
 int curve_pen_style(std::size_t curve_index) {
@@ -327,7 +322,6 @@ void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1
     HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
     Rectangle(dc, p.left, p.top, p.right, p.bottom);
     SelectObject(dc, old_brush);
-    draw_user_axis_names(dc, p, g.mode);
     {
         // Keep the physical amplitude unit separate from the editable Y
         // designation and draw it in the conventional vertical Y-axis position.
@@ -360,6 +354,10 @@ void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1
 }
 
 void draw_legend(HDC dc, const RECT& p) {
+    g_legend_items.clear();
+    g_legend_box = {};
+    g_legend_close_box = {};
+    if (!g.show_channel_legend) return;
     int item_h = 16;
     int pad = 6;
     int max_width = 0;
@@ -378,7 +376,8 @@ void draw_legend(HDC dc, const RECT& p) {
     }
 
     int box_w = 14 + 4 + max_width + pad * 2;
-    int box_h = ch_count * item_h + pad * 2;
+    const int header_h = 18;
+    int box_h = ch_count * item_h + pad * 2 + header_h;
     int box_x = p.right - box_w - 14;
     int box_y = p.bottom - box_h - 14;
 
@@ -396,7 +395,13 @@ void draw_legend(HDC dc, const RECT& p) {
     SelectObject(dc, old_brush);
     DeleteObject(bg);
 
-    int y = box_y + pad;
+    g_legend_close_box = {box_x + box_w - pad - header_h, box_y + pad,
+                          box_x + box_w - pad, box_y + pad + header_h};
+    SetTextColor(dc, g_theme->text_secondary);
+    SetTextAlign(dc, TA_LEFT | TA_TOP);
+    DrawTextW(dc, L"\u00d7", 1, &g_legend_close_box, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    int y = box_y + pad + header_h;
     for (int i = 0; i < ch_count; ++i) {
         bool vis = g.visible[i];
         COLORREF col = channel_color(i);
@@ -967,6 +972,7 @@ void draw_time(HDC dc, const RECT& p) {
         DeleteObject(clip);
         g_legend_items.clear();
         g_legend_box = {0, 0, 0, 0};
+        g_legend_close_box = {};
         g.vx0 = displayed_start; g.vx1 = displayed_end; g.vy0 = ymin; g.vy1 = ymax;
         g.vrect = p; g.vvalid = true;
         return;
@@ -1431,6 +1437,7 @@ void draw_chart(HDC dc, const RECT& p) {
     if (!has_data()) {
         g_legend_items.clear();
         g_legend_box = {0, 0, 0, 0};
+        g_legend_close_box = {};
         g.visible_gap_markers.clear();
         SetTextAlign(dc, TA_CENTER | TA_BASELINE);
         SetTextColor(dc, g_theme->text_secondary);
@@ -1450,8 +1457,7 @@ void draw_chart(HDC dc, const RECT& p) {
     draw_guides(dc);
     draw_markers(dc);
     draw_measure(dc);
-    // Curves and interactive overlays may reach the plot edge. Draw the
-    // editable coordinate designations last so X and Y stay legible.
+    // Editable names have their own outer rows, clear of data and scale captions.
     draw_user_axis_names(dc, p, g.mode);
 }
 

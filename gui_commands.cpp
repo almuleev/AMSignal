@@ -20,6 +20,7 @@
 #include "gui_playback.hpp"
 #include "gui_processing.hpp"
 #include "gui_render_data.hpp"
+#include "gui_render.hpp"
 #include "gui_settings.hpp"
 #include "gui_side_panel.hpp"
 #include "gui_state.hpp"
@@ -329,6 +330,17 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     set_status();
                     InvalidateRect(hwnd, nullptr, TRUE);
                     return 0;
+                case IDM_CHANNEL_LEGEND: {
+                    const SettingsSnapshot before = capture_settings_snapshot();
+                    g.show_channel_legend = !g.show_channel_legend;
+                    g_legend_items.clear();
+                    g_legend_box = {};
+                    g_legend_close_box = {};
+                    record_settings_change(before);
+                    sync_menu();
+                    invalidate_plot();
+                    return 0;
+                }
                 case IDM_CURVE_SYMBOLS: {
                     const SettingsSnapshot before = capture_settings_snapshot();
                     g.distinguish_curves = !g.distinguish_curves;

@@ -146,6 +146,7 @@ struct DocumentState {
     // Add per-curve line patterns and symbols so plots remain identifiable in
     // grayscale screenshots and printed exports.
     bool distinguish_curves = false;
+    bool show_channel_legend = true;
 
     bool auto_y = true;            // auto-fit vertical scale (true=auto, false=fixed)
     double y_lock_min = -1.0, y_lock_max = 1.0;

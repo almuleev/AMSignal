@@ -193,6 +193,7 @@ void exports() {
     g.global_formula = L"2*x"; g.channel_formulas = {L"x+1", L"x-1"};
     g.noise_threshold_enabled = true; g.noise_threshold_min = 0.25; g.noise_threshold_max = 0.75;
     g.distinguish_curves = true;
+    g.show_channel_legend = false;
     g.frf.apply_processing = false;
     g.frf.logarithmic_frequency_axis = false;
     g.frf.show_reference_amplitude = false;
@@ -211,6 +212,7 @@ void exports() {
             "project restores formulas without baking them into data");
     require(g.noise_threshold_enabled, "project restores filter settings");
     require(g.distinguish_curves, "project restores grayscale curve symbols");
+    require(!g.show_channel_legend, "project restores hidden channel legend");
     require(!g.frf.apply_processing, "project restores the FRF raw-channel choice");
     require(!g.frf.logarithmic_frequency_axis && !g.frf.show_reference_amplitude &&
             std::fabs(g.frf.reference_height_fraction-.42)<1e-9 && !g.frf.reference_auto_y &&
@@ -467,6 +469,120 @@ void light_mode_fft_visibility() {
     set_mode(AnalysisMode::FFT);
     require(g.spec_generation==cached_generation && !g.spec_pending,
             "returning to the FFT tab reuses an unchanged completed cache");
+}
+
+void user_axis_names_outside_plot() {
+    reset_document({"A"}, {0,1}, {{1,2}});
+    const Theme* previous_theme = g_theme;
+    HDC dc = CreateCompatibleDC(nullptr);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = 320;
+    info.bmiHeader.biHeight = -240;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    require(bitmap && pixels, "axis name rendering surface");
+    HGDIOBJ old_bitmap = SelectObject(dc, bitmap);
+    auto* data = static_cast<unsigned long*>(pixels);
+    constexpr unsigned long background = 0x00354251;
+    for (const Theme* theme : {&kLightTheme, &kDarkTheme}) {
+        g_theme = theme;
+        for (AnalysisMode mode : {AnalysisMode::Time, AnalysisMode::FFT, AnalysisMode::FRF}) {
+            for (bool long_names : {false, true}) {
+                const std::wstring x = long_names ? L"Длинное название оси X & время сигнала" : L"X";
+                const std::wstring y = long_names ? L"Длинное название оси Y & амплитуда" : L"Y";
+                g.axis_x_label = g.fft_axis_x_label = g.frf_axis_x_label = x;
+                g.time_axis_y_label = g.fft_axis_y_label = g.frf_axis_y_label = y;
+                const RECT plot{40,40,long_names ? 100 : 280,150};
+                std::fill(data, data + 320*240, background);
+                draw_user_axis_names(dc, plot, mode);
+                GdiFlush();
+                int above = 0, below = 0, unexpected = 0;
+                for (int py=0; py<240; ++py) for (int px=0; px<320; ++px) {
+                    if ((data[py*320+px] & 0x00ffffff) == background) continue;
+                    if (px < plot.left || px >= plot.right) ++unexpected;
+                    else if (py < plot.top) ++above;
+                    else if (py > plot.bottom + 42) ++below;
+                    else ++unexpected;
+                }
+                require(above > 0 && below > 0, "both editable axis names render outside the graph in each theme and mode");
+                require(unexpected == 0, "axis names never repaint data, ticks or the physical caption, even in a narrow plot");
+            }
+        }
+    }
+    SelectObject(dc, old_bitmap);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    g_theme = previous_theme;
+}
+
+void channel_legend_visibility() {
+    reset_document({"A", "B"}, {0,1,2,3}, {{1,2,3,4},{2,3,4,5}});
+    require(g.show_channel_legend, "old and new documents show the legend by default");
+    update_theme_brushes();
+    HDC dc = CreateCompatibleDC(nullptr);
+    HDC screen = GetDC(nullptr);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, 640, 480);
+    ReleaseDC(nullptr, screen);
+    HGDIOBJ old_bitmap = SelectObject(dc, bitmap);
+    const RECT plot{60,40,600,400};
+    draw_legend(dc, plot);
+    require(g_legend_items.size() == 2 && !IsRectEmpty(&g_legend_close_box), "legend has rows and a close control");
+    const auto visibility = g.visible;
+    mark_active_document_saved();
+    handle_commands_message(nullptr, WM_COMMAND, IDM_CHANNEL_LEGEND, 0);
+    require(!g.show_channel_legend && g_legend_items.empty() && IsRectEmpty(&g_legend_box) &&
+            IsRectEmpty(&g_legend_close_box), "hiding clears all legend hit areas immediately");
+    require(g.visible == visibility && active_document_has_unsaved_changes(), "legend hiding preserves channels and marks project changed");
+    draw_legend(dc, plot);
+    require(g_legend_items.empty(), "hidden legend stays absent during rendering and PNG drawing");
+    pop_undo();
+    require(g.show_channel_legend && !active_document_has_unsaved_changes(), "legend undo returns to saved state");
+    pop_redo();
+    require(!g.show_channel_legend, "legend hiding supports redo");
+    DocumentState second;
+    second.ds = g.ds;
+    second.visible = g.visible;
+    g.inactive_documents.push_back(std::move(second));
+    require(switch_to_document(1) && g.show_channel_legend, "other document retains its own legend visibility");
+    require(switch_to_document(1) && !g.show_channel_legend, "returning restores hidden legend");
+    handle_commands_message(nullptr, WM_COMMAND, IDM_CHANNEL_LEGEND, 0);
+    draw_legend(dc, plot);
+    require(g.show_channel_legend && g_legend_items.size() == 2, "menu command restores the legend");
+    HWND window = CreateWindowExW(0,L"STATIC",L"Legend test",WS_POPUP,0,0,640,480,
+                                  nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(window != nullptr, "legend click test window");
+    const auto old_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProc)));
+    handle_input_message(window, WM_LBUTTONDOWN, 0,
+        MAKELPARAM(g_legend_close_box.left + 2, g_legend_close_box.top + 2));
+    require(!g.show_channel_legend && g.visible == visibility, "close click hides legend without toggling a channel");
+    g.main = window;
+    g.ui_font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    layout();
+    Gdiplus::GdiplusStartupInput startup;
+    ULONG_PTR token = 0;
+    require(Gdiplus::GdiplusStartup(&token, &startup, nullptr) == Gdiplus::Ok, "legend PNG startup");
+    require(save_png((test_dir / "legend_hidden.png").wstring()) && g_legend_items.empty(),
+            "PNG export respects hidden legend");
+    handle_commands_message(window, WM_COMMAND, IDM_CHANNEL_LEGEND, 0);
+    require(save_png((test_dir / "legend_visible.png").wstring()) && g_legend_items.size() == 2,
+            "PNG export includes restored legend");
+    const Theme* previous_theme = g_theme;
+    g_theme = &kDarkTheme;
+    g.axis_x_label = L"Длинная пользовательская подпись времени X";
+    g.time_axis_y_label = L"Пользовательская подпись амплитуды Y";
+    require(save_png((test_dir / "axis_names_dark.png").wstring()), "dark PNG with long editable axis names");
+    g_theme = previous_theme;
+    Gdiplus::GdiplusShutdown(token);
+    g.main = nullptr;
+    SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(old_proc));
+    DestroyWindow(window);
+    SelectObject(dc, old_bitmap);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
 }
 
 void routed_window_messages() {
@@ -836,6 +952,9 @@ void frf_integration() {
         require(std::abs(g.frf.display_smoothing_octaves-1.0/12.0)<1e-12,"FRF display smoothing can select one twelfth octave");
         const auto png=test_dir / "frf_plot.png";
         require(save_png(png.wstring()),"FRF saves graph through the existing PNG exporter");
+        g.frf.show_reference_amplitude = false;
+        require(save_png((test_dir / "frf_no_reference.png").wstring()), "FRF outer axis names with hidden reference graph");
+        g.frf.show_reference_amplitude = true;
         {
             Gdiplus::Bitmap bitmap(png.c_str());
             require(bitmap.GetLastStatus()==Gdiplus::Ok && bitmap.GetWidth()>=400 && bitmap.GetHeight()>=240,
@@ -1278,6 +1397,8 @@ int main() {
         document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); multiple_open_documents(); processing(); fft_recording_recovery();
         light_mode_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
         light_mode_fft_visibility();
+        user_axis_names_outside_plot();
+        channel_legend_visibility();
         routed_window_messages();
         measurement_label_units();
         frf_filter_tab();

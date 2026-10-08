@@ -11,6 +11,7 @@ struct LegendItem { int channel; RECT rect; };
 extern std::vector<LegendItem> g_legend_items;
 
 extern RECT g_legend_box;
+extern RECT g_legend_close_box;
 
 void invalidate_plot();
 
@@ -22,6 +23,9 @@ void draw_curve_symbol(HDC dc, int x, int y, std::size_t curve_index, COLORREF c
 
 void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1,
                const wchar_t* xlabel);
+
+// Editable names in separate outer rows, above Y and below the physical X caption.
+void draw_user_axis_names(HDC dc, const RECT& p, AnalysisMode mode);
 
 // Physical unit selected in Settings for amplitude scales.
 std::wstring vertical_axis_unit();

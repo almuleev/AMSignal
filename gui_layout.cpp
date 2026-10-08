@@ -216,7 +216,7 @@ RECT plot_rect() {
     GetClientRect(g.main, &rc);
     RECT p;
     p.left = kAxisLeft;
-    p.top = kTopBar + 6;
+    p.top = kTopBar + 6 + kAxisNameTop;
     p.right = rc.right - side_panel_width();
     p.bottom = rc.bottom - kBottomBar - kAxisBottom;
     if (p.right < p.left + 20) p.right = p.left + 20;
