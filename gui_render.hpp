@@ -21,10 +21,9 @@ int curve_pen_style(std::size_t curve_index);
 
 void draw_curve_symbol(HDC dc, int x, int y, std::size_t curve_index, COLORREF color, int radius = 4);
 
-void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1,
-               const wchar_t* xlabel);
+void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1);
 
-// Editable names in separate outer rows, above Y and below the physical X caption.
+// Outer Y name and shared physical/editable X caption row.
 void draw_user_axis_names(HDC dc, const RECT& p, AnalysisMode mode);
 
 // Physical unit selected in Settings for amplitude scales.

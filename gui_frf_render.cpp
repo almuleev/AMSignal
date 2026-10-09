@@ -262,6 +262,16 @@ void draw_frf(HDC dc, const RECT& p) {
 
     HPEN grid = CreatePen(PS_SOLID, 1, g_theme->grid);
     HGDIOBJ old_pen = SelectObject(dc, grid);
+    const auto draw_frequency_label = [&](int x, double frequency) {
+        wchar_t text[48]; swprintf(text, 48, L"%.5g", frequency);
+        SIZE size{};
+        GetTextExtentPoint32W(dc, text, lstrlenW(text), &size);
+        const int left = std::clamp(x - size.cx / 2, reference_plot.left,
+                                   std::max(reference_plot.left, reference_plot.right - size.cx));
+        RECT label{left, reference_plot.bottom + 4, reference_plot.right, reference_plot.bottom + 23};
+        SetTextAlign(dc, TA_LEFT | TA_TOP);
+        DrawTextW(dc, text, -1, &label, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    };
     // Log mode uses decades; linear mode uses evenly spaced physical frequency.
     int previous_label_x = -10000;
     const int tick_count=g.frf.logarithmic_frequency_axis ? 0 : 5;
@@ -272,9 +282,7 @@ void draw_frf(HDC dc, const RECT& p) {
             const int x = mapx(f);
             line(dc, x, coefficient_plot.top, x, coefficient_plot.bottom);
             if (g.frf.show_reference_amplitude) line(dc, x, reference_plot.top, x, reference_plot.bottom);
-            wchar_t text[48]; swprintf(text, 48, L"%.5g", f);
-            RECT label{x-36, reference_plot.bottom+4, x+36, reference_plot.bottom+23};
-            DrawTextW(dc, text, -1, &label, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
+            draw_frequency_label(x, f);
             previous_label_x=x;
         }
     }
@@ -284,9 +292,7 @@ void draw_frf(HDC dc, const RECT& p) {
         const int x=mapx(f);
         line(dc,x,coefficient_plot.top,x,coefficient_plot.bottom);
         if (g.frf.show_reference_amplitude) line(dc,x,reference_plot.top,x,reference_plot.bottom);
-        wchar_t text[48]; swprintf(text,48,L"%.5g",f);
-        RECT label{x-36,reference_plot.bottom+4,x+36,reference_plot.bottom+23};
-        DrawTextW(dc,text,-1,&label,DT_CENTER|DT_SINGLELINE|DT_NOPREFIX);
+        draw_frequency_label(x, f);
     }
     const double raw_step = (high - low) / 6;
     const double base = std::pow(10.0, std::floor(std::log10(raw_step)));
@@ -455,10 +461,6 @@ void draw_frf(HDC dc, const RECT& p) {
         SelectObject(dc,old_grip);
         DeleteObject(grip);
     }
-    RECT xlabel{reference_plot.left, reference_plot.bottom+23, reference_plot.right, reference_plot.bottom+42};
-    DrawTextW(dc, g.frf.logarithmic_frequency_axis ? (g_str==&kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (лог.)") :
-              (g_str==&kEn ? L"Frequency, Hz (linear scale)" : L"Частота, Гц (лин.)"),
-              -1, &xlabel, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
     // Guides and measurement annotations may select another font. All FRF
     // scale captions and editable X/Y names use the same axis font as Time
     // and FFT before they are rendered over those annotations.

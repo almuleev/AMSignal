@@ -166,10 +166,10 @@ inline const int kRightPanel = 312;
 
 inline const int kBottomBar = 28;
 
-// Separate rows for numeric X ticks, the physical caption and the editable X name.
-inline const int kAxisBottom = 66;
+// Numeric X ticks followed by one shared physical/editable caption row.
+inline const int kAxisBottom = 44;
 inline const int kAxisNameTop = 22;
-inline const int kAxisNameXOffset = 44;
+inline const int kAxisNameXOffset = 22;
 
 // The outer part is reserved for the vertical physical amplitude label; the
 // numeric Y ticks remain in the inner part of this gutter.

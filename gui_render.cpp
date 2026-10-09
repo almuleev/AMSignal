@@ -202,10 +202,19 @@ void draw_user_axis_names(HDC dc, const RECT& p, AnalysisMode mode) {
     const std::wstring y_name = axis_label_for(mode, false);
     const std::wstring x_name = axis_label_for(mode, true);
     RECT y_row{p.left, p.top - kAxisNameTop, p.right, p.top - 4};
-    RECT x_row{p.left, p.bottom + kAxisNameXOffset, p.right, p.bottom + kAxisBottom - 4};
+    SIZE x_size{};
+    GetTextExtentPoint32W(dc, x_name.c_str(), static_cast<int>(x_name.size()), &x_size);
+    const int name_width = std::min(x_size.cx, std::max(1L, (p.right - p.left) / 3));
+    RECT x_row{p.right - name_width, p.bottom + kAxisNameXOffset, p.right, p.bottom + kAxisBottom - 4};
+    RECT physical_row{p.left, x_row.top, std::max(p.left, x_row.left - 12), x_row.bottom};
+    const wchar_t* physical_x = mode == AnalysisMode::Time ? g_str->plot_xlabel_time :
+        mode == AnalysisMode::FFT ? g_str->plot_xlabel_freq :
+        g.frf.logarithmic_frequency_axis ? (g_str == &kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (лог.)") :
+        (g_str == &kEn ? L"Frequency, Hz (linear scale)" : L"Частота, Гц (лин.)");
     constexpr UINT flags = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
     DrawTextW(dc, y_name.c_str(), static_cast<int>(y_name.size()), &y_row, flags | DT_LEFT);
     DrawTextW(dc, x_name.c_str(), static_cast<int>(x_name.size()), &x_row, flags | DT_RIGHT);
+    DrawTextW(dc, physical_x, -1, &physical_row, flags | DT_CENTER);
     RestoreDC(dc, saved);
 }
 
@@ -255,8 +264,7 @@ void draw_curve_symbol(HDC dc, int x, int y, std::size_t curve_index, COLORREF c
     DeleteObject(pen);
 }
 
-void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1,
-               const wchar_t* xlabel) {
+void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1) {
     HBRUSH plot_bg = CreateSolidBrush(g_theme->bg_plot);
     RECT fill_p = {p.left, p.top, p.right, p.bottom};
     FillRect(dc, &fill_p, plot_bg);
@@ -345,7 +353,6 @@ void draw_axes(HDC dc, const RECT& p, double x0, double x1, double y0, double y1
             }
         }
     }
-    draw_text(dc, (p.left + p.right) / 2, p.bottom + 20, xlabel, TA_CENTER | TA_TOP);
 
     SelectObject(dc, old_font);
     SelectObject(dc, old);
@@ -375,9 +382,9 @@ void draw_legend(HDC dc, const RECT& p) {
         if (sz.cx > max_width) max_width = sz.cx;
     }
 
-    int box_w = 14 + 4 + max_width + pad * 2;
-    const int header_h = 18;
-    int box_h = ch_count * item_h + pad * 2 + header_h;
+    const int close_w = 16;
+    int box_w = 14 + 4 + max_width + pad * 2 + close_w + 4;
+    int box_h = ch_count * item_h + pad * 2;
     int box_x = p.right - box_w - 14;
     int box_y = p.bottom - box_h - 14;
 
@@ -395,13 +402,13 @@ void draw_legend(HDC dc, const RECT& p) {
     SelectObject(dc, old_brush);
     DeleteObject(bg);
 
-    g_legend_close_box = {box_x + box_w - pad - header_h, box_y + pad,
-                          box_x + box_w - pad, box_y + pad + header_h};
+    g_legend_close_box = {box_x + box_w - pad - close_w, box_y + pad,
+                          box_x + box_w - pad, box_y + pad + item_h};
     SetTextColor(dc, g_theme->text_secondary);
     SetTextAlign(dc, TA_LEFT | TA_TOP);
     DrawTextW(dc, L"\u00d7", 1, &g_legend_close_box, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-    int y = box_y + pad + header_h;
+    int y = box_y + pad;
     for (int i = 0; i < ch_count; ++i) {
         bool vis = g.visible[i];
         COLORREF col = channel_color(i);
@@ -438,8 +445,8 @@ void draw_legend(HDC dc, const RECT& p) {
             DeleteObject(line);
         }
 
-        // Store hit-test rect for this item (full row, for easier clicking)
-        g_legend_items.push_back({i, {box_x, y, box_x + box_w, y + item_h}});
+        // Keep the close column separate from channel visibility hit areas.
+        g_legend_items.push_back({i, {box_x, y, g_legend_close_box.left - 4, y + item_h}});
 
         y += item_h;
     }
@@ -851,7 +858,7 @@ void draw_time(HDC dc, const RECT& p) {
 
     const double displayed_start = stitched_time_from_raw(g.win_start);
     const double displayed_end = stitched_time_from_raw(g.win_end);
-    draw_axes(dc, p, displayed_start, displayed_end, ymin, ymax, g_str->plot_xlabel_time);
+    draw_axes(dc, p, displayed_start, displayed_end, ymin, ymax);
 
     const int pw = p.right - p.left, ph = p.bottom - p.top;
     const double xspan = displayed_end - displayed_start;
@@ -1295,7 +1302,7 @@ void draw_time(HDC dc, const RECT& p) {
 
 void draw_freq(HDC dc, const RECT& p) {
     if (!ensure_current_spectrum() || g.spec.freqs.size() < 2) {
-        draw_axes(dc, p, 0, 1, 0, 1, g_str->plot_xlabel_freq);
+        draw_axes(dc, p, 0, 1, 0, 1);
         RECT message_rect = p;
         InflateRect(&message_rect, -24, -24);
         const std::wstring message = g.spec_pending
@@ -1326,7 +1333,7 @@ void draw_freq(HDC dc, const RECT& p) {
     double ytop = ymax * 1.08;
     if (!g.auto_y_amp) ytop = g.y_amp_max;
 
-    draw_axes(dc, p, f0, f1, 0, ytop, g_str->plot_xlabel_freq);
+    draw_axes(dc, p, f0, f1, 0, ytop);
 
     const int pw = p.right - p.left, ph = p.bottom - p.top;
     const double fspan = f1 - f0;

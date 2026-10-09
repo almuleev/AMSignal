@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.16.11
+
+### Компоновка подписей осей и легенды
+
+- Пользовательская подпись X в Сигнале, Спектре и АЧХ расположена справа
+  на одной строке с физическим названием оси, сразу под числовыми делениями.
+  Ей отводится не больше трети ширины графика; физическое название занимает
+  оставшееся поле с отступом. Длинные подписи сокращаются многоточием.
+  Нижнее поле окна и PNG уменьшено с 66 до 44 пикселей.
+- Крестик легенды каналов находится справа в первой строке и не добавляет
+  отдельный заголовок. Его колонка исключена из областей переключения каналов.
+- Частотные подписи АЧХ измеряются осевым шрифтом и сдвигаются внутрь
+  графика у краёв в линейной и логарифмической шкале.
+- Обновлены пиксельные проверки подписей; добавлены проверка компактной
+  легенды и экспорт PNG с длинной крайней частотой. Все 398 GUI-проверок
+  пройдены. Обновлены правила работы и карта модулей.
+
+### Axis caption and legend layout
+
+- Editable X names in Signal, Spectrum and FRF sit on the right of the same
+  row as the physical axis caption, immediately below numeric ticks. Names
+  receive at most one third of the plot width; the physical caption uses
+  the remaining space with a gap. Long captions are ellipsized.
+  The bottom margin in the window and PNG exports is reduced from 66 to 44 pixels.
+- The channel legend close control shares the first row without adding
+  a header. Its column is excluded from channel visibility hit areas.
+- FRF frequency labels are measured using the axis font and shifted inside
+  the plot at its edges on both linear and logarithmic scales.
+- Updated caption pixel checks; added a compact legend check and PNG export
+  with a long endpoint frequency. All 398 GUI checks pass.
+  Updated repository guidance and the module map.
+
 ## v0.16.10
 
 ### Легенда каналов и оформление осей

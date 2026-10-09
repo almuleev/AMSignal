@@ -505,11 +505,11 @@ void user_axis_names_outside_plot() {
                     if ((data[py*320+px] & 0x00ffffff) == background) continue;
                     if (px < plot.left || px >= plot.right) ++unexpected;
                     else if (py < plot.top) ++above;
-                    else if (py > plot.bottom + 42) ++below;
+                    else if (py > plot.bottom + 20) ++below;
                     else ++unexpected;
                 }
                 require(above > 0 && below > 0, "both editable axis names render outside the graph in each theme and mode");
-                require(unexpected == 0, "axis names never repaint data, ticks or the physical caption, even in a narrow plot");
+                require(unexpected == 0, "axis captions never repaint data or numeric ticks, even in a narrow plot");
             }
         }
     }
@@ -531,6 +531,10 @@ void channel_legend_visibility() {
     const RECT plot{60,40,600,400};
     draw_legend(dc, plot);
     require(g_legend_items.size() == 2 && !IsRectEmpty(&g_legend_close_box), "legend has rows and a close control");
+    require(g_legend_box.bottom - g_legend_box.top == 2 * 16 + 12 &&
+            g_legend_close_box.top == g_legend_items.front().rect.top &&
+            g_legend_items.front().rect.right < g_legend_close_box.left,
+            "legend close control shares the first row without adding height or overlapping channel hits");
     const auto visibility = g.visible;
     mark_active_document_saved();
     handle_commands_message(nullptr, WM_COMMAND, IDM_CHANNEL_LEGEND, 0);
@@ -955,6 +959,16 @@ void frf_integration() {
         g.frf.show_reference_amplitude = false;
         require(save_png((test_dir / "frf_no_reference.png").wstring()), "FRF outer axis names with hidden reference graph");
         g.frf.show_reference_amplitude = true;
+        const double saved_frequency_start = g.frf.frequency_start;
+        const double saved_frequency_end = g.frf.frequency_end;
+        const bool saved_logarithmic_axis = g.frf.logarithmic_frequency_axis;
+        g.frf.logarithmic_frequency_axis = false;
+        g.frf.frequency_start = 0;
+        g.frf.frequency_end = 1234567;
+        require(save_png((test_dir / "frf_long_edge_ticks.png").wstring()), "FRF linear frequency endpoints fit inside the plot width");
+        g.frf.frequency_start = saved_frequency_start;
+        g.frf.frequency_end = saved_frequency_end;
+        g.frf.logarithmic_frequency_axis = saved_logarithmic_axis;
         {
             Gdiplus::Bitmap bitmap(png.c_str());
             require(bitmap.GetLastStatus()==Gdiplus::Ok && bitmap.GetWidth()>=400 && bitmap.GetHeight()>=240,
