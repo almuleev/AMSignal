@@ -1367,6 +1367,93 @@ void measurement_label_units() {
     g_str=&kEn;
 }
 
+void streamed_frf_file_and_invalidation() {
+    const auto path=test_dir/"streamed-recording.txt";
+    {
+        std::ofstream out(path);out.precision(17);out<<"Time\tR\tY\n";
+        for(int i=0;i<16384;++i) {const double x=std::sin(.13*i);out<<i/1024.<<'\t'<<x<<'\t'<<3*x<<'\n';}
+    }
+    auto index=std::make_shared<lvm::ScanIndex>();double low,high;std::string error;
+    require(lvm::scan_time_bounds(path,low,high,error,nullptr,index.get()),"streaming file builds an ordinary ScanIndex");
+    lvm::LoadOptions load;load.use_time_window=true;load.time_start=2;load.time_end=4;load.scan_index=index;
+    auto ds=lvm::read_lvm_file(path,load);require(ds.ok,"Light Mode display fragment loads normally");
+    reset_document(ds.names,ds.time,ds.channels);g.ds.source_columns=ds.source_columns;
+    g.source_path=std::filesystem::absolute(path).wstring();g.source_scan_index=index;g.current_file_partial=true;
+    g.loaded_source_stamp_valid=true;g.loaded_source_size=std::filesystem::file_size(path);g.loaded_source_modified=std::filesystem::last_write_time(path);
+    g.main=CreateWindowExW(0,L"STATIC",L"Streaming FRF",WS_POPUP,0,0,1000,600,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(g.main!=nullptr,"streaming integration has a hidden main window");
+    g.frf.inputs={0};g.frf.outputs={1};g.frf.options.segment_length=2048;g.mode=AnalysisMode::FRF;
+    const auto wait=[&] {
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(g.frf.pending && std::chrono::steady_clock::now()<deadline) {
+            poll_frf_result();if(g.frf.pending)std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        require(!g.frf.pending && g.frf.result.ok,"streaming worker result reaches the active document");
+    };
+    handle_commands_message(g.main,WM_COMMAND,IDM_FRF_FULL_RECORD,0);wait();
+    require(g.frf.result.common().sample_count==16384 && g.ds.rows()<16384,"entire-file FRF does not replace or expand the display fragment");
+    require(!g.fft_window_active,"entire-recording FRF preserves the independent FFT selection");
+    const auto generation=g.frf.generation;
+    g.frf.display_smoothing_octaves=0;g.frf.logarithmic_frequency_axis=!g.frf.logarithmic_frequency_axis;
+    require(ensure_current_frf() && g.frf.generation==generation,"display changes preserve the numerical input and result");
+    const auto cosmetic=capture_settings_snapshot();const auto revision=g.numerical_revision;
+    const auto original_label=channel_display_label(1);
+    g.channel_labels[1]=L"Renamed";g.show_channel_legend=!g.show_channel_legend;
+    apply_settings_snapshot(cosmetic);
+    require(g.numerical_revision==revision && g.frf.generation==generation && g.frf.result.ok && !g.frf.pending,
+            "restoring cosmetic history preserves the full-record numerical result and input revision");
+    require(g.frf.output_names[0]==original_label,"cosmetic history refreshes FRF curve names without a numerical recalculation");
+    g.frf.options.segment_length=1000;ensure_current_frf();wait();
+    require(g.frf.result.common().segment_length==1000,"changed L recomputes the cached full-record input");
+    g.frf.options.remove_mean=false;ensure_current_frf();wait();
+    require(!g.frf.result.common().options.remove_mean,"changed mean removal recomputes the cached input");
+    const auto full_samples=lvm::read_lvm_file(path);
+    for(bool affine_global:{true,false}) {
+        g.global_formula=affine_global ? L"3*x+2*x" : L"sin(x)";g.global_formula_rpn.clear();
+        g.channel_formulas.assign(2,affine_global ? L"sin(x)" : L"x");g.channel_formula_rpn.assign(2,{});
+        invalidate_formula_runtime();ensure_channel_formula_vectors();
+        on_frf_processing_changed();wait();
+        lvm::FrfBatchInput expected_input;expected_input.time=full_samples.time;
+        expected_input.references.resize(1);expected_input.responses.resize(1);
+        for(std::size_t i=0;i<full_samples.rows();++i) {
+            expected_input.references[0].push_back(transform_channel_value(0,full_samples.channels[0][i]));
+            expected_input.responses[0].push_back(transform_channel_value(1,full_samples.channels[1][i]));
+        }
+        const auto expected=lvm::analyze_frf_batch(std::move(expected_input),g.frf.options);
+        const auto& a=g.frf.result.common();const auto& b=expected.common();
+        const auto same=[](const std::vector<double>& x,const std::vector<double>& y) {
+            if(x.size()!=y.size())return false;
+            for(std::size_t i=0;i<x.size();++i)if(x[i]!=y[i] && !(std::isnan(x[i]) && std::isnan(y[i])))return false;
+            return true;
+        };
+        require(a.ok && b.ok && a.frequencies==b.frequencies && a.transfer==b.transfer &&
+                a.valid==b.valid && a.coherence_valid==b.coherence_valid && a.reference_amplitude_valid==b.reference_amplitude_valid &&
+                same(a.coherence,b.coherence) && same(a.reference_amplitude,b.reference_amplitude),
+                "streamed complex formulas preserve GUI affine/identity arithmetic and all numerical arrays");
+    }
+    g.noise_threshold_enabled=true;g.noise_threshold_min=10;g.noise_threshold_max=100;
+    on_frf_processing_changed();wait();
+    require(g.frf.result.common().sample_count==16384,"processed full-record FRF retains every original sample across the filter cadence pass");
+    g.frf.apply_processing=false;compute_frf_from_current_source();wait();
+    require(g.frf.processing_description==L"raw","raw/processed change selects a different numerical input");
+    {
+        std::ofstream changed(path,std::ios::app);changed<<"# changed\n";
+    }
+    require(!ensure_current_frf() && g.frf.result.error==lvm::FrfError::SourceChanged,"changed file invalidates both completed results and prepared input");
+    g_frf_worker.cancel();DestroyWindow(g.main);g.main=nullptr;
+}
+void bounded_formula_cache_selection() {
+    std::vector<double> time(8400000),values(8400000,.5);
+    for(std::size_t i=0;i<time.size();++i)time[i]=static_cast<double>(i);
+    reset_document({"large"},time,{values});
+    g.channel_formulas={L"sin(x)"};g.channel_formula_rpn.assign(1,{});
+    invalidate_formula_runtime();ensure_channel_formula_vectors();
+    lvm::Dataset selection;build_time_window_dataset(g.ds,2,5,selection);
+    require(selection.rows()==4 && selection.channel_count()==1,"small selection can use a formula whose full cache exceeds its budget");
+    require(g.transformed_channel_cache[0].empty(),"formula does not allocate an oversized full-record cache");
+    near(selection.channels[0][0],std::sin(.5),"uncached selection preserves formula values");
+}
+
 void multiple_open_documents() {
     reset_document({"first"}, {0, 1, 2}, {{1, 2, 3}});
     g.file_name = L"first.lvm";
@@ -1389,7 +1476,18 @@ void multiple_open_documents() {
     second.file_name = L"second.lvm";
     second.source_path = L"C:\\data\\second.lvm";
     second.mode = AnalysisMode::FRF;
+    second.spec.freqs={1,2,3};second.spec.amp={{1,2,3}};second.spec.ok=true;
+    second.spec_valid=second.spec_attempted=true;
+    second.frf.result.responses.resize(1);second.frf.result.responses[0].transfer={{1,0},{2,0}};
+    second.frf.attempted=true;
     g.inactive_documents.push_back(std::move(second));
+
+    trim_document_analysis_caches(1);
+    require(g.inactive_documents[0].spec.freqs.empty() && !g.inactive_documents[0].spec_attempted &&
+            g.inactive_documents[0].frf.result.responses.empty() && !g.inactive_documents[0].frf.attempted,
+            "inactive numerical results are evicted within the shared cache budget");
+    require(g.inactive_documents[0].ds.rows()==3 && g.inactive_documents[0].mode==AnalysisMode::FRF,
+            "cache eviction preserves document samples and analysis settings");
 
     require(open_document_count() == 2, "two datasets are tracked as independent open documents");
     require(switch_to_document(1), "switches to an inactive document");
@@ -1420,12 +1518,16 @@ int main() {
         frf_multi_channels();
         frf_gap_stitching();
         frf_loaded_document_defaults();
+        streamed_frf_file_and_invalidation();
+        bounded_formula_cache_selection();
         g_spectrum_worker.shutdown();
+        g_frf_worker.shutdown();
         require(!g_spectrum_worker.take_result(),"GUI exit joins the FFT caller before analysis pool teardown");
         std::cout << checks << " GUI integration checks passed\n";
         return 0;
     } catch(const std::exception& ex) {
         g_spectrum_worker.shutdown();
+        g_frf_worker.shutdown();
         std::cerr << "FAIL after " << checks << " checks: " << ex.what() << '\n';
         return 1;
     }

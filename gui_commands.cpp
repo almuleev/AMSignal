@@ -87,6 +87,13 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     set_mode(AnalysisMode::FFT);
                     return 0;
                 case IDM_MODE_FRF: set_mode(AnalysisMode::FRF); return 0;
+                case IDM_FRF_FULL_RECORD:
+                    if(g.source_scan_index && !g.ds.frequency_axis) {
+                        g.frf.entire_recording=!g.frf.entire_recording;
+                        invalidate_frf();set_mode(AnalysisMode::FRF);
+                        ensure_current_frf();
+                    }
+                    return 0;
                 case IDC_CURSOR_TOOL:
                     g.measure_mode = false;
                     g.point_click_pending = false;

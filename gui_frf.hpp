@@ -11,6 +11,7 @@ void apply_frf_result(lvm::FrfBatchResult result);
 bool set_frf_channels(std::vector<int> references, std::vector<int> responses);
 void clear_frf_channel_selection(bool supports);
 std::wstring frf_curve_label(std::size_t response);
+void refresh_frf_channel_names();
 void poll_frf_result();
 void on_frf_processing_changed();
 std::wstring frf_status_text();

@@ -27,6 +27,9 @@ struct AsyncLoadResult {
     double cached_global_gap_step = 0.0;
     bool cached_global_gap_step_ready = false;
     std::string error;
+    std::uintmax_t source_size=0;
+    std::filesystem::file_time_type source_modified{};
+    bool source_stamp_valid=false;
 };
 
 void request_async_load_cancel();

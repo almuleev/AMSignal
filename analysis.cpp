@@ -14,90 +14,30 @@
 
 #include "fft.hpp"
 #include "sampling.hpp"
+#include "analysis_executor.hpp"
 
 namespace lvm {
 namespace {
 // One admitted batch at a time. Contending callers use their sequential path.
 // Jobs never recursively submit work; the caller also processes channels.
-class SpectrumChannelPool {
-    std::mutex admission_, mutex_;
-    std::condition_variable ready_, done_;
-    std::vector<std::thread> threads_;
-    const std::function<void(std::size_t)>* job_ = nullptr;
-    std::atomic<std::size_t> next_{0};
-    std::size_t count_=0, generation_=0, pending_=0, participants_=0;
-    bool stopping_=false;
-
-    void drain() {
-        for (;;) {
-            const auto c=next_.fetch_add(1,std::memory_order_relaxed);
-            if (c>=count_) return;
-            (*job_)(c); // The job captures exceptions in its indexed result.
-        }
-    }
-    void worker(std::size_t id) {
-        std::size_t seen=0;
-        std::unique_lock<std::mutex> lock(mutex_);
-        for (;;) {
-            ready_.wait(lock,[&]{return stopping_ || generation_!=seen;});
-            if (stopping_) return;
-            seen=generation_;
-            if (id>=participants_-1) continue;
-            lock.unlock(); drain(); lock.lock();
-            if (--pending_==0) done_.notify_one();
-        }
-    }
-public:
-    explicit SpectrumChannelPool(std::size_t participants) {
-        try {
-            for (std::size_t i=0;i<participants-1;++i) threads_.emplace_back([this,i]{worker(i);});
-        } catch (...) {
-            { std::lock_guard<std::mutex> lock(mutex_); stopping_=true; }
-            ready_.notify_all();
-            for (auto& thread:threads_) thread.join();
-            throw;
-        }
-    }
-    ~SpectrumChannelPool() {
-        std::lock_guard<std::mutex> admission(admission_);
-        { std::lock_guard<std::mutex> lock(mutex_); stopping_=true; }
-        ready_.notify_all();
-        for (auto& thread:threads_) thread.join();
-    }
-    bool run(std::size_t count,std::size_t participants,const std::function<void(std::size_t)>& job) {
-        std::unique_lock<std::mutex> admission(admission_,std::try_to_lock);
-        if (!admission.owns_lock()) return false;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            job_=&job; count_=count; next_.store(0,std::memory_order_relaxed);
-            participants_=participants; pending_=participants-1; ++generation_;
-        }
-        ready_.notify_all(); drain();
-        std::unique_lock<std::mutex> lock(mutex_);
-        done_.wait(lock,[&]{return pending_==0;});
-        job_=nullptr;
-        return true;
-    }
-};
 
 std::size_t spectrum_participants(std::size_t n,std::size_t channels) {
     if (n<65536 || channels<2) return 1;
     const auto hardware=std::thread::hardware_concurrency();
     std::size_t participants=std::min({channels,std::size_t(4),std::size_t(hardware ? hardware : 1)});
-    // Scheduling allowance, not a process memory limit: include every possible
-    // retained pool/caller plan (64 MiB each), even for idle participants, plus
+    // Scheduling allowance, not a process memory limit: include retained plans
+    // from all threads (including idle participants), plus prospective plans,
     // active signal, DFT workspace, output and amplitudes. Input ownership and
     // the common axis are outside this 384 MiB allowance.
     long double scratch=36.0L*n;
-    long double plan=64.0L*1024*1024;
+    long double plan=0;
     if ((n & (n-1))!=0) {
         std::size_t m=1; while (m<2*n-1) m*=2;
         scratch=36.0L*n+16.0L*m;
-        plan=std::max(plan,16.0L*(n+m));
+        plan=16.0L*(n+m);
     }
-    const long double retained=4.0L*64*1024*1024;
-    const long double extra_plan=plan-64.0L*1024*1024;
-    while (participants>1 && retained+participants*(scratch+extra_plan)>384.0L*1024*1024) --participants;
+    const long double retained=fft_cached_plan_bytes();
+    while (participants>1 && retained+participants*(scratch+plan)>384.0L*1024*1024) --participants;
     return participants;
 }
 
@@ -296,14 +236,13 @@ Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<
     const std::size_t participants=spectrum_participants(end,ds.channels.size());
     bool parallel=false;
     if (participants>1) {
-        static SpectrumChannelPool pool(4);
         std::vector<ChannelResult> results(ds.channels.size());
         std::vector<std::exception_ptr> errors(ds.channels.size());
         const auto job=[&](std::size_t c) {
             try { results[c]=calculate_channel(c); }
             catch (...) { errors[c]=std::current_exception(); }
         };
-        parallel=pool.run(ds.channels.size(),participants,job);
+        parallel=analysis_executor().run(ds.channels.size(),participants,job);
         if (parallel) {
             for (std::size_t c=0;c<results.size();++c) {
                 if (errors[c]) std::rethrow_exception(errors[c]);

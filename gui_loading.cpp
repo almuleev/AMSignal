@@ -98,6 +98,14 @@ void apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
     g.current_file_partial = requested_time_window || ds.partial;
     g_filter_slider_before.reset();
     g.ds = std::move(ds);
+    g.source_scan_index=g.cached_scan_valid && lstrcmpiW(g.cached_scan_path.c_str(),wpath.c_str())==0
+        ? g.cached_scan_index : nullptr;
+    std::error_code stamp_error;
+    g.loaded_source_size=std::filesystem::file_size(std::filesystem::path(wpath),stamp_error);
+    g.loaded_source_modified=stamp_error ? std::filesystem::file_time_type{} :
+        std::filesystem::last_write_time(std::filesystem::path(wpath),stamp_error);
+    g.loaded_source_stamp_valid=!stamp_error;
+    ++g.numerical_revision;
     invalidate_stitched_time_cache();
     g.envelopes.clear();
     g.envelope_serial.clear();
@@ -235,6 +243,13 @@ bool start_async_scan_task(const std::wstring& wpath) {
             std::string scan_error;
             result->index = std::make_shared<lvm::ScanIndex>();
             result->ok = lvm::scan_time_bounds(std::filesystem::path(path_copy), result->range_start, result->range_end, scan_error, cancel_flag.get(), result->index.get());
+            if(result->ok) {
+                std::error_code stamp_error;const auto path=std::filesystem::path(path_copy);
+                if(std::filesystem::file_size(path,stamp_error)!=result->index->file_size || stamp_error ||
+                   std::filesystem::last_write_time(path,stamp_error)!=result->index->modified || stamp_error) {
+                    result->ok=false;scan_error="The source file changed while indexing. Reopen the recording.";
+                }
+            }
             result->cancelled = cancel_flag->load(std::memory_order_relaxed);
             if (!result->ok) result->error = std::move(scan_error);
             post_async_result(target, WM_APP_ASYNC_SCAN_DONE, std::move(result));
@@ -258,6 +273,7 @@ bool start_async_load_task(const std::wstring& wpath, const double* fragment_sta
     }
 
     lvm::LoadOptions load_options{};
+    load_options.max_resident_bytes=512ULL*1024*1024;
     load_options.scan_index = g.cached_scan_index;
     if (fragment_start && fragment_end && std::isfinite(*fragment_start) &&
         std::isfinite(*fragment_end) && *fragment_end > *fragment_start) {
@@ -284,6 +300,11 @@ bool start_async_load_task(const std::wstring& wpath, const double* fragment_sta
             result->path = path_copy;
             result->hide_channels = hide_channels;
             result->requested_time_window = load_options.use_time_window;
+            std::error_code stamp_error;
+            const auto source_path=std::filesystem::path(path_copy);
+            result->source_size=std::filesystem::file_size(source_path,stamp_error);
+            if(!stamp_error)result->source_modified=std::filesystem::last_write_time(source_path,stamp_error);
+            result->source_stamp_valid=!stamp_error;
             load_options.cancel_flag = cancel_flag.get();
             result->ds = lvm::read_lvm_file(std::filesystem::path(path_copy), load_options);
             result->ok = result->ds.ok;
@@ -330,7 +351,9 @@ bool prompt_and_start_light_mode_load(const std::wstring& wpath, double range_st
 
 bool load_path_interactive(const std::wstring& wpath) {
     g.last_error.clear();
-    if (g.light_mode) {
+    std::error_code size_error;
+    const bool large=std::filesystem::file_size(std::filesystem::path(wpath),size_error)>512ULL*1024*1024 && !size_error;
+    if (g.light_mode || large) {
         std::error_code ec;
         g.cached_scan_valid = g.cached_scan_valid && g.cached_scan_index &&
             std::filesystem::file_size(std::filesystem::path(wpath), ec) == g.cached_scan_index->file_size && !ec &&
@@ -429,6 +452,17 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 clear_open_queue();
                 return 0;
             }
+            if(result->ok && result->source_stamp_valid) {
+                std::error_code stamp_error;
+                const auto path=std::filesystem::path(result->path);
+                const auto size=std::filesystem::file_size(path,stamp_error);
+                const auto modified=stamp_error ? std::filesystem::file_time_type{} :
+                    std::filesystem::last_write_time(path,stamp_error);
+                if(stamp_error || size!=result->source_size || modified!=result->source_modified) {
+                    result->ok=false;
+                    result->error="The source file changed while loading. Reopen the recording.";
+                }
+            }
             if (!result->ok) {
                 g.last_error = result->error;
                 MessageBoxW(hwnd, to_w(g.last_error).c_str(), g_str->msg_read_err, MB_ICONERROR | MB_OK);
@@ -438,6 +472,11 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             apply_loaded_dataset(std::move(result->ds), result->path, result->hide_channels,
                                  result->requested_time_window, result->cached_global_gap_step,
                                  result->cached_global_gap_step_ready);
+            if(result->source_stamp_valid) {
+                g.loaded_source_size=result->source_size;
+                g.loaded_source_modified=result->source_modified;
+                g.loaded_source_stamp_valid=true;
+            }
             continue_open_queue();
             return 0;
         }

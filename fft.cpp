@@ -1,4 +1,11 @@
 #include "fft.hpp"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+#include <memory>
 
 #include <cmath>
 #include <algorithm>
@@ -15,6 +22,38 @@ struct BluesteinPlan {
     std::size_t n = 0;
     std::vector<std::complex<double>> chirp, kernel;
 };
+std::atomic<std::size_t> retained_plan_bytes{0};
+struct BluesteinCache {
+    BluesteinPlan plan;
+    std::size_t accounted=0;
+    void release() {
+        retained_plan_bytes.fetch_sub(accounted,std::memory_order_relaxed);
+        accounted=0;plan={};
+    }
+    ~BluesteinCache() {retained_plan_bytes.fetch_sub(accounted,std::memory_order_relaxed);}
+};
+BluesteinCache& thread_plan_cache() {
+#ifdef _WIN32
+    // Native thread/fiber cleanup avoids the MinGW emulated TLS destruction
+    // failure reproduced when short-lived FFT threads terminate concurrently.
+    struct Slot {
+        DWORD index=FlsAlloc([](void* value){delete static_cast<BluesteinCache*>(value);});
+        Slot() {if(index==FLS_OUT_OF_INDEXES)throw std::bad_alloc();}
+        ~Slot() {FlsFree(index);}
+    };
+    static Slot slot;
+    auto* cache=static_cast<BluesteinCache*>(FlsGetValue(slot.index));
+    if(!cache) {
+        auto owned=std::make_unique<BluesteinCache>();
+        if(!FlsSetValue(slot.index,owned.get()))throw std::bad_alloc();
+        cache=owned.release();
+    }
+    return *cache;
+#else
+    static thread_local BluesteinCache cache;
+    return cache;
+#endif
+}
 void check_cancel(const std::atomic<bool>* cancel) {
     if (cancel && cancel->load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled.");
 }
@@ -85,6 +124,8 @@ void fft_radix2(std::vector<std::complex<double>>& a, bool inverse, const std::a
     check_cancel(cancel);
 }
 
+std::size_t fft_cached_plan_bytes() {return retained_plan_bytes.load(std::memory_order_relaxed);}
+
 std::vector<std::complex<double>> dft(const std::vector<std::complex<double>>& in, const std::atomic<bool>* cancel) {
     const std::size_t n = in.size();
     check_cancel(cancel);
@@ -107,11 +148,12 @@ std::vector<std::complex<double>> dft(const std::vector<std::complex<double>>& i
 
     // One bounded plan per worker/thread. Publish only a complete plan; a
     // cancelled or failed rebuild must never leave reusable partial data.
-    static thread_local BluesteinPlan cached;
+    auto& cache_owner=thread_plan_cache();
+    auto& cached=cache_owner.plan;
     BluesteinPlan temporary;
     const BluesteinPlan* plan = &cached;
     if (cached.n != n) {
-        cached = {};
+        cache_owner.release();
         temporary.chirp.resize(n);
         for (std::size_t k = 0; k < n; ++k) {
             if ((k & 0x3FFF) == 0) check_cancel(cancel);
@@ -132,6 +174,8 @@ std::vector<std::complex<double>> dft(const std::vector<std::complex<double>>& i
         if (m <= kPlanCacheBytes / sizeof(std::complex<double>) &&
             n <= kPlanCacheBytes / sizeof(std::complex<double>) - m) {
             cached = std::move(temporary);
+            cache_owner.accounted=(cached.chirp.capacity()+cached.kernel.capacity())*sizeof(std::complex<double>);
+            retained_plan_bytes.fetch_add(cache_owner.accounted,std::memory_order_relaxed);
         } else {
             plan = &temporary; // Large plans live only for this call.
         }

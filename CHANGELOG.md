@@ -1,5 +1,80 @@
 # Changelog
 
+## v0.17.0-rc.1 (pre-release)
+
+### Ограниченная память и H1/coherence
+
+- Добавлены блочное чтение выбранных исходных столбцов, неизменяемый дисковый
+  вход FRF и точное определение Fs внешней сортировкой. Перекрытие Welch,
+  усреднение опор, порядок Sxx/Syy/Sxy, порог слабой опоры и финализация сохранены.
+- Radix-2 FFT выполняется в рабочих массивах; произвольные длины сохраняют
+  Bluestein. Удалены лишние копии общей опоры/времени и ненужное суммирование
+  среднего. Быстрые комплексные проверки сохраняют обнаружение переполнения abs.
+- FFT/FRF используют общий исполнитель до четырёх участников с последовательным
+  запасным путём. Планировщик учитывает рабочие массивы и сохранённые планы;
+  слишком большой FRF-сегмент отклоняется, Auto/Direct не меняют L скрыто.
+- Ограничены кэши входа, обработки и результатов неактивных документов.
+  Численная ревизия отделена от generation; изменённый файл требует открытия заново.
+  Оформление и его Undo/Redo сохраняют численный вход и результат; подписи
+  каналов FRF обновляются без повторного расчёта.
+- Причинный фильтр переносит состояния между блоками. Анализ полного файла
+  доступен через «Вид → АЧХ: вся запись», без расширения фрагмента на графике
+  и изменения выделения FFT. Большие файлы сначала индексируются; объём
+  отображаемого Dataset ограничен оценкой памяти.
+- Добавлены регрессии блоков, фильтров, отмены, кэша и полного источника GUI.
+  Внешний отчёт отдельно фиксирует реальные размеры синтетических файлов,
+  подготовку, численный расчёт, память, точность и ограничения крупных испытаний.
+- Повторная проверка перед выпуском исправила обработку ошибок открытия,
+  чтения и закрытия временных файлов: возвращается ошибка ресурсов без
+  частичного результата. Чтение рабочих плиток проверяет диапазон и отмену.
+  Сложные формулы сохраняют порядок аффинной/тождественной обработки GUI.
+- На Windows кэш Bluestein освобождается системным FLS при выходе потока.
+  Стресс короткоживущих потоков воспроизвёл повреждение памяти с эмулируемым
+  TLS и в исходной v0.16.11. Новый путь выдержал 3000 FFT-потоков; двенадцать
+  полных запусков ядра прошли. На остальных платформах остаётся thread_local.
+- Проверки: 457 численных и 425 GUI; 15 362 827 сравнений с v0.16.11
+  и 12 434 787 сравнений реальной записи N=337132, измеренная ошибка 0.
+  Синтетические 10/20 GB испытаны на численном стенде при L=2048 и семи откликах.
+  Пик интерактивного GUI и полная фильтрованная запись 20 GB не измерены;
+  дисковый снимок требует свободного места, большой повтор перечитывает источник.
+
+### Bounded memory and H1/coherence
+
+- Added block reads of selected source columns, immutable disk-backed FRF input,
+  and exact sample-rate inference using external sorting. Welch overlap,
+  reference averaging, Sxx/Syy/Sxy order, weak-reference rules and finalization
+  preserve the existing method.
+- Radix-2 FFT now transforms working arrays in place; arbitrary lengths retain
+  Bluestein. Removed redundant shared reference/time copies and disabled-mean
+  sums. Faster complex checks retain abs-overflow detection.
+- FFT/FRF share an executor with up to four participants and a sequential
+  fallback. Scheduling accounts for workspace and retained plans; oversized
+  FRF segments fail explicitly without silently changing Auto/Direct lengths.
+- Bounded input, processing and inactive-document result caches. Numerical
+  input revisions are separate from job generations; changed files require reopening.
+  Appearance changes and their Undo/Redo preserve numerical inputs/results;
+  FRF channel captions update without recalculation.
+- Causal filter state continues across blocks. View → FRF: entire recording
+  analyzes the indexed source without expanding the display fragment or
+  changing FFT selection. Large files are indexed first; displayed Dataset
+  allocation uses a conservative memory allowance.
+- Added block/filter/cancellation/cache and full-source GUI regressions.
+  The external report separates synthetic file sizes, preparation, numerical
+  execution, memory, accuracy and the limits of large-record testing.
+- Pre-release review fixed scratch-file open/read/close failure handling:
+  resource errors cannot publish partial results. Tile reads check bounds and
+  cancellation. Complex formulas retain GUI affine/identity arithmetic order.
+- Windows Bluestein caches use native FLS cleanup on thread exit. A short-lived
+  thread stress reproduced heap corruption with emulated TLS in both the
+  original v0.16.11 and updated build. Native FLS passed 3000 FFT threads and
+  twelve complete core runs; other platforms retain thread_local storage.
+- Validation: 457 numerical and 425 GUI checks; 15,362,827 frozen-baseline
+  comparisons and 12,434,787 real-record comparisons at N=337132 with measured
+  error 0. Synthetic 10/20 GB files were tested in the numerical harness with
+  L=2048 and seven responses. Interactive GUI peak memory and a fully filtered
+  20 GB record were not measured; scratch storage needs free disk space and
+  large repeated calculations reread the source.
+
 ## v0.16.11
 
 ### Компоновка подписей осей и легенды

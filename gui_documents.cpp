@@ -127,6 +127,28 @@ std::size_t open_document_count() {
     return (has_data() ? 1u : 0u) + g.inactive_documents.size();
 }
 
+void trim_document_analysis_caches(std::size_t budget) {
+    const auto bytes=[](const DocumentState& document) {
+        std::size_t total=document.spec.freqs.capacity()*sizeof(double);
+        for(const auto& c:document.spec.amp)total+=c.capacity()*sizeof(double);
+        for(const auto& r:document.frf.result.responses) {
+            total+=(r.frequencies.capacity()+r.coherence.capacity()+r.reference_amplitude.capacity())*sizeof(double);
+            total+=r.transfer.capacity()*sizeof(std::complex<double>);
+            total+=r.valid.capacity()+r.coherence_valid.capacity()+r.reference_amplitude_valid.capacity();
+        }
+        return total;
+    };
+    std::size_t retained=0;
+    for(const auto& document:g.inactive_documents)retained+=bytes(document);
+    for(auto& document:g.inactive_documents) {
+        if(retained<=budget)break;
+        retained-=bytes(document);
+        document.spec={};document.spec_valid=false;document.spec_attempted=false;
+        document.spec_channel_indices.clear();document.spec_visible_state.clear();
+        document.frf.result={};document.frf.attempted=false;
+    }
+}
+
 std::wstring open_document_label(std::size_t index, bool mark_active) {
     const DocumentState* document = nullptr;
     if (index == 0 && has_data()) {
@@ -147,6 +169,7 @@ bool switch_to_document(std::size_t index) {
     save_active_document_history();
     std::swap(active_document_state(), g.inactive_documents[index - 1]);
     restore_active_document_history();
+    trim_document_analysis_caches();
     refresh_active_document_ui();
     return true;
 }
@@ -204,6 +227,7 @@ void begin_loaded_document() {
     g.inactive_documents.emplace_back();
     std::swap(active_document_state(), g.inactive_documents.back());
     restore_active_document_history();
+    trim_document_analysis_caches();
 }
 
 void queue_open_paths(std::vector<std::wstring> paths) {

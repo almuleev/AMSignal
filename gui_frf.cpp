@@ -1,5 +1,7 @@
 #include "gui_frf.hpp"
 #include "gui_analysis_source.hpp"
+#include <iomanip>
+#include <sstream>
 #include "gui_state.hpp"
 #include "gui_text.hpp"
 #include "gui_processing.hpp"
@@ -232,6 +234,8 @@ std::wstring frf_error_text(lvm::FrfError e) {
         case lvm::FrfError::InvalidOptions: return L"Некорректные параметры FRF.";
         case lvm::FrfError::WeakReference: return L"Во входном канале нет достаточного переменного сигнала.";
         case lvm::FrfError::Overflow: return L"Превышены численные ограничения или недостаточно памяти для FRF.";
+        case lvm::FrfError::ResourceLimit: return L"Недостаточно ресурсов FRF. Проверьте свободное место для временных файлов или уменьшите длину L для H1.";
+        case lvm::FrfError::SourceChanged: return L"Исходный файл изменился. Откройте запись заново перед расчётом АЧХ.";
     }
     return L"Не удалось рассчитать FRF.";
 }
@@ -512,34 +516,48 @@ void invalidate_frf(bool reset_view) {
     if (reset_view) { g.frf.view_initialized = false; g.frf.auto_y = true; }
 }
 
+namespace {
+bool current_frf_source_window(double& a,double& b,bool& selected) {
+    if(g.frf.entire_recording && g.source_scan_index && has_data()) {
+        a=g.source_scan_index->range_start;b=g.source_scan_index->range_end;selected=false;
+        return b>a;
+    }
+    return current_fft_source_window(a,b,selected);
+}
+}
+void refresh_frf_channel_names() {
+    g.frf.input_name.clear();g.frf.output_names.clear();
+    for(int c:g.frf.inputs) {
+        if(!g.frf.input_name.empty())g.frf.input_name+=L", ";
+        g.frf.input_name+=channel_display_label(c);
+    }
+    if(g.frf.inputs.size()>1)g.frf.input_name=L"AVG("+g.frf.input_name+L")";
+    for(int c:g.frf.outputs)g.frf.output_names.push_back(channel_display_label(c));
+}
 void compute_frf_from_current_source() {
     invalidate_frf();
     g.frf.attempted = true;
     double a = 0, b = 0; bool selected = false;
     lvm::FrfBatchResult failure;
     failure.options=g.frf.options;
+    if(g.loaded_source_stamp_valid) {
+        std::error_code ec;
+        const auto path=std::filesystem::path(g.source_path);
+        if(std::filesystem::file_size(path,ec)!=g.loaded_source_size || ec ||
+           std::filesystem::last_write_time(path,ec)!=g.loaded_source_modified || ec)
+            failure.error=lvm::FrfError::SourceChanged;
+    }
+    if(failure.error!=lvm::FrfError::None) {apply_frf_result(std::move(failure));return;}
     if (g.ds.frequency_axis) failure.error = lvm::FrfError::FrequencyData;
     else if (!valid_selection(g.frf.inputs,g.frf.outputs)) failure.error=lvm::FrfError::InvalidChannels;
-    else if (!current_fft_source_window(a, b, selected)) failure.error = lvm::FrfError::TooShort;
+    else if (!current_frf_source_window(a, b, selected)) failure.error = lvm::FrfError::TooShort;
     if (failure.error != lvm::FrfError::None) { apply_frf_result(std::move(failure)); return; }
     g.frf.source_start = a; g.frf.source_end = b; g.frf.from_selection = selected;
-    g.frf.input_name.clear(); g.frf.output_names.clear();
-    for (int c:g.frf.inputs) {
-        if (!g.frf.input_name.empty()) g.frf.input_name+=L", ";
-        g.frf.input_name+=channel_display_label(c);
-    }
-    if (g.frf.inputs.size()>1) g.frf.input_name=L"AVG("+g.frf.input_name+L")";
-    for (int c:g.frf.outputs) g.frf.output_names.push_back(channel_display_label(c));
+    refresh_frf_channel_names();
     try {
-        lvm::Dataset pair;
         std::vector<std::size_t> channels(g.frf.inputs.begin(),g.frf.inputs.end());
         channels.insert(channels.end(),g.frf.outputs.begin(),g.frf.outputs.end());
-        build_time_window_dataset(g.ds, a, b, pair, &channels, g.frf.apply_processing);
-        lvm::FrfBatchInput input; input.time=std::move(pair.time);
-        for (std::size_t i=0;i<pair.channels.size();++i) {
-            auto& destination=i<g.frf.inputs.size() ? input.references : input.responses;
-            destination.push_back(std::move(pair.channels[i]));
-        }
+        ensure_channel_formula_vectors();
         g.frf.processing_description = L"raw";
         if (g.frf.apply_processing) {
             g.frf.processing_description = L"global=" + g.global_formula +
@@ -552,9 +570,127 @@ void compute_frf_from_current_source() {
         }
         if (g.main) {
             g.frf.pending = true;
-            g_frf_worker.submit(std::move(input), g.frf.options, g.frf.generation);
+            std::ostringstream key;
+            const auto path=std::filesystem::path(g.source_path);
+            std::error_code ec;
+            const auto file_size=std::filesystem::file_size(path,ec);
+            const auto modified=ec ? std::filesystem::file_time_type{} : std::filesystem::last_write_time(path,ec);
+            key << path.u8string().size() << ':' << path.u8string() << ':' << file_size << ':'
+                << modified.time_since_epoch().count() << ':' << g.numerical_revision << ':'
+                << std::hexfloat << a << ':' << b << ':' << g.frf.apply_processing << ':' << g.frf.inputs.size();
+            for(auto c:channels)key << ':' << c;
+            // Revision is separate from generation; the processing description
+            // also captures undo-restored formula/filter values exactly.
+            key << ':' << g.frf.processing_description.size();
+            for(auto c:g.frf.processing_description)key << ':' << static_cast<unsigned>(c);
+            const auto input_key=key.str();
+            if(!g_frf_worker.submit_cached(g.frf.options,g.frf.generation,input_key)) {
+                const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),a);
+                const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),b);
+                const bool stream=g.light_mode || (g.current_file_partial && g.source_scan_index) ||
+                    static_cast<long double>(hi-lo)*(channels.size()+1)*8>64ULL*1024*1024;
+                if(stream && (ec || g.ds.source_columns.size()!=g.ds.channel_count()))
+                    throw std::runtime_error("Streaming FRF requires an unchanged source file and physical column mapping.");
+                if(stream && !ec && g.ds.source_columns.size()==g.ds.channel_count()) {
+                    lvm::LoadOptions load;
+                    load.use_time_window=true;load.time_start=a;load.time_end=b;
+                    load.scan_index=g.source_scan_index;
+                    load.block_rows=std::max<std::size_t>(1,std::min<std::size_t>(65536,16ULL*1024*1024/((channels.size()+2)*8)));
+                    for(auto c:channels)load.stream_columns.push_back(g.ds.source_columns[c]);
+                    const bool processing=g.frf.apply_processing, filtering=processing && g.noise_threshold_enabled;
+                    const auto global=g.global_formula_rpn;
+                    const bool global_identity=g.global_formula_identity, global_affine=g.global_formula_affine;
+                    const double global_mul=g.global_formula_mul, global_add=g.global_formula_add;
+                    std::vector<char> formula_identity;
+                    std::vector<std::vector<FormulaToken>> formulas;
+                    std::vector<TransformRuntimeKind> kinds;
+                    std::vector<double> mul,add;
+                    for(auto c:channels) {
+                        formulas.push_back(g.channel_formula_rpn[c]);kinds.push_back(g.channel_transform_kind[c]);
+                        formula_identity.push_back(g.channel_formula_identity[c]);
+                        mul.push_back(g.channel_transform_mul[c]);add.push_back(g.channel_transform_add[c]);
+                    }
+                    FilterSettings filter{g.noise_threshold_mode,g.noise_threshold_topology,
+                        g.noise_threshold_min,g.noise_threshold_max,current_filter_sample_step()};
+                    const bool full_filter=filtering && (a<g.ds.time.front() || b>g.ds.time.back());
+                    // Filters warm up from the loaded recording's first sample,
+                    // rather than resetting at the selected window or a block.
+                    if(filtering)load.time_start=full_filter && g.source_scan_index
+                        ? g.source_scan_index->range_start : std::min(a,g.ds.time.front());
+                    lvm::FrfSource source;source.references=g.frf.inputs.size();source.responses=g.frf.outputs.size();
+                    source.replay=[path,load,a,processing,filtering,filter,full_filter,global,formulas,kinds,mul,add,file_size,modified,
+                                   global_identity,global_affine,global_mul,global_add,formula_identity]
+                        (const lvm::FrfBlockConsumer& consume,const std::atomic<bool>* cancel) mutable {
+                        const auto check_source=[&] {
+                            std::error_code error;
+                            if(std::filesystem::file_size(path,error)!=file_size || error ||
+                               std::filesystem::last_write_time(path,error)!=modified || error)
+                                throw lvm::FrfSourceFailure(lvm::FrfError::SourceChanged);
+                        };
+                        check_source();
+                        auto effective_filter=filter;
+                        if(full_filter) {
+                            lvm::FrfSource timeline;
+                            auto time_load=load;time_load.stream_columns.clear();
+                            if(time_load.scan_index)time_load.time_end=time_load.scan_index->range_end;
+                            timeline.replay=[path,time_load](const auto& visitor,const auto* flag) mutable {
+                                time_load.consume_block=visitor;time_load.cancel_flag=flag;
+                                const auto result=lvm::read_lvm_file(path,time_load);
+                                if(!result.ok)throw std::runtime_error(result.error);
+                            };
+                            const auto inspected=lvm::inspect_frf_timeline(timeline,cancel);
+                            if(inspected.error!=lvm::FrfError::None)throw lvm::FrfSourceFailure(inspected.error);
+                            effective_filter.sample_step=inspected.sample_dt;
+                        }
+                        std::vector<FilterStream> filters;
+                        for(std::size_t c=0;c<formulas.size();++c)filters.emplace_back(effective_filter);
+                        load.cancel_flag=cancel;
+                        load.consume_block=[&](const auto& time,const auto& raw) {
+                            auto values=raw; // One bounded block, never the recording.
+                            if(processing)for(std::size_t c=0;c<values.size();++c) {
+                                for(std::size_t i=0;i<values[c].size();++i) {
+                                    if(cancel && (i & 4095)==0 && cancel->load())throw std::runtime_error("Operation cancelled.");
+                                    const double x=values[c][i];
+                                    if(kinds[c]==TransformRuntimeKind::Affine)values[c][i]=x*mul[c]+add[c];
+                                    else if(kinds[c]==TransformRuntimeKind::CachedFormula) {
+                                        const auto y=global_identity ? x : (global_affine ? x*global_mul+global_add : eval_formula_rpn(global,x));
+                                        const auto z=std::isfinite(y) ? (formula_identity[c] ? y : eval_formula_rpn(formulas[c],y))
+                                            : std::numeric_limits<double>::quiet_NaN();
+                                        values[c][i]=std::isfinite(z) ? z : std::numeric_limits<double>::quiet_NaN();
+                                    }
+                                }
+                                if(filtering)values[c]=filters[c].process(time,values[c],cancel);
+                            }
+                            const auto start=std::lower_bound(time.begin(),time.end(),a)-time.begin();
+                            if(start==static_cast<std::ptrdiff_t>(time.size()))return;
+                            if(!start)consume(time,values);
+                            else {
+                                std::vector<double> selected_time(time.begin()+start,time.end());
+                                for(auto& column:values)column.erase(column.begin(),column.begin()+start);
+                                consume(selected_time,values);
+                            }
+                        };
+                        const auto parsed=lvm::read_lvm_file(path,load);
+                        if(!parsed.ok)throw std::runtime_error(parsed.error);
+                        check_source();
+                    };
+                    g_frf_worker.submit(std::move(source),g.frf.options,g.frf.generation,input_key);
+                } else {
+                    lvm::Dataset pair;
+                    build_time_window_dataset(g.ds,a,b,pair,&channels,g.frf.apply_processing);
+                    lvm::FrfBatchInput input;input.time=std::move(pair.time);
+                    for(std::size_t i=0;i<pair.channels.size();++i)
+                        (i<g.frf.inputs.size() ? input.references : input.responses).push_back(std::move(pair.channels[i]));
+                    g_frf_worker.submit(std::move(input),g.frf.options,g.frf.generation,input_key);
+                }
+            }
             refresh_frf_controls(); set_status(); invalidate_plot();
         } else {
+            lvm::Dataset pair;
+            build_time_window_dataset(g.ds,a,b,pair,&channels,g.frf.apply_processing);
+            lvm::FrfBatchInput input;input.time=std::move(pair.time);
+            for(std::size_t i=0;i<pair.channels.size();++i)
+                (i<g.frf.inputs.size() ? input.references : input.responses).push_back(std::move(pair.channels[i]));
             apply_frf_result(lvm::analyze_frf_batch(std::move(input), g.frf.options));
         }
     } catch (...) {
@@ -565,11 +701,19 @@ void compute_frf_from_current_source() {
 
 bool ensure_current_frf() {
     double start = 0, end = 0; bool selected = false;
+    if(g.frf.result.ok && g.loaded_source_stamp_valid) {
+        std::error_code ec;const auto path=std::filesystem::path(g.source_path);
+        if(std::filesystem::file_size(path,ec)!=g.loaded_source_size || ec ||
+           std::filesystem::last_write_time(path,ec)!=g.loaded_source_modified || ec)invalidate_frf();
+    }
     if (g.frf.attempted && !g.frf.pending &&
         (g.frf.result.options.estimator!=g.frf.options.estimator ||
-         g.frf.result.options.segment_length!=g.frf.options.segment_length))
+         g.frf.result.options.segment_length!=g.frf.options.segment_length ||
+         g.frf.result.options.remove_mean!=g.frf.options.remove_mean ||
+         g.frf.result.options.window!=g.frf.options.window ||
+         g.frf.result.options.reference_threshold!=g.frf.options.reference_threshold))
         invalidate_frf();
-    if (g.frf.attempted && current_fft_source_window(start, end, selected) &&
+    if (g.frf.attempted && current_frf_source_window(start, end, selected) &&
         (start != g.frf.source_start || end != g.frf.source_end || selected != g.frf.from_selection))
         invalidate_frf();
     if (!g.frf.attempted) compute_frf_from_current_source();
@@ -577,6 +721,13 @@ bool ensure_current_frf() {
 }
 
 void apply_frf_result(lvm::FrfBatchResult result) {
+    if(g.loaded_source_stamp_valid) {
+        std::error_code error;const auto path=std::filesystem::path(g.source_path);
+        if(std::filesystem::file_size(path,error)!=g.loaded_source_size || error ||
+           std::filesystem::last_write_time(path,error)!=g.loaded_source_modified || error) {
+            result={};result.options=g.frf.options;result.error=lvm::FrfError::SourceChanged;
+        }
+    }
     g.frf.result = std::move(result); g.frf.pending = false;
     if (g.frf.result.ok) {
         const auto& f = g.frf.result.common().frequencies;
@@ -601,6 +752,7 @@ void poll_frf_result() {
 }
 
 void on_frf_processing_changed() {
+    ++g.numerical_revision;
     refresh_frf_controls(true);
     if (!g.frf.apply_processing) return;
     invalidate_frf();
@@ -653,6 +805,7 @@ void layout_frf_panel() {
 }
 
 void refresh_frf_controls(bool repopulate) {
+    refresh_frf_channel_names();
     if (!g.frf_panel) return;
     label(InputLabel, tr(L"Reference channels", L"Опоры"));
     label(OutputLabel, tr(L"Responses", L"Отклики"));
@@ -710,7 +863,8 @@ void refresh_frf_controls(bool repopulate) {
     }
     wchar_t source[192]{};
     swprintf(source, 192, tr(L"%ls: %.5g–%.5g s", L"%ls: %.5g–%.5g с"),
-        g.frf.from_selection ? tr(L"Selection", L"Выделение") : tr(L"View", L"Вид"),
+        g.frf.entire_recording ? tr(L"Entire recording",L"Вся запись") :
+            (g.frf.from_selection ? tr(L"Selection", L"Выделение") : tr(L"View", L"Вид")),
         g.frf.source_start, g.frf.source_end);
     label(Source, source);
     const bool ready = g.frf.result.ok && !g.frf.pending;

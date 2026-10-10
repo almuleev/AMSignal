@@ -11,7 +11,7 @@ RELEASE_VERSION := $(patsubst v%,%,$(VERSION))
 CPPFLAGS += -DAPP_VERSION=\"$(VERSION)\"
 
 # Parser/analysis library shared by the CLI and the tests.
-LIB_SRC  := lvm_parser.cpp fft.cpp analysis.cpp data_io.cpp filter_engine.cpp spectrum_worker.cpp frf_analysis.cpp frf_worker.cpp
+LIB_SRC  := lvm_parser.cpp fft.cpp analysis.cpp data_io.cpp filter_engine.cpp spectrum_worker.cpp frf_analysis.cpp frf_stream.cpp frf_worker.cpp
 APP_SRC  := main.cpp $(LIB_SRC)
 APP_OBJ  := $(APP_SRC:.cpp=.o)
 HDRS     := $(wildcard *.hpp)

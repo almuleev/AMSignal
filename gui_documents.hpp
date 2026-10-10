@@ -27,6 +27,9 @@ bool request_application_close(HWND hwnd);
 // current active document as an inactive slot and prepares a fresh active one.
 void begin_loaded_document();
 
+// Numeric arrays retained for inactive documents; displayed results stay live.
+void trim_document_analysis_caches(std::size_t budget=256ULL*1024*1024);
+
 void queue_open_paths(std::vector<std::wstring> paths);
 
 void continue_open_queue();

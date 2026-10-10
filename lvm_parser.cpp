@@ -119,11 +119,12 @@ bool is_metadata_line(const std::string& line) {
 double parse_cell(const std::string& cell, bool& is_numeric) {
     is_numeric = false;
     if (cell.empty()) return std::nan("");
-    const std::string trimmed = strip(cell);
-    const char* begin = trimmed.c_str();
+    const char* begin = cell.c_str();
     char* end = nullptr;
     const double value = std::strtod(begin, &end);
-    if (end == begin || *end != '\0') return std::nan("");
+    if(end==begin)return std::nan("");
+    while(*end && std::isspace(static_cast<unsigned char>(*end)))++end;
+    if (*end != '\0') return std::nan("");
     is_numeric = true;
     return std::isfinite(value) ? value : std::nan("");
 }
@@ -452,8 +453,8 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
             continue;
         }
         if (!csv_mode && starts_with(line, "***")) continue;
+        const RowSummary row = summarize_numeric_row(line, delimiter, normalize_decimal_commas);
         if (!csv_mode && header_count > 0 && !section_metadata_seen && column_labels.empty()) {
-            const RowSummary row = summarize_numeric_row(line, delimiter, normalize_decimal_commas);
             if (row.numeric_count == 0) {
                 split_cells_into(line, delimiter, normalize_decimal_commas, cells);
                 if (cells.size() > 1) {
@@ -468,7 +469,6 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
             continue;
         }
         if (column_labels.empty()) {
-            const RowSummary row = summarize_numeric_row(line, delimiter, normalize_decimal_commas);
             if (row.numeric_count == 0) {
                 split_cells_into(line, delimiter, normalize_decimal_commas, cells);
                 if (cells.size() > 1) {
@@ -478,7 +478,6 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
             }
         }
 
-        const RowSummary row = summarize_numeric_row(line, delimiter, normalize_decimal_commas);
         if (row.numeric_count < 2 || !row.first_numeric || !std::isfinite(row.first_value)) continue;
 
         const double raw_time = row.first_value;
@@ -597,6 +596,14 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         }
     }
 
+    std::vector<double> stream_time;
+    std::vector<std::vector<double>> stream_channels(options.stream_columns.size());
+    const auto flush_stream = [&] {
+        if (stream_time.empty()) return;
+        options.consume_block(stream_time,stream_channels);
+        stream_time.clear();
+        for (auto& channel:stream_channels) channel.clear();
+    };
     for (; read_text_record(in, raw_line, csv_mode); ++line_index) {
         if (options.cancel_flag && (line_index & 0xFF) == 0 &&
             options.cancel_flag->load(std::memory_order_relaxed)) {
@@ -623,10 +630,21 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         if (!csv_mode && starts_with(line, "***")) {
             continue;
         }
+        // Parse numeric cells once. Header discovery used to parse each row
+        // twice for otherwise valid TXT/LVM files without column labels.
+        int numeric_count = 0;
+        split_cells_into(line, delimiter, normalize_decimal_commas, cells);
+        if (csv_mode && cells.empty()) { ds.error = "Malformed CSV record."; return ds; }
+        parsed.clear();
+        parsed.reserve(cells.size());
+        for (const std::string& cell : cells) {
+            bool is_numeric = false;
+            const double v = parse_cell(cell, is_numeric);
+            parsed.push_back(v);
+            if (is_numeric) ++numeric_count;
+        }
         if (!csv_mode && header_count > 0 && !section_metadata_seen && column_labels.empty()) {
-            const RowSummary row = summarize_numeric_row(line, delimiter, normalize_decimal_commas);
-            if (row.numeric_count == 0) {
-                split_cells_into(line, delimiter, normalize_decimal_commas, cells);
+            if (numeric_count == 0) {
                 if (cells.size() > 1) {
                     column_labels = cells;
                     continue;
@@ -640,26 +658,12 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         }
 
         if (column_labels.empty()) {
-            const RowSummary row = summarize_numeric_row(line, delimiter, normalize_decimal_commas);
-            if (row.numeric_count == 0) {
-                split_cells_into(line, delimiter, normalize_decimal_commas, cells);
+            if (numeric_count == 0) {
                 if (cells.size() > 1) {
                     column_labels = cells;
                     continue;
                 }
             }
-        }
-
-        int numeric_count = 0;
-        split_cells_into(line, delimiter, normalize_decimal_commas, cells);
-        if (csv_mode && cells.empty()) { ds.error = "Malformed CSV record."; return ds; }
-        parsed.clear();
-        parsed.reserve(cells.size());
-        for (const std::string& cell : cells) {
-            bool is_numeric = false;
-            const double v = parse_cell(cell, is_numeric);
-            parsed.push_back(v);
-            if (is_numeric) ++numeric_count;
         }
 
         const int part_count = static_cast<int>(parsed.size());
@@ -703,9 +707,25 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         }
 
         if (!keep_row) continue;
+        if (options.consume_block) {
+            stream_time.push_back(parsed[0]);
+            for (std::size_t c=0;c<options.stream_columns.size();++c) {
+                const auto column=options.stream_columns[c];
+                stream_channels[c].push_back(column<parsed.size() ? parsed[column] : nan_value);
+            }
+            ++row_count;
+            if (stream_time.size()>=std::max<std::size_t>(1,options.block_rows)) flush_stream();
+            continue;
+        }
         if (parsed.empty() || std::isnan(parsed[0])) has_nan_time_rows = true;
 
         // Widen the column store to fit this row, back-filling earlier rows.
+        if(options.max_resident_bytes &&
+           static_cast<long double>(row_count+1)*(std::max<std::size_t>(columns.size(),part_count)+1)*16>
+               options.max_resident_bytes) {
+            ds.error="Selected data exceed the memory budget. Use Light Mode and a smaller display fragment; FRF can analyze the entire recording.";
+            return ds;
+        }
         if (part_count > static_cast<int>(columns.size())) {
             const int extra = part_count - static_cast<int>(columns.size());
             for (int k = 0; k < extra; ++k) {
@@ -736,6 +756,12 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
     ds.stats.data_sections = section_hits;
     ds.stats.data_rows = row_count;
     ds.stats.max_columns = static_cast<int>(columns.size());
+    if (options.consume_block) {
+        flush_stream();
+        ds.ok=row_count>0;
+        if (!ds.ok) ds.error="No data found in the selected time range.";
+        return ds;
+    }
     if (row_count == 0 || columns.empty()) {
         ds.error = options.use_time_window
             ? "No data found in the selected time range."
@@ -755,6 +781,7 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
             kept_names.push_back(sanitize_channel_label(raw_label, kept_channels.size(), generated));
             kept_generated_names.push_back(generated ? 1 : 0);
             kept_channels.push_back(std::move(columns[i]));
+            ds.source_columns.push_back(i);
         }
     }
 
@@ -847,7 +874,9 @@ std::vector<std::string> drop_duplicate_time_channels(Dataset& ds,
     }
 
     if (dropped.empty()) return dropped;
+    std::vector<std::size_t> kept_source_columns;
     for (std::size_t c : keep) {
+        if (c<ds.source_columns.size()) kept_source_columns.push_back(ds.source_columns[c]);
         const bool generated = c < ds.generated_names.size() && ds.generated_names[c];
         kept_names.push_back(generated ? "Channel_" + std::to_string(kept_names.size() + 1)
                                        : c < ds.names.size() ? std::move(ds.names[c])
@@ -859,6 +888,7 @@ std::vector<std::string> drop_duplicate_time_channels(Dataset& ds,
     ds.channels = std::move(kept_channels);
     ds.names = std::move(kept_names);
     ds.generated_names = std::move(kept_generated_names);
+    ds.source_columns = std::move(kept_source_columns);
     return dropped;
 }
 

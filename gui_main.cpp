@@ -1,5 +1,6 @@
 // Main: native viewer implementation.
 #include "gui_main.hpp"
+#include "gui_frf.hpp"
 #include "gui_hotkeys.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_commands.hpp"
@@ -142,6 +143,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     // Join the background caller before function-static analysis pools are
     // destroyed. WM_DESTROY cancels work but does not join the caller.
     g_spectrum_worker.shutdown();
+    g_frf_worker.shutdown();
     unload_program_logo();
     Gdiplus::GdiplusShutdown(g_gdiplus_token);
     return 0;

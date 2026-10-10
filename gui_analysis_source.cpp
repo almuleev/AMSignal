@@ -11,6 +11,7 @@ bool has_fft_window() {
 }
 
 void clear_fft_window() {
+    g.frf.entire_recording=false;
     invalidate_frf();
     g.fft_window_active = false;
     g.fft_window_start = 0.0;
@@ -24,6 +25,7 @@ void clamp_time_window(double& start, double& end) {
 }
 
 void set_fft_window(double start, double end) {
+    g.frf.entire_recording=false;
     clamp_time_window(start, end);
     if (end <= start) {
         clear_fft_window();
@@ -114,6 +116,11 @@ bool build_time_window_dataset(const lvm::Dataset& in, double start, double end,
         }
         ensure_transformed_channel_cache(c);
         const auto& cache = g.transformed_channel_cache[c];
+        if(c>=g.transformed_channel_cache_valid.size() || !g.transformed_channel_cache_valid[c]) {
+            for(std::size_t r=lo;r<hi;++r)dst.push_back(apply_processing && g.noise_threshold_enabled
+                ? rendered_channel_sample(c,r) : transform_channel_value(c,in.channels[c][r]));
+            continue;
+        }
         const std::size_t base = dst.size();
         dst.insert(dst.end(),
                    cache.begin() + static_cast<std::ptrdiff_t>(lo),

@@ -9,7 +9,7 @@ enum class FrfEstimator { Direct, H1 };
 enum class FrfWindow { Hann };
 enum class FrfError {
     None, InvalidChannels, FrequencyData, TooShort, InvalidTime,
-    MissingValues, InvalidOptions, WeakReference, Overflow
+    MissingValues, InvalidOptions, WeakReference, Overflow, ResourceLimit, SourceChanged
 };
 
 struct FrfOptions {

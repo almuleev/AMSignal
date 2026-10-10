@@ -67,8 +67,19 @@ double process_biquad_sample(const BiquadCoefficients& coeffs, BiquadState& stat
 }
 } // namespace
 
-std::vector<double> filter_signal(const std::vector<double>& time, const std::vector<double>& src,
-                                  const FilterSettings& settings, const std::atomic<bool>* cancel) {
+struct FilterStream::State {
+    BiquadState stage1{}, stage2{}, stage3{}, stage4{};
+    bool have_segment=false;
+    double prev_time=0;
+};
+FilterStream::FilterStream(FilterSettings settings):state_(std::make_unique<State>()),settings_(settings) {}
+FilterStream::~FilterStream()=default;
+FilterStream::FilterStream(FilterStream&&) noexcept=default;
+FilterStream& FilterStream::operator=(FilterStream&&) noexcept=default;
+
+std::vector<double> FilterStream::process(const std::vector<double>& time, const std::vector<double>& src,
+                                         const std::atomic<bool>* cancel) {
+    const auto& settings=settings_;
     if (src.size() != time.size()) throw std::invalid_argument("Filter requires aligned samples and time.");
     const double step = settings.sample_step;
     if (!(step > 0.0) || !std::isfinite(step)) return src;
@@ -94,12 +105,12 @@ std::vector<double> filter_signal(const std::vector<double>& time, const std::ve
     const BiquadCoefficients lowpass_lr = design_biquad(FilterModeLowPass, FilterTopologyButterworth, high_cutoff, sample_rate);
     const BiquadCoefficients highpass_lr = design_biquad(FilterModeHighPass, FilterTopologyButterworth, low_cutoff, sample_rate);
 
-    BiquadState stage1{};
-    BiquadState stage2{};
-    BiquadState stage3{};
-    BiquadState stage4{};
-    bool have_segment = false;
-    double prev_time = 0.0;
+    auto& stage1=state_->stage1;
+    auto& stage2=state_->stage2;
+    auto& stage3=state_->stage3;
+    auto& stage4=state_->stage4;
+    auto& have_segment=state_->have_segment;
+    auto& prev_time=state_->prev_time;
     for (std::size_t i = 0; i < src.size(); ++i) {
         if (cancel && (i & 0xFFF) == 0 && cancel->load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled.");
         const double input = src[i];
@@ -183,4 +194,9 @@ std::vector<double> filter_signal(const std::vector<double>& time, const std::ve
         prev_time = tt;
     }
     return dst;
+}
+
+std::vector<double> filter_signal(const std::vector<double>& time,const std::vector<double>& src,
+                                  const FilterSettings& settings,const std::atomic<bool>* cancel) {
+    return FilterStream(settings).process(time,src,cancel);
 }

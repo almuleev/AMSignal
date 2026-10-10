@@ -67,6 +67,7 @@ struct FrfState {
     // FRF follows the processed Time/FFT views by default. The user can still
     // explicitly switch to raw channels in the FRF panel.
     bool apply_processing = true;
+    bool entire_recording = false; // Runtime source choice; independent of FFT selection.
     lvm::FrfOptions options;
     lvm::FrfBatchResult result;
     bool pending = false, attempted = false;
@@ -98,6 +99,11 @@ struct FrfState {
 // the established g.ds / g.frf access pattern stays intact for the active
 // document; inactive documents own the same state in App::inactive_documents.
 struct DocumentState {
+    std::uint64_t numerical_revision=0;
+    std::shared_ptr<const lvm::ScanIndex> source_scan_index;
+    std::uintmax_t loaded_source_size=0;
+    std::filesystem::file_time_type loaded_source_modified{};
+    bool loaded_source_stamp_valid=false;
     lvm::Dataset ds;
     std::vector<char> visible;
     std::vector<COLORREF> channel_colors;

@@ -12,9 +12,13 @@
 #include <vector>
 
 #include "analysis.hpp"
+#include "analysis_executor.hpp"
 #include "fft.hpp"
 #include "frf_analysis.hpp"
 #include "frf_worker.hpp"
+#include "frf_stream.hpp"
+#include "filter_engine.hpp"
+#include "sampling.hpp"
 #include "spectrum_worker.hpp"
 #include <chrono>
 #include "export_helpers.hpp"
@@ -668,6 +672,204 @@ void test_minmax_and_spectrum_import() {
     check(lvm::tsv_header_field("A\tB\nC\rD") == "A B C D", "TXT header cannot introduce extra columns or rows");
 }
 
+void test_frf_streaming() {
+    const auto equivalent=[](const lvm::FrfResult& a,const lvm::FrfResult& b) {
+        if(a.ok!=b.ok || a.error!=b.error || a.valid!=b.valid || a.coherence_valid!=b.coherence_valid ||
+           a.reference_amplitude_valid!=b.reference_amplitude_valid || a.frequencies!=b.frequencies ||
+           a.sample_dt!=b.sample_dt || a.source_start!=b.source_start || a.source_end!=b.source_end ||
+           a.sample_count!=b.sample_count || a.segment_length!=b.segment_length || a.averages!=b.averages ||
+           a.overlap_samples!=b.overlap_samples || a.gaps_ignored!=b.gaps_ignored)return false;
+        const auto close=[](double x,double y) {
+            return (std::isnan(x) && std::isnan(y)) || x==y || std::fabs(x-y)<=2e-14*std::max({1.0,std::fabs(x),std::fabs(y)});
+        };
+        for(std::size_t k=0;k<a.transfer.size();++k)
+            if(!close(a.transfer[k].real(),b.transfer[k].real()) || !close(a.transfer[k].imag(),b.transfer[k].imag()) ||
+               !close(a.coherence[k],b.coherence[k]) || !close(a.reference_amplitude[k],b.reference_amplitude[k]))return false;
+        return true;
+    };
+    for(std::size_t n:{4096u,337132u})for(std::size_t outputs:{1u,7u}) {
+        lvm::FrfBatchInput input;input.references.resize(2);input.responses.resize(outputs);
+        for(std::size_t i=0;i<n;++i) {
+            const double x=std::sin(2*std::acos(-1.)*13*i/256)+.2*std::cos(.07*i);
+            input.time.push_back(i/1024.+(i>n/3 ? 20 : 0));
+            input.references[0].push_back(x);input.references[1].push_back(3*x);
+            for(std::size_t c=0;c<outputs;++c)input.responses[c].push_back((c+1)*x+.1*std::sin(.13*i));
+        }
+        auto prepared=lvm::prepare_frf_batch(input);
+        for(bool mean:{false,true})for(std::size_t length:{2048u,1000u,0u}) {
+            lvm::FrfOptions options;options.segment_length=length;options.remove_mean=mean;
+            const auto expected=lvm::compute_prepared_frf(*prepared,options);
+            for(std::size_t block:{317u,4096u}) {
+                lvm::FrfSource source;source.references=2;source.responses=outputs;
+                source.replay=[&](const auto& visitor,const auto*) {
+                    for(std::size_t at=0;at<n;at+=block) {
+                        const auto end=std::min(n,at+block);
+                        std::vector<double> time(input.time.begin()+at,input.time.begin()+end);
+                        std::vector<std::vector<double>> values;
+                        for(const auto& c:input.references)values.emplace_back(c.begin()+at,c.begin()+end);
+                        for(const auto& c:input.responses)values.emplace_back(c.begin()+at,c.begin()+end);
+                        visitor(time,values);
+                    }
+                };
+                const auto stream=lvm::prepare_frf_stream(source);
+                const auto actual=lvm::compute_prepared_frf(*stream,options);
+                bool same=expected.ok==actual.ok && expected.error==actual.error && expected.responses.size()==actual.responses.size();
+                for(std::size_t c=0;c<actual.responses.size();++c)same &= equivalent(expected.responses[c],actual.responses[c]);
+                check(same,"FRF is independent of parser block boundaries, L, means and response count");
+            }
+            lvm::FrfSamples scalar;scalar.sample_dt=prepared->metadata.sample_dt;scalar.source_start=input.time.front();
+            scalar.source_end=input.time.back();scalar.source_count=n;scalar.gaps_ignored=true;
+            scalar.reference=prepared->memory->references.front();scalar.response=input.responses.front();
+            check(equivalent(lvm::compute_frf(scalar,options),expected.responses.front()),"ordered frames agree with the scalar estimator");
+        }
+        if(n==4096)for(std::size_t length:{4096u,4097u}) {
+            lvm::FrfOptions direct;direct.estimator=lvm::FrfEstimator::Direct;direct.segment_length=0;
+            auto odd=input;
+            if(length==4097) {
+                odd.time.push_back(odd.time.back()+1./1024);
+                for(auto& c:odd.references)c.push_back(c.back());
+                for(auto& c:odd.responses)c.push_back(c.back());
+            }
+            auto p=lvm::prepare_frf_batch(std::move(odd));
+            lvm::FrfSamples scalar=p->metadata;scalar.reference=p->memory->references.front();scalar.response=p->memory->responses.front();
+            check(equivalent(lvm::compute_frf(scalar,direct),lvm::compute_prepared_frf(*p,direct).responses.front()),
+                  "Direct retains radix-2 and odd Bluestein lengths");
+        }
+    }
+    // More than one sorting run exercises the exact external median/cluster rule.
+    std::vector<double> times(1050000);std::vector<double> steps;
+    for(std::size_t i=1;i<times.size();++i) { const double d=i%5 ? 4./1024 : 1./1024;times[i]=times[i-1]+d;steps.push_back(d); }
+    lvm::FrfSource timeline;
+    timeline.replay=[&](const auto& visit,const auto*) {
+        for(std::size_t at=0;at<times.size();at+=65536)
+            visit(std::vector<double>(times.begin()+at,times.begin()+std::min(times.size(),at+65536)),{});
+    };
+    check(lvm::inspect_frf_timeline(timeline).sample_dt==lvm::typical_sample_spacing(steps),"external cadence sort preserves the majority-gap cluster rule");
+    std::vector<double> signal(times.size());
+    for(std::size_t i=0;i<signal.size();++i)signal[i]=std::sin(.017*i);
+    times[1000]+=1; // Acquisition discontinuity; block boundaries are unrelated.
+    for(int mode=0;mode<4;++mode)for(int topology=0;topology<4;++topology) {
+        FilterSettings settings{mode,topology,10,100,1./1024};
+        const auto expected=filter_signal(times,signal,settings);
+        FilterStream filter(settings);std::vector<double> actual;
+        for(std::size_t at=0;at<signal.size();at+=317) {
+            const auto end=std::min(signal.size(),at+317);
+            const auto block=filter.process(std::vector<double>(times.begin()+at,times.begin()+end),
+                                             std::vector<double>(signal.begin()+at,signal.begin()+end));
+            actual.insert(actual.end(),block.begin(),block.end());
+        }
+        check(actual==expected,"causal filter states and resets match for every family/mode across blocks");
+    }
+    std::atomic<bool> cancelled{true};bool threw=false;
+    try {lvm::compute_prepared_frf(lvm::PreparedFrf{}, {}, &cancelled);}catch(...){threw=true;}
+    check(threw,"prepared FRF honours cancellation before work");
+    lvm::PreparedFrf invalid_length;invalid_length.metadata.source_count=4096;
+    invalid_length.metadata.sample_dt=1./1024;invalid_length.response_errors={lvm::FrfError::None};
+    lvm::FrfOptions invalid_options;invalid_options.segment_length=std::numeric_limits<std::size_t>::max();
+    check(lvm::compute_prepared_frf(invalid_length,invalid_options).error==lvm::FrfError::InvalidOptions,
+          "invalid extreme L is rejected before estimating Bluestein workspace");
+    lvm::PreparedFrf large_length;large_length.metadata.source_count=100000000;
+    large_length.metadata.sample_dt=1./1024;large_length.response_errors.assign(7,lvm::FrfError::None);
+    for(auto estimator:{lvm::FrfEstimator::H1,lvm::FrfEstimator::Direct}) {
+        lvm::FrfOptions options;options.estimator=estimator;
+        const auto result=lvm::compute_prepared_frf(large_length,options);
+        check(result.error==lvm::FrfError::ResourceLimit && result.options.segment_length==0 && result.options.estimator==estimator,
+              "oversized Auto/Direct reports the budget without allocating or silently changing L");
+    }
+    lvm::FrfBatchInput worker_input;worker_input.references.resize(1);worker_input.responses.resize(1);
+    for(std::size_t i=0;i<8192;++i) {
+        worker_input.time.push_back(i/1024.);const double x=std::sin(.13*i);
+        worker_input.references[0].push_back(x);worker_input.responses[0].push_back(2*x);
+    }
+    lvm::FrfWorker worker;lvm::FrfOptions options;options.segment_length=2048;
+    const auto scratch_directories=[] {
+        std::vector<std::filesystem::path> paths;
+        for(const auto& entry:std::filesystem::directory_iterator(std::filesystem::temp_directory_path()))
+            if(entry.path().filename().string().rfind("ams-frf-",0)==0)paths.push_back(entry.path());
+        return paths;
+    };
+    const auto prior_scratch=scratch_directories();
+    lvm::FrfSource disk_source;disk_source.references=disk_source.responses=1;
+    disk_source.replay=[&](const auto& visitor,const auto*) {
+        visitor(worker_input.time,{worker_input.references.front(),worker_input.responses.front()});
+    };
+    auto disk_input=lvm::prepare_frf_stream(disk_source);
+    std::filesystem::path owned_scratch;
+    for(const auto& path:scratch_directories())
+        if(std::find(prior_scratch.begin(),prior_scratch.end(),path)==prior_scratch.end() &&
+           std::filesystem::exists(path/"samples.bin"))owned_scratch=path;
+    check(!owned_scratch.empty(),"disk input owns an identifiable temporary sample snapshot");
+    std::vector<std::vector<double>> read_values;
+    bool range_rejected=false,read_cancelled=false,damaged_rejected=false;
+    try {disk_input->read(8191,2,read_values);}catch(const std::out_of_range&){range_rejected=true;}
+    try {disk_input->read(0,2048,read_values,&cancelled);}catch(const std::runtime_error&){read_cancelled=true;}
+    check(range_rejected && read_cancelled,"snapshot reads reject out-of-range access and cancellation before allocation");
+    if(!owned_scratch.empty()) {
+        {std::ofstream damaged(owned_scratch/"samples.bin",std::ios::binary|std::ios::trunc);damaged.put('x');}
+        try {lvm::compute_prepared_frf(*disk_input,options);}
+        catch(const lvm::FrfSourceFailure& failure){damaged_rejected=failure.error==lvm::FrfError::ResourceLimit;}
+    }
+    check(damaged_rejected,"truncated sample snapshot cannot publish a numerical result and reports a resource error");
+    disk_input.reset();
+    check(!owned_scratch.empty() && !std::filesystem::exists(owned_scratch),"damaged snapshot directory is released by RAII");
+    worker.submit(worker_input,options,11,"revision-1");
+    const auto await_result=[&] {
+        std::optional<lvm::FrfWorker::Result> result;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(!result && std::chrono::steady_clock::now()<deadline) {
+            result=worker.take_result();if(!result)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return result;
+    };
+    auto result=await_result();check(result && result->frf.ok && result->generation==11,"worker publishes the first immutable input");
+    lvm::FrfSource failed_source;failed_source.references=failed_source.responses=1;
+    failed_source.replay=[](const auto&,const auto*){throw lvm::FrfSourceFailure(lvm::FrfError::ResourceLimit);};
+    worker.submit(failed_source,options,17,"disk-error");result=await_result();
+    check(result && !result->frf.ok && result->frf.error==lvm::FrfError::ResourceLimit && result->generation==17,
+          "worker preserves a typed resource failure instead of reporting numeric overflow");
+    worker.submit(worker_input,options,11,"revision-1");result=await_result();
+    check(result && result->frf.ok,"worker recovers after a resource failure");
+    options.remove_mean=false;
+    check(worker.submit_cached(options,12,"revision-1"),"L/mean changes can reuse a prepared input independently of job generation");
+    result=await_result();check(result && result->frf.ok && result->generation==12,"cached input survives the prior request lifetime");
+    check(!worker.submit_cached(options,13,"revision-2"),"different numerical revision cannot use the input cache");
+    std::atomic<bool> started{false};lvm::FrfSource slow;slow.references=slow.responses=1;
+    slow.replay=[&](const auto&,const auto* flag) {
+        started=true;
+        while(!flag->load())std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        throw std::runtime_error("cancelled");
+    };
+    worker.submit(slow,options,14,"slow-source");
+    const auto wait_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    while(!started && std::chrono::steady_clock::now()<wait_deadline)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    check(started,"streamed source executes in the worker");
+    worker.cancel();worker.submit(worker_input,options,15,"other-document");
+    result=await_result();check(result && result->frf.ok && result->generation==15,"replacement request never receives a cancelled document's result");
+    // Hold the actual shared executor deterministically: FRF must fall back
+    // without waiting, and an exception must release admission for the next job.
+    std::promise<void> entered,release;auto allowed=release.get_future().share();
+    std::atomic<bool> announced{false};
+    auto held=std::async(std::launch::async,[&] {
+        lvm::analysis_executor().run(4,4,[&](std::size_t i) {
+            if(!announced.exchange(true))entered.set_value();
+            allowed.wait();if(!i)throw std::runtime_error("shared executor test");
+        });
+    });
+    entered.get_future().wait();
+    auto owned=lvm::prepare_frf_batch(worker_input);
+    lvm::FrfBatchResult sequential;
+    try {sequential=lvm::compute_prepared_frf(*owned,options);}
+    catch(...) {release.set_value();try{held.get();}catch(...){}throw;}
+    release.set_value();bool propagated=false;
+    try {held.get();}catch(const std::runtime_error&){propagated=true;}
+    check(result && equivalent(sequential.responses.front(),result->frf.responses.front()),"busy shared executor uses the identical sequential FRF path");
+    check(propagated,"shared executor joins helpers before propagating a job exception");
+    check(equivalent(lvm::compute_prepared_frf(*owned,options).responses.front(),sequential.responses.front()),
+          "shared executor can run FRF again after an exception");
+    worker.shutdown();worker.shutdown();worker.submit(worker_input,options,16);
+    check(!worker.take_result(),"FRF shutdown is idempotent and prevents submissions after join");
+}
+
 void test_frf_multi() {
     const double pi=std::acos(-1.0);
     lvm::FrfBatchInput batch;
@@ -994,16 +1196,34 @@ void test_fft_chunks_and_plans() {
               "a cancelled call cannot poison the next plan or result");
     }
     // Different inputs/lengths on independent threads must not share a plan.
+    const auto retained_before=lvm::fft_cached_plan_bytes();
     std::vector<std::thread> threads;
     std::vector<unsigned char> correct(3,0);
+    std::vector<unsigned char> accounted(3,0);
     for (std::size_t i = 0; i < correct.size(); ++i) threads.emplace_back([&,i] {
         const std::size_t n = 15+2*i;
         std::vector<std::complex<double>> input(n, {double(i+1), -1});
         const auto first = lvm::dft(input), second = lvm::dft(input);
         correct[i] = first == second && std::abs(first.front()-std::complex<double>(n*(i+1),-double(n))) < 1e-10;
+        accounted[i]=lvm::fft_cached_plan_bytes()>retained_before;
     });
     for (auto& thread : threads) thread.join();
     check(std::all_of(correct.begin(),correct.end(),[](auto v){return v!=0;}), "plan caches are independent across threads");
+    check(std::all_of(accounted.begin(),accounted.end(),[](auto v){return v!=0;}),"workspace accounting includes published thread-local plans");
+    check(lvm::fft_cached_plan_bytes()==retained_before,"thread exit releases its retained-plan allowance");
+    bool repeated_correct=true,repeated_released=true;
+    for(int round=0;round<256;++round) {
+        threads.clear();std::fill(correct.begin(),correct.end(),0);
+        for(std::size_t i=0;i<correct.size();++i)threads.emplace_back([&,i] {
+            std::vector<std::complex<double>> input(15+2*i,{double(round+1),-1});
+            correct[i]=lvm::dft(input)==lvm::dft(input);
+        });
+        for(auto& thread:threads)thread.join();
+        repeated_correct&=std::all_of(correct.begin(),correct.end(),[](auto v){return v!=0;});
+        repeated_released&=lvm::fft_cached_plan_bytes()==retained_before;
+    }
+    check(repeated_correct,"768 short-lived FFT threads preserve their own cold and warm plan results");
+    check(repeated_released,"repeated concurrent thread teardown releases every retained FFT plan");
 }
 
 void test_fft_channel_pool() {
@@ -1049,6 +1269,7 @@ void test_fft_channel_pool() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    test_frf_streaming();
     test_frf_multi();
     test_frf();
     if (argc>1 && std::string(argv[1])=="--frf") {

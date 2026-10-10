@@ -13,6 +13,33 @@
 #include "gui_text.hpp"
 
 namespace gui {
+namespace {
+// Retained processing cache budget per document; input Dataset is separate.
+void make_processing_cache_room(std::size_t bytes,std::size_t protected_channel,bool filtered) {
+    constexpr std::size_t budget=128ULL*1024*1024;
+    std::size_t used=bytes;
+    for(std::size_t c=0;c<g.ds.channel_count();++c) {
+        if(c<g.transformed_channel_cache.size() && (filtered || c!=protected_channel))
+            used+=g.transformed_channel_cache[c].capacity()*8;
+        if(c<g.filtered_channel_cache.size() && (filtered ? c!=protected_channel : true))
+            used+=g.filtered_channel_cache[c].capacity()*8;
+    }
+    if(used<=budget)return;
+    if(filtered && bytes+g.transformed_channel_cache[protected_channel].capacity()*8>budget) {
+        std::vector<double>().swap(g.transformed_channel_cache[protected_channel]);
+        g.transformed_channel_cache_valid[protected_channel]=0;
+    }
+    for(std::size_t c=0;c<g.ds.channel_count();++c) {
+        if(c==protected_channel)continue;
+        if(c<g.transformed_channel_cache.size()) {
+            std::vector<double>().swap(g.transformed_channel_cache[c]);g.transformed_channel_cache_valid[c]=0;
+        }
+        if(c<g.filtered_channel_cache.size()) {
+            std::vector<double>().swap(g.filtered_channel_cache[c]);g.filtered_channel_cache_valid[c]=0;
+        }
+    }
+}
+}
 
 std::wstring channel_display_label(std::size_t ci) {
     if (ci < g.channel_labels.size() && !g.channel_labels[ci].empty()) return g.channel_labels[ci];
@@ -33,6 +60,7 @@ std::wstring channel_coefficient_text(std::size_t ci) {
 }
 
 void invalidate_formula_runtime() {
+    ++g.numerical_revision;
     g.formula_runtime_dirty = true;
     invalidate_transformed_channel_cache();
     invalidate_filtered_channel_cache();
@@ -40,6 +68,7 @@ void invalidate_formula_runtime() {
 }
 
 void invalidate_formula_runtime_channel(std::size_t channel_index) {
+    ++g.numerical_revision;
     g.formula_runtime_dirty = true;
     if (channel_index < g.transformed_channel_cache_valid.size()) {
         g.transformed_channel_cache_valid[channel_index] = 0;
@@ -155,6 +184,8 @@ void ensure_transformed_channel_cache(std::size_t channel_index) {
     if (g.transformed_channel_cache_valid[channel_index]) return;
 
     const auto& src = g.ds.channels[channel_index];
+    if(src.size()*8>64ULL*1024*1024)return; // Formula evaluation has a per-sample fallback.
+    make_processing_cache_room(src.size()*8,channel_index,false);
     auto& dst = g.transformed_channel_cache[channel_index];
     dst.resize(src.size());
     for (std::size_t i = 0; i < src.size(); ++i) {
@@ -291,6 +322,7 @@ double transformed_channel_sample(std::size_t channel_index, std::size_t row_ind
     }
     ensure_transformed_channel_cache(channel_index);
     if (channel_index < g.transformed_channel_cache.size() &&
+        g.transformed_channel_cache_valid[channel_index] &&
         row_index < g.transformed_channel_cache[channel_index].size()) {
         return g.transformed_channel_cache[channel_index][row_index];
     }
@@ -313,12 +345,18 @@ void ensure_filtered_channel_cache(std::size_t channel_index) {
     if (!g.noise_threshold_enabled || channel_index >= g.ds.channel_count()) return;
     if (channel_index >= g.filtered_channel_cache_valid.size()) invalidate_filtered_channel_cache();
     if (g.filtered_channel_cache_valid[channel_index]) return;
+    make_processing_cache_room(g.ds.rows()*8,channel_index,true);
     const std::vector<double>* samples = &g.ds.channels[channel_index];
     std::vector<double> transformed;
     const auto kind = g.channel_transform_kind[channel_index];
     if (kind == TransformRuntimeKind::CachedFormula) {
         ensure_transformed_channel_cache(channel_index);
-        samples = &g.transformed_channel_cache[channel_index];
+        if(g.transformed_channel_cache_valid[channel_index])samples=&g.transformed_channel_cache[channel_index];
+        else {
+            transformed.resize(g.ds.rows());
+            for(std::size_t i=0;i<transformed.size();++i)transformed[i]=transform_channel_value(channel_index,(*samples)[i]);
+            samples=&transformed;
+        }
     } else if (kind == TransformRuntimeKind::Affine) {
         transformed.resize(g.ds.rows());
         for (std::size_t i = 0; i < transformed.size(); ++i) transformed[i] = transformed_channel_sample(channel_index, i);
@@ -332,6 +370,12 @@ void ensure_filtered_channel_cache(std::size_t channel_index) {
     settings.sample_step = current_filter_sample_step();
     g.filtered_channel_cache[channel_index] = filter_signal(g.ds.time, *samples, settings);
     g.filtered_channel_cache_valid[channel_index] = 1;
+    make_processing_cache_room(g.filtered_channel_cache[channel_index].capacity()*8,channel_index,true);
+    if(g.filtered_channel_cache[channel_index].capacity()*8+
+       g.transformed_channel_cache[channel_index].capacity()*8>128ULL*1024*1024) {
+        std::vector<double>().swap(g.transformed_channel_cache[channel_index]);
+        g.transformed_channel_cache_valid[channel_index]=0;
+    }
 }
 
 void reset_channel_transform(std::size_t ci) {
@@ -371,6 +415,7 @@ void clear_transform_sensitive_overlays(bool clear_history) {
 }
 
 void on_signal_transform_changed(bool preserve_history) {
+    ++g.numerical_revision;
     if (!has_data()) return;
     clear_transform_sensitive_overlays(!preserve_history);
     g.auto_y = true;

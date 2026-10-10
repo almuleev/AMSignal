@@ -528,19 +528,24 @@ void recompute_transforms_from_state() {
 void apply_settings_snapshot(const SettingsSnapshot& snapshot) {
     g_filter_slider_before.reset();
     if (g.channel_edit) finish_channel_rename(false);
+    const bool formulas_changed=g.global_formula!=snapshot.global_formula || g.channel_formulas!=snapshot.channel_formulas;
+    const bool filter_changed=g.noise_threshold_enabled!=snapshot.noise_threshold_enabled ||
+        g.noise_threshold_min!=snapshot.noise_threshold_min || g.noise_threshold_max!=snapshot.noise_threshold_max ||
+        g.noise_threshold_mode!=snapshot.noise_threshold_mode || g.noise_threshold_topology!=snapshot.noise_threshold_topology;
+    const bool visibility_changed=g.visible!=snapshot.visible;
     g.visible = snapshot.visible;
     g.channel_labels = snapshot.channel_labels;
     g.channel_colors = snapshot.channel_colors;
     g.global_formula = snapshot.global_formula;
     g.channel_formulas = snapshot.channel_formulas;
-    rebuild_formula_cache_from_state();
+    if(formulas_changed)rebuild_formula_cache_from_state();
     g.snap_to_data = snapshot.snap_to_data;
     g.noise_threshold_enabled = snapshot.noise_threshold_enabled;
     g.noise_threshold_min = snapshot.noise_threshold_min;
     g.noise_threshold_max = snapshot.noise_threshold_max;
     g.noise_threshold_mode = snapshot.noise_threshold_mode;
     g.noise_threshold_topology = snapshot.noise_threshold_topology;
-    normalize_filter_bounds();
+    if(filter_changed)normalize_filter_bounds();
     g.marker_color = snapshot.marker_color;
     g.point_groups = snapshot.point_groups;
     g.active_point_group = snapshot.active_point_group;
@@ -563,7 +568,13 @@ void apply_settings_snapshot(const SettingsSnapshot& snapshot) {
     g.distinguish_curves = snapshot.distinguish_curves;
     g.show_channel_legend = snapshot.show_channel_legend;
     sync_channel_controls_from_state();
-    recompute_transforms_from_state();
+    if(formulas_changed || filter_changed)recompute_transforms_from_state();
+    else {
+        invalidate_plot_analysis_cache();
+        if(visibility_changed && g.light_mode && g.mode==AnalysisMode::FFT)ensure_current_spectrum();
+        sync_menu();
+    }
+    refresh_frf_channel_names();
     refresh_settings_controls();
     refresh_side_panel_controls();
     set_status();

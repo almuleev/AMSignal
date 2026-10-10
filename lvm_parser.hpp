@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -54,10 +55,17 @@ struct LoadOptions {
     double time_end = 0.0;
     const std::atomic<bool>* cancel_flag = nullptr;
     std::shared_ptr<const ScanIndex> scan_index;
+    // Physical file columns: time is column 0. Blocks never use display envelopes.
+    std::vector<std::size_t> stream_columns;
+    std::size_t block_rows = 65536;
+    std::size_t max_resident_bytes = 0; // 0 = caller-controlled; GUI supplies a bound.
+    std::function<void(const std::vector<double>&,
+                       const std::vector<std::vector<double>>&)> consume_block;
 };
 
 // Parsed dataset: a time vector and aligned channel columns.
 struct Dataset {
+    std::vector<std::size_t> source_columns; // Physical columns, preserved after dropping time duplicates.
     std::vector<double> time;                  // first column (X / time)
     std::vector<double> raw_time;              // original first column before any normalization
     std::vector<std::string> names;            // channel names, e.g. "Channel_1"
