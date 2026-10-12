@@ -17,20 +17,26 @@ public:
     // File-independent snapshot; preparation and FFT both run in this worker.
     void submit(FrfInput data, FrfOptions options, std::uint64_t generation);
     void submit(FrfBatchInput data, FrfOptions options, std::uint64_t generation);
-    void submit(FrfBatchInput data,FrfOptions options,std::uint64_t generation,std::string input_key);
-    void submit(FrfSource source,FrfOptions options,std::uint64_t generation,std::string input_key);
-    bool submit_cached(FrfOptions options,std::uint64_t generation,const std::string& input_key);
+    void submit(FrfBatchInput data,FrfOptions options,std::uint64_t generation,std::string input_key,
+                AnalysisResources resources={},std::shared_ptr<MemoryBudget::Reservation> reservation={});
+    void submit(FrfSource source,FrfOptions options,std::uint64_t generation,std::string input_key,
+                AnalysisResources resources={},std::shared_ptr<MemoryBudget::Reservation> reservation={});
+    bool submit_cached(FrfOptions options,std::uint64_t generation,const std::string& input_key,
+                       AnalysisResources resources={});
     void cancel();
+    void clear_cache();
     void shutdown();
     std::optional<Result> take_result();
 private:
     struct Request {
+        std::shared_ptr<MemoryBudget::Reservation> memory_reservation;
         FrfBatchInput data;
         FrfSource source;
         std::string input_key;
         FrfOptions options;
         std::uint64_t generation;
         std::shared_ptr<std::atomic<bool>> cancelled;
+        AnalysisResources resources;
     };
     void run();
     std::mutex mutex_;

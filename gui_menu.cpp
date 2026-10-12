@@ -11,6 +11,7 @@
 #include "gui_playback.hpp"
 #include "gui_side_panel.hpp"
 #include "gui_settings.hpp"
+#include "gui_analysis_source.hpp"
 
 namespace gui {
 
@@ -244,9 +245,10 @@ void sync_menu() {
     }
     if (!g.menu) return;
     EnableMenuItem(g.menu, IDM_MODE_FRF, MF_BYCOMMAND | (frf_available ? MF_ENABLED : MF_GRAYED));
-    EnableMenuItem(g.menu, IDM_FRF_FULL_RECORD, MF_BYCOMMAND |
-        (frf_available && g.source_scan_index ? MF_ENABLED : MF_GRAYED));
-    CheckMenuItem(g.menu,IDM_FRF_FULL_RECORD,MF_BYCOMMAND | (g.frf.entire_recording ? MF_CHECKED : MF_UNCHECKED));
+    for(auto id:{IDM_ANALYSIS_ENTIRE,IDM_ANALYSIS_INTERVAL,IDM_ANALYSIS_VISIBLE})
+        EnableMenuItem(g.menu,id,MF_BYCOMMAND | (has_data() && !g.ds.frequency_axis ? MF_ENABLED : MF_GRAYED));
+    CheckMenuItem(g.menu,IDM_ANALYSIS_ENTIRE,MF_BYCOMMAND | (!has_fft_window() ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(g.menu,IDM_ANALYSIS_INTERVAL,MF_BYCOMMAND | (has_fft_window() ? MF_CHECKED : MF_UNCHECKED));
     for (int id : {IDC_PLAY, IDC_MEASURE, IDM_ADD_MARKER, IDM_ADD_VLINE, IDM_ADD_HLINE,
          IDM_ADD_VLINE_EXACT, IDM_ADD_HLINE_EXACT, IDM_CLEAR_POINTS, IDM_CLEAR_MARKERS, IDM_CLEAR_LINES,
          IDM_VISMOOTH, IDM_CURVE_SYMBOLS})
@@ -352,8 +354,6 @@ HMENU make_menu() {
     append_menu_item_owner_draw(view, IDM_MODE_TIME, mode_time_text);
     append_menu_item_owner_draw(view, IDM_MODE_FREQ, mode_freq_text);
     append_menu_item_owner_draw(view, IDM_MODE_FRF, text(L"FRF / Frequency response", L"FRF / АЧХ"));
-    append_menu_item_owner_draw(view, IDM_FRF_FULL_RECORD,
-        text(L"FRF: entire recording", L"АЧХ: вся запись"));
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
     append_menu_item_owner_draw(view, IDC_ZOOMIN, zoom_in_text);
     append_menu_item_owner_draw(view, IDC_ZOOMOUT, zoom_out_text);
@@ -370,6 +370,12 @@ HMENU make_menu() {
     append_menu_item_owner_draw(view, IDM_SPEED_CUSTOM, speed_menu_text());
     append_menu_item_owner_draw(view, IDM_THEME, theme_text);
     append_menu_popup_owner_draw(bar, view, text(L"View", L"Вид"));
+
+    const HMENU analysis=CreatePopupMenu();
+    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_ENTIRE,text(L"Entire recording",L"Вся запись"));
+    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_INTERVAL,text(L"Interval…",L"Участок…"));
+    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_VISIBLE,text(L"Use visible interval",L"Взять видимый участок"));
+    append_menu_popup_owner_draw(bar,analysis,text(L"Analysis",L"Анализ"));
 
     const HMENU tools = CreatePopupMenu();
     append_menu_item_owner_draw(tools, IDC_CURSOR_TOOL, text(L"Cursor", L"Курсор"));

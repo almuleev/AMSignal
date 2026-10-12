@@ -11,7 +11,7 @@ RELEASE_VERSION := $(patsubst v%,%,$(VERSION))
 CPPFLAGS += -DAPP_VERSION=\"$(VERSION)\"
 
 # Parser/analysis library shared by the CLI and the tests.
-LIB_SRC  := lvm_parser.cpp fft.cpp analysis.cpp data_io.cpp filter_engine.cpp spectrum_worker.cpp frf_analysis.cpp frf_stream.cpp frf_worker.cpp
+LIB_SRC  := lvm_parser.cpp recording_source.cpp recording_overview.cpp overview_worker.cpp disk_cache.cpp scan_index_cache.cpp fft.cpp analysis.cpp disk_spectrum.cpp data_io.cpp filter_engine.cpp spectrum_worker.cpp frf_analysis.cpp frf_stream.cpp frf_worker.cpp
 APP_SRC  := main.cpp $(LIB_SRC)
 APP_OBJ  := $(APP_SRC:.cpp=.o)
 HDRS     := $(wildcard *.hpp)
@@ -64,7 +64,7 @@ $(BENCH_BIN): tests/perf_benchmark.cpp $(LIB_SRC) $(HDRS)
 	$(CXX) $(CXXFLAGS) -I. -o $@ tests/perf_benchmark.cpp $(LIB_SRC) $(LDFLAGS)
 
 tests/gui_regression.exe: $(GUI_TEST_OBJECT) $(GUI_OBJECTS)
-	$(CXX) -o $@ $^ $(LDFLAGS) -lcomdlg32 -lgdi32 -luser32 -lgdiplus -lcomctl32 -luxtheme -ladvapi32 -lshell32
+	$(CXX) -o $@ $^ $(LDFLAGS) -lcomdlg32 -lgdi32 -luser32 -lgdiplus -lcomctl32 -luxtheme -ladvapi32 -lshell32 -lole32 -luuid
 
 .build/make_gui:
 	mkdir -p $@
@@ -80,8 +80,8 @@ $(GUI_TEST_OBJECT): tests/gui_regression.cpp .build/make_gui/flags.txt | .build/
 
 -include $(GUI_OBJECTS:.o=.d) $(GUI_TEST_OBJECT:.o=.d)
 
-$(TEST_BIN): tests/run_tests.cpp $(LIB_SRC) export_helpers.cpp formula_engine.cpp gap_details.cpp $(HDRS)
-	$(CXX) $(CXXFLAGS) -I. -o $@ tests/run_tests.cpp $(LIB_SRC) export_helpers.cpp formula_engine.cpp gap_details.cpp $(LDFLAGS)
+$(TEST_BIN): tests/run_tests.cpp tests/recording_overview_tests.cpp tests/recording_cache_tests.cpp $(LIB_SRC) export_helpers.cpp formula_engine.cpp gap_details.cpp $(HDRS)
+	$(CXX) $(CXXFLAGS) -I. -o $@ tests/run_tests.cpp tests/recording_overview_tests.cpp tests/recording_cache_tests.cpp $(LIB_SRC) export_helpers.cpp formula_engine.cpp gap_details.cpp $(LDFLAGS)
 
 # Native Win32 GUI viewer (Windows only). Needs -municode for wWinMain and the
 # Win32 import libraries. On Windows you can also run: powershell ./build_gui.ps1
@@ -91,7 +91,7 @@ $(GUI_RES): AM_logo.rc AM_logo.ico
 	$(WINDRES) -O coff -i $< -o $@
 
 $(GUI_BIN): $(GUI_OBJECTS) $(GUI_RES)
-	$(CXX) -municode -mwindows -o $@ $^ $(LDFLAGS) -lcomdlg32 -lgdi32 -luser32 -lgdiplus -lcomctl32 -luxtheme -ladvapi32 -lshell32
+	$(CXX) -municode -mwindows -o $@ $^ $(LDFLAGS) -lcomdlg32 -lgdi32 -luser32 -lgdiplus -lcomctl32 -luxtheme -ladvapi32 -lshell32 -lole32 -luuid
 
 clean:
 	rm -f $(APP_OBJ) $(BIN) $(TEST_BIN) $(GUI_BIN) $(GUI_RES) $(GUI_OBJECTS) $(GUI_OBJECTS:.o=.d) $(GUI_TEST_OBJECT) $(GUI_TEST_OBJECT:.o=.d) $(BENCH_BIN) tests/gui_regression.exe

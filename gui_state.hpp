@@ -2,6 +2,10 @@
 #include "gui_platform.hpp"
 #include "gui_theme.hpp"
 #include "frf_analysis.hpp"
+#include "resource_budget.hpp"
+#include "overview_worker.hpp"
+
+namespace lvm { class RecordingSource; }
 
 namespace gui {
 
@@ -67,7 +71,6 @@ struct FrfState {
     // FRF follows the processed Time/FFT views by default. The user can still
     // explicitly switch to raw channels in the FRF panel.
     bool apply_processing = true;
-    bool entire_recording = false; // Runtime source choice; independent of FFT selection.
     lvm::FrfOptions options;
     lvm::FrfBatchResult result;
     bool pending = false, attempted = false;
@@ -99,8 +102,33 @@ struct FrfState {
 // the established g.ds / g.frf access pattern stays intact for the active
 // document; inactive documents own the same state in App::inactive_documents.
 struct DocumentState {
+    struct OverviewState {
+        std::shared_ptr<lvm::MemoryBudget::Reservation> details_reservation;
+        std::shared_ptr<const lvm::RecordingOverview> index;
+        std::shared_ptr<const lvm::OverviewView> view;
+        std::shared_ptr<const lvm::RecordingSource> source;
+        std::uint64_t numerical=0;
+        std::vector<std::size_t> channels;
+        std::uint64_t generation=0;
+        bool pending=false;
+        std::optional<lvm::RecordingError> error;
+        std::vector<lvm::OverviewGap> gaps;
+        // Full source rendering; Dataset holds only metadata/seed rows in this path.
+        bool render_enabled=false;
+        std::filesystem::path cache_path;
+        lvm::TimeRange requested_range;
+        std::vector<std::size_t> requested_channels;
+        std::size_t requested_pixels=0;
+        bool requested_display_density=false;
+        lvm::ResourcePolicy requested_resource_policy;
+        bool snap_pending=false;
+        std::optional<lvm::RecordingError> snap_error;
+    } overview;
     std::uint64_t numerical_revision=0;
     std::shared_ptr<const lvm::ScanIndex> source_scan_index;
+    std::shared_ptr<const lvm::RecordingSource> recording_source;
+    std::shared_ptr<const lvm::RecordingSource> processed_source,processed_source_origin;
+    std::uint64_t recording_rows=0;
     std::uintmax_t loaded_source_size=0;
     std::filesystem::file_time_type loaded_source_modified{};
     bool loaded_source_stamp_valid=false;
@@ -136,6 +164,13 @@ struct DocumentState {
     double win_start = 0.0, win_end = 1.0;
     double freq_start = 0.0, freq_end = 1.0;
     double approx_dt = 1.0;
+
+    // Common numerical area and FFT provenance belong to this source, not App.
+    bool fft_window_active = false;
+    double fft_window_start = 0.0, fft_window_end = 0.0;
+    double spec_source_start = 0.0, spec_source_end = 0.0;
+    bool spec_source_from_selection = false;
+    bool spec_source_valid = false;
 
     lvm::Spectrum spec;
     bool spec_valid = false;
@@ -263,9 +298,7 @@ struct App : DocumentState {
     // queued here; each result is moved into a separate DocumentState.
     std::vector<DocumentState> inactive_documents;
     std::vector<std::wstring> pending_open_paths;
-    bool light_mode = false;
-    double light_mode_open_start = 0.0;
-    double light_mode_open_end = 10.0;
+    lvm::ResourcePolicy resource_policy;
     AsyncLoadStage async_load_stage = AsyncLoadStage::None;
     unsigned long long async_load_token = 0;
     std::shared_ptr<std::atomic<bool>> async_load_cancel_flag;
@@ -308,6 +341,8 @@ struct App : DocumentState {
     std::pair<double, double> annotation_drag_point_before;
     GuideLine annotation_drag_guide_before;
     DocumentState::Marker annotation_drag_marker_before;
+    bool overview_drag_target_valid=false;
+    double overview_drag_target_time=0,overview_drag_target_value=0;
     std::wstring status_text;
     std::wstring status_detail_text;
     COLORREF status_detail_color = RGB(0, 0, 0);
@@ -385,15 +420,10 @@ struct App : DocumentState {
     bool gap_click_pending = false;
     int gap_click_index = -1;
 
-    bool fft_window_active = false;
-    double fft_window_start = 0.0, fft_window_end = 0.0;
     bool fft_selecting = false;
     int fft_select_anchor_x = 0, fft_select_current_x = 0;
     double fft_select_anchor_t = 0.0, fft_select_current_t = 0.0;
 
-    double spec_source_start = 0.0, spec_source_end = 0.0;
-    bool spec_source_from_selection = false;
-    bool spec_source_valid = false;
 
     bool vertical_pan = true;  // enable vertical panning with left-drag
 

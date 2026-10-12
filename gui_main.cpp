@@ -8,6 +8,8 @@
 #include "gui_ids.hpp"
 #include "gui_input.hpp"
 #include "gui_loading.hpp"
+#include "gui_source_export.hpp"
+#include "gui_overview.hpp"
 #include "gui_playback.hpp"
 #include "gui_settings.hpp"
 #include "gui_spectrum.hpp"
@@ -42,6 +44,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COMMAND:
             return handle_commands_message(hwnd, msg, wp, lp);
         case WM_TIMER:
+            if(wp==2){poll_recording_overview();poll_overview_snap();poll_source_export();}
             return handle_playback_message(hwnd, msg, wp, lp);
         case WM_CANCELMODE:
         case WM_SETCURSOR:
@@ -142,7 +145,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     if (g.accel) DestroyAcceleratorTable(g.accel);
     // Join the background caller before function-static analysis pools are
     // destroyed. WM_DESTROY cancels work but does not join the caller.
+    shutdown_source_exports();
     g_spectrum_worker.shutdown();
+    g_overview_worker.shutdown();
     g_frf_worker.shutdown();
     unload_program_logo();
     Gdiplus::GdiplusShutdown(g_gdiplus_token);

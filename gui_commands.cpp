@@ -29,6 +29,7 @@
 #include "gui_text.hpp"
 #include "gui_theme.hpp"
 #include "gui_window.hpp"
+#include "gui_analysis_source.hpp"
 
 namespace gui {
 
@@ -87,13 +88,25 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     set_mode(AnalysisMode::FFT);
                     return 0;
                 case IDM_MODE_FRF: set_mode(AnalysisMode::FRF); return 0;
-                case IDM_FRF_FULL_RECORD:
-                    if(g.source_scan_index && !g.ds.frequency_axis) {
-                        g.frf.entire_recording=!g.frf.entire_recording;
-                        invalidate_frf();set_mode(AnalysisMode::FRF);
-                        ensure_current_frf();
+                case IDM_ANALYSIS_ENTIRE:
+                case IDM_ANALYSIS_INTERVAL:
+                case IDM_ANALYSIS_VISIBLE: {
+                    if(!has_data() || g.ds.frequency_axis)return 0;
+                    auto range=lvm::AnalysisRange::entire();
+                    if(id==IDM_ANALYSIS_VISIBLE)range=lvm::AnalysisRange::selected(g.win_start,g.win_end);
+                    if(id==IDM_ANALYSIS_INTERVAL) {
+                        double a=0,b=0;
+                        const auto bounds=analysis_recording_bounds();
+                        if(!prompt_analysis_window(bounds.start,bounds.end,a,b))return 0;
+                        range=lvm::AnalysisRange::selected(a,b);
+                    }
+                    if(change_analysis_range(range)) {
+                        if(g.mode==AnalysisMode::FFT)compute_spectrum_from_current_source();
+                        if(g.mode==AnalysisMode::FRF)compute_frf_from_current_source();
+                        sync_menu();set_status();invalidate_plot();
                     }
                     return 0;
+                }
                 case IDC_CURSOR_TOOL:
                     g.measure_mode = false;
                     g.point_click_pending = false;

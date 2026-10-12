@@ -1,5 +1,6 @@
 // Render: native viewer implementation.
 #include "gui_render.hpp"
+#include "gui_disk_spectrum_render.hpp"
 #include "gui_frf_render.hpp"
 #include "gui_analysis_source.hpp"
 #include "gui_hotkeys.hpp"
@@ -9,6 +10,7 @@
 #include "gui_layout.hpp"
 #include "gui_processing.hpp"
 #include "gui_render_data.hpp"
+#include "gui_overview_render.hpp"
 #include "gui_settings.hpp"
 #include "gui_side_panel.hpp"
 #include "gui_spectrum.hpp"
@@ -763,15 +765,13 @@ void draw_measure(HDC dc) {
 int catmull_rom_segment_steps(const POINT& a, const POINT& b) {
     const int dist = max(std::abs(b.x - a.x), std::abs(b.y - a.y));
     if (dist <= 2) return 1;
-    const int max_steps = g.light_mode ? 5 : 8;
+    const int max_steps = 8;
     return std::clamp(dist / 12 + 1, 1, max_steps);
 }
 
 bool should_render_smoothed_polyline(std::size_t point_count, int pixel_width) {
     if (!g.visual_smooth || point_count < 2) return false;
-    const std::size_t soft_limit = g.light_mode
-        ? std::max<std::size_t>(static_cast<std::size_t>(pixel_width) * 3, 600)
-        : std::max<std::size_t>(static_cast<std::size_t>(pixel_width) * 6, 1800);
+    const std::size_t soft_limit = std::max<std::size_t>(static_cast<std::size_t>(pixel_width) * 6, 1800);
     return point_count <= soft_limit;
 }
 
@@ -840,6 +840,7 @@ double effective_time_gap_step(const std::vector<double>& time, std::size_t lo, 
 }
 
 void draw_time(HDC dc, const RECT& p) {
+    if(g.overview.render_enabled){draw_overview_time(dc,p);return;}
     g.visible_gap_markers.clear();
     const std::vector<double>& t = g.ds.time;
     const std::size_t n = t.size();
@@ -903,12 +904,11 @@ void draw_time(HDC dc, const RECT& p) {
     // per sample than the min/max projection used for denser views.
     const bool sparse = (hi - lo) <= static_cast<std::size_t>(pw) * 2;
     const bool allow_smoothing = should_render_smoothed_polyline(hi - lo, pw);
-    const std::size_t light_mode_gap_budget = std::max<std::size_t>(static_cast<std::size_t>(pw) * 48, 120000);
     const std::size_t normal_gap_budget = std::max<std::size_t>(static_cast<std::size_t>(pw) * 96, 220000);
     const bool enable_gap_scan =
         g.show_gap_markers && !g.stitch_time_gaps &&
-        (!g.light_mode || visible_channels) &&
-        (hi - lo <= (g.light_mode ? light_mode_gap_budget : normal_gap_budget));
+        visible_channels &&
+        (hi - lo <= normal_gap_budget);
     const double gap_step = enable_gap_scan ? effective_time_gap_step(t, lo, hi) : 0.0;
     const double gap_threshold = (gap_step > 0.0)
         ? (gap_step * 64.0)
@@ -974,7 +974,7 @@ void draw_time(HDC dc, const RECT& p) {
         DeleteObject(gap_brush);
     }
 
-    if (g.light_mode && !visible_channels) {
+    if (!visible_channels) {
         SelectClipRgn(dc, nullptr);
         DeleteObject(clip);
         g_legend_items.clear();
@@ -1301,7 +1301,7 @@ void draw_time(HDC dc, const RECT& p) {
 }
 
 void draw_freq(HDC dc, const RECT& p) {
-    if (!ensure_current_spectrum() || g.spec.freqs.size() < 2) {
+    if (!ensure_current_spectrum() || g.spec.bin_count() < 2) {
         draw_axes(dc, p, 0, 1, 0, 1);
         RECT message_rect = p;
         InflateRect(&message_rect, -24, -24);
@@ -1313,6 +1313,7 @@ void draw_freq(HDC dc, const RECT& p) {
         DrawTextW(dc, message.c_str(), -1, &message_rect, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
         return;
     }
+    if(g.spec.disk){draw_disk_spectrum(dc,p);return;}
     const auto& f = g.spec.freqs;
     double f0 = g.freq_start, f1 = g.freq_end;
     if (f1 <= f0) { f0 = 0.0; f1 = g.spec.nyquist; }

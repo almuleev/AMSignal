@@ -23,8 +23,8 @@ $flagsModified = (Get-Item -LiteralPath $flagsPath).LastWriteTimeUtc
 if ($flagsModified -gt $latestDependency) { $latestDependency = $flagsModified }
 $sources = @((Get-ChildItem gui_*.cpp | Sort-Object Name).Name) + @(
     'gap_details.cpp', 'lvm_parser.cpp', 'data_io.cpp', 'filter_engine.cpp',
-    'spectrum_worker.cpp', 'fft.cpp', 'analysis.cpp', 'export_helpers.cpp', 'formula_engine.cpp',
-    'frf_analysis.cpp', 'frf_stream.cpp', 'frf_worker.cpp'
+    'spectrum_worker.cpp', 'fft.cpp', 'analysis.cpp', 'disk_spectrum.cpp', 'export_helpers.cpp', 'formula_engine.cpp',
+    'frf_analysis.cpp', 'frf_stream.cpp', 'frf_worker.cpp', 'recording_source.cpp', 'recording_overview.cpp', 'overview_worker.cpp', 'disk_cache.cpp', 'scan_index_cache.cpp'
 )
 if ($Test) { $sources += 'tests/gui_regression.cpp' }
 $objects = @()
@@ -43,7 +43,7 @@ foreach ($source in $sources) {
         if ($LASTEXITCODE -ne 0) { throw "Compilation failed: $source (exit $LASTEXITCODE)." }
     }
 }
-$libraries = @('-lcomdlg32', '-lgdi32', '-luser32', '-lgdiplus', '-lcomctl32', '-luxtheme', '-ladvapi32', '-lshell32')
+$libraries = @('-lcomdlg32', '-lgdi32', '-luser32', '-lgdiplus', '-lcomctl32', '-luxtheme', '-ladvapi32', '-lshell32', '-lole32', '-luuid')
 if ($Test) {
     $outName = 'tests/gui_regression.exe'
     & g++ -static -o $outName @objects @libraries

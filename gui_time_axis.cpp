@@ -23,6 +23,7 @@ double precompute_global_gap_step(const std::vector<double>& time) {
 
 void ensure_global_gap_step_ready() {
     if (g.cached_global_gap_step_ready) return;
+    if(g.overview.render_enabled && g.recording_rows)return; // Computed from original full source by the I/O worker.
     g.cached_global_gap_step = precompute_global_gap_step(g.ds.time);
     g.cached_global_gap_step_ready = true;
 }

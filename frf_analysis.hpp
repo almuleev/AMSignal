@@ -1,4 +1,5 @@
 #pragma once
+#include "analysis_resources.hpp"
 #include <atomic>
 #include <vector>
 #include <complex>
@@ -69,6 +70,7 @@ struct FrfBatchInput {
     std::vector<std::vector<double>> references, responses;
 };
 struct FrfBatchResult {
+    std::shared_ptr<MemoryBudget::Reservation> memory_reservation;
     FrfOptions options;
     std::vector<FrfResult> responses;
     bool ok = false; // at least one response succeeded

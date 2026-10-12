@@ -14,6 +14,10 @@
 #include "gui_render.hpp"
 #include "gui_spectrum.hpp"
 #include "gui_dialogs.hpp"
+#include "gui_source_export.hpp"
+#include "gui_recording_processing.hpp"
+#include "disk_spectrum.hpp"
+#include "gui_resources.hpp"
 
 namespace gui {
 
@@ -125,6 +129,14 @@ std::vector<int> export_spectrum_channel_indices(const lvm::Spectrum& spec) {
 bool build_export_spectrum(const ExportOptions& opts, lvm::Spectrum& out_spec,
                            std::vector<int>& out_channel_indices, bool& out_all_channels) {
     if (!has_data() || g.mode != AnalysisMode::FFT) return false;
+    if(g.overview.render_enabled) {
+        double a=0,b=0;bool selected=false;if(!current_fft_source_window(a,b,selected))return false;
+        lvm::RecordingReadRequest read;read.range=lvm::AnalysisRange::selected(a,b);read.channels=export_channel_indices(opts.include_hidden_channels);
+        std::vector<std::string> names;for(auto c:read.channels)names.push_back(g.ds.names[c]);
+        out_spec=lvm::compute_recording_spectrum(processed_recording_source(opts.apply_processing_to_data),read,names,current_analysis_resources());
+        for(auto& c:out_spec.source_channels)c=read.channels.at(c);
+        out_channel_indices=export_spectrum_channel_indices(out_spec);out_all_channels=true;return out_spec.ok;
+    }
     out_all_channels = false;
     const bool have_current_spectrum = ensure_current_spectrum();
     if (opts.apply_processing_to_data && !opts.include_hidden_channels && have_current_spectrum) {
@@ -163,11 +175,11 @@ bool export_range_bounds_for_mode(ExportRangeMode range, double& start, double& 
     if (!has_data()) return false;
     actual_selected = false;
     if ((g.mode == AnalysisMode::FFT)) {
-        if (!ensure_current_spectrum()) return false;
+        if (!ensure_current_spectrum() && !g.overview.render_enabled) return false;
         actual_selected = (range == ExportRangeMode::Selected);
         if (range == ExportRangeMode::Whole) {
-            start = g.spec.freqs.empty() ? 0.0 : g.spec.freqs.front();
-            end = g.spec.freqs.empty() ? 0.0 : g.spec.freqs.back();
+            start = 0;
+            end = g.spec.nyquist;
         } else {
             start = g.freq_start;
             end = g.freq_end;
@@ -196,8 +208,8 @@ bool export_range_bounds_for_mode(ExportRangeMode range, double& start, double& 
             clamp_time_window(start, end);
             return end > start;
         case ExportRangeMode::Whole:
-            start = g.ds.time.empty() ? 0.0 : g.ds.time.front();
-            end = g.ds.time.empty() ? 0.0 : g.ds.time.back();
+            start = g.overview.render_enabled ? g.recording_source->bounds().start : g.ds.time.empty() ? 0.0 : g.ds.time.front();
+            end = g.overview.render_enabled ? g.recording_source->bounds().end : g.ds.time.empty() ? 0.0 : g.ds.time.back();
             return end > start;
     }
     return false;
@@ -205,6 +217,7 @@ bool export_range_bounds_for_mode(ExportRangeMode range, double& start, double& 
 
 bool write_tabular_export(std::ofstream& out, const ExportOptions& opts) {
     if (g.mode == AnalysisMode::FRF) return opts.format == ExportFileFormat::Csv && write_frf_csv(out);
+    if(g.overview.render_enabled)return prepare_source_export(opts)(out,nullptr);
     if (!has_data()) return false;
 
     const bool csv = opts.format == ExportFileFormat::Csv;
@@ -323,10 +336,12 @@ bool write_tabular_export(std::ofstream& out, const ExportOptions& opts) {
 }
 
 bool save_tabular_export(const std::wstring& path, const ExportOptions& opts) {
+    if(g.overview.render_enabled && g.mode!=AnalysisMode::FRF)return save_source_export(path,opts);
     return lvm::atomic_write_file(std::filesystem::path(path), [&](std::ofstream& out) { return write_tabular_export(out, opts); }, &g.last_error);
 }
 
 bool write_lvm_export(std::ofstream& out, const ExportOptions& opts) {
+    if(g.overview.render_enabled)return prepare_source_export(opts)(out,nullptr);
     const bool project = opts.save_mode == ExportSaveMode::Project;
     if (!has_data() || (!project && g.mode != AnalysisMode::Time)) return false;
 
@@ -422,6 +437,7 @@ bool write_lvm_export(std::ofstream& out, const ExportOptions& opts) {
 }
 
 bool save_lvm_export(const std::wstring& path, const ExportOptions& opts) {
+    if(g.overview.render_enabled)return save_source_export(path,opts);
     return lvm::atomic_write_file(std::filesystem::path(path), [&](std::ofstream& out) { return write_lvm_export(out, opts); }, &g.last_error);
 }
 
@@ -544,6 +560,7 @@ bool save_current_project() {
             : L"Проект AMSignal\0*.AMSig\0Все файлы\0*.*\0";
         std::wstring path;
         if (!save_dialog(path, filter, L"AMSig", file_stem() + L".AMSig")) return false;
+        if(g.overview.render_enabled){ExportOptions opts;opts.save_mode=ExportSaveMode::Project;return start_source_export(path,opts);}
         if (save_project_file(path)) {
             g.project_path = path;
             mark_active_document_saved();
@@ -555,6 +572,7 @@ bool save_current_project() {
         }
         return false;
     }
+    if(g.overview.render_enabled){ExportOptions opts;opts.save_mode=ExportSaveMode::Project;return start_source_export(g.project_path,opts);}
     if (save_project_file(g.project_path)) {
         mark_active_document_saved();
         status_msg((g_str == &kEn ? L"Project saved: " : L"Проект сохранён: ") + g.project_path);
@@ -591,6 +609,10 @@ void save_as_dialog() {
         ? L"AMSignal project\0*.AMSig\0All files\0*.*\0"
         : L"Проект AMSignal\0*.AMSig\0Все файлы\0*.*\0";
     if (!save_dialog(path, project ? project_filter : export_file_filter(opts.format), ext, def)) return;
+    if(g.overview.render_enabled && (project || g.mode!=AnalysisMode::FRF)) {
+        if(!start_source_export(path,opts))MessageBoxW(g.main,to_w(g.last_error).c_str(),g_str->msg_error_title,MB_ICONERROR);
+        return;
+    }
     if (save_export_file(path, opts)) {
         if (project) {
             g.project_path = path;

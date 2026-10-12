@@ -246,13 +246,8 @@ bool is_settings_hotkey_modifier_id(int id) {
 }
 
 bool is_settings_checkbox_id(int id) {
-    return id == IDW_LIGHT_MODE ||
-           id == IDC_SET_GAP_MARKERS ||
+    return id == IDC_SET_GAP_MARKERS ||
            id == IDC_SET_STITCH_GAPS;
-}
-
-bool is_welcome_checkbox_id(int id) {
-    return id == IDW_LIGHT_MODE;
 }
 
 bool uses_manual_toggle_state(HWND hwnd) {
@@ -272,7 +267,6 @@ bool uses_manual_toggle_state(HWND hwnd) {
            id == IDC_EXPORT_INCLUDE_FORMULAS ||
            id == IDC_EXPORT_INCLUDE_FILTER ||
            id == IDC_EXPORT_INCLUDE_GRAPH_SETTINGS ||
-           is_welcome_checkbox_id(id) ||
            id == IDC_SET_HOTKEY_CTRL ||
            id == IDC_SET_HOTKEY_SHIFT ||
            id == IDC_SET_HOTKEY_ALT;

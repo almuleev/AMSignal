@@ -80,11 +80,12 @@ enum {
     IDM_MODE_TIME = 1700,
     IDM_MODE_FREQ,
     IDM_MODE_FRF,
-    IDM_FRF_FULL_RECORD,
+    IDM_ANALYSIS_ENTIRE = 1704, // Preserve persisted command numbers; 1703 retired.
+    IDM_ANALYSIS_INTERVAL,
+    IDM_ANALYSIS_VISIBLE,
     IDM_RECENT_FILE_BASE = 1900,
     IDM_OPEN_DOCUMENT_BASE = 1950,
     IDM_CLOSE_DOCUMENT = 1999,
-    IDW_LIGHT_MODE = 1800,
 
     IDC_CHAN_BASE = 2000,
     IDC_CHAN_LABEL_BASE = 3000,
@@ -199,6 +200,10 @@ inline const int IDC_HOTKEYS_DIALOG_LIST = 6207;
 inline const int IDC_HOTKEYS_DIALOG_CLOSE = 6208;
 
 inline const int IDC_LOADING_CANCEL = 6209;
+inline const int IDC_SET_MEMORY_AUTO = 6211;
+inline const int IDC_SET_MEMORY_EDIT = 6212;
+inline const int IDC_SET_MEMORY_APPLY = 6213;
+inline const int IDC_SET_MEMORY_STATUS = 6214;
 
 inline constexpr UINT WM_APP_ASYNC_SCAN_DONE = WM_APP + 1;
 

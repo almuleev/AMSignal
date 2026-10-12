@@ -3,6 +3,8 @@
 #include "gui_processing.hpp"
 #include "gui_spectrum.hpp"
 #include "gui_state.hpp"
+#include "gui_overview.hpp"
+#include "disk_spectrum.hpp"
 
 namespace gui {
 
@@ -93,6 +95,7 @@ bool current_time_yrange_window(std::size_t lo, std::size_t hi, double& ymin, do
 
 // Auto-fit vertical range over the currently visible time window (with 5% pad).
 bool current_time_yrange(double& ymin, double& ymax) {
+    if(g.overview.render_enabled)return overview_time_yrange(ymin,ymax);
     if (!has_data()) return false;
     const std::vector<double>& t = g.ds.time;
     const std::size_t n = t.size();
@@ -108,9 +111,16 @@ bool current_time_yrange(double& ymin, double& ymax) {
 // Auto-fit amplitude range over the currently visible FFT window (with 5% pad).
 bool current_freq_yrange(double& ymin, double& ymax) {
     if (g.mode != AnalysisMode::FFT) return false;
-    if (!ensure_current_spectrum() || g.spec.freqs.size() < 2) return false;
+    if (!ensure_current_spectrum() || g.spec.bin_count() < 2) return false;
     ymin = 0.0;
     ymax = 0.0;
+    if(g.spec.disk) {
+        const auto range=g.spec.bin_range(g.freq_start,g.freq_end);
+        for(std::size_t j=0;j<g.spec.names.size();++j){const auto ci=g.spec_channel_indices.at(j);if(ci<0 || !g.visible[ci])continue;
+            for(const auto& point:g.spec.disk->display_points(j,range.first,range.second-range.first,1024))ymax=std::max(ymax,point.second);}
+        if(ymax<=0)ymax=1;
+        ymax*=1.05;return true;
+    }
     std::size_t klo = static_cast<std::size_t>(
         std::lower_bound(g.spec.freqs.begin(), g.spec.freqs.end(), g.freq_start) - g.spec.freqs.begin());
     std::size_t khi = static_cast<std::size_t>(
@@ -133,6 +143,8 @@ bool current_freq_yrange(double& ymin, double& ymax) {
 double visible_spectrum_ymax() {
     if (!ensure_current_spectrum()) return 0.0;
     double ymax = 0.0;
+    if(g.spec.disk){for(std::size_t j=0;j<g.spec.names.size();++j){const auto ci=g.spec_channel_indices.at(j);
+        if(ci>=0 && g.visible[ci])ymax=std::max(ymax,g.spec.disk->maxima[j]);}return ymax;}
     for (std::size_t j = 0; j < g.spec.amp.size(); ++j) {
         const int ci = (j < g.spec_channel_indices.size()) ? g.spec_channel_indices[j] : -1;
         if (ci < 0 || !g.visible[ci]) continue;

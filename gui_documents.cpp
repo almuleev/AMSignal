@@ -2,9 +2,12 @@
 #include "gui_analysis_source.hpp"
 #include "gui_dialogs.hpp"
 #include "gui_export.hpp"
+#include "gui_source_export.hpp"
+#include "disk_spectrum.hpp"
 #include "gui_frf.hpp"
 #include "gui_layout.hpp"
 #include "gui_loading.hpp"
+#include "gui_overview.hpp"
 #include "gui_menu.hpp"
 #include "gui_playback.hpp"
 #include "gui_render.hpp"
@@ -26,6 +29,9 @@ DocumentState& active_document_state() {
 }
 
 void cancel_document_workers() {
+    cancel_source_export();
+    cancel_recording_overview();
+    g.fft_selecting=false;
     stop_play();
     g_spectrum_worker.cancel();
     g_frf_worker.cancel();
@@ -138,11 +144,12 @@ void trim_document_analysis_caches(std::size_t budget) {
         }
         return total;
     };
-    std::size_t retained=0;
-    for(const auto& document:g.inactive_documents)retained+=bytes(document);
+    std::size_t retained=0;std::uint64_t disk=0;
+    for(const auto& document:g.inactive_documents){retained+=bytes(document);if(document.spec.disk)disk+=document.spec.disk->disk_bytes;}
     for(auto& document:g.inactive_documents) {
-        if(retained<=budget)break;
+        if(retained<=budget && disk<=2ULL*1024*1024*1024)break;
         retained-=bytes(document);
+        if(document.spec.disk)disk-=document.spec.disk->disk_bytes;
         document.spec={};document.spec_valid=false;document.spec_attempted=false;
         document.spec_channel_indices.clear();document.spec_visible_state.clear();
         document.frf.result={};document.frf.attempted=false;
@@ -191,6 +198,7 @@ bool close_active_document() {
     if (!has_data() || g.async_load_stage != AsyncLoadStage::None) return false;
     if (!confirm_active_document_close()) return false;
     cancel_document_workers();
+    g_frf_worker.clear_cache();
     if (!g.inactive_documents.empty()) {
         std::swap(active_document_state(), g.inactive_documents.back());
         g.inactive_documents.pop_back();

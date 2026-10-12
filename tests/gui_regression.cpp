@@ -13,6 +13,7 @@
 #include "../gui_export_metadata.hpp"
 #include "../gui_ids.hpp"
 #include "../gui_loading.hpp"
+#include "../gui_loading_drop.hpp"
 #include "../gui_documents.hpp"
 #include "../gui_main.hpp"
 #include "../gui_processing.hpp"
@@ -27,10 +28,20 @@
 #include "../gui_theme.hpp"
 #include "../gui_time_axis.hpp"
 #include "../gui_settings_window.hpp"
+#include "../gui_settings.hpp"
+#include "../gui_resources.hpp"
+#include "../gui_overview.hpp"
+#include "../gui_overview_render.hpp"
+#include "../gui_recording_cache.hpp"
+#include "../gui_recording_processing.hpp"
+#include "../gui_source_export.hpp"
+#include "../disk_spectrum.hpp"
 using namespace gui;
 #include <iostream>
 #include <stdexcept>
 #include <chrono>
+#include <iomanip>
+#include <psapi.h>
 #ifdef near
 #undef near
 #endif
@@ -48,6 +59,7 @@ const std::filesystem::path test_dir = "tests/_tmp_gui_regression";
 
 void reset_document(const std::vector<std::string>& names, const std::vector<double>& time,
                     const std::vector<std::vector<double>>& channels) {
+    cancel_recording_overview();
     g_frf_worker.cancel();
     g = App{};
     g_undo.clear(); g_redo.clear(); g_filter_slider_before.reset();
@@ -362,7 +374,7 @@ void fft_selected_gap_range() {
     require(expected.ok, "selected-range FFT oracle");
     for (bool light : {false, true}) for (bool stitched : {false, true}) {
         reset_document({"A", "B"}, time, values);
-        g.light_mode = light; g.stitch_time_gaps = stitched; g.visible = {0, 1};
+        g.stitch_time_gaps = stitched; g.visible = {static_cast<char>(light), 1};
         const double start = (time[lo - 1] + time[lo]) / 2;
         const double end = (time[hi - 1] + time[hi]) / 2;
         set_fft_window(start, end);
@@ -402,7 +414,7 @@ void stitched_gap_regressions() {
     near(stitched_time_at_index(5), 5, "graph also compresses a single missing sample");
 }
 
-void light_mode_fft_visibility() {
+void spectrum_visibility_cache() {
     std::vector<double> time(8192);
     std::vector<std::vector<double>> values(3, std::vector<double>(time.size()));
     for (std::size_t i = 0; i < time.size(); ++i) {
@@ -410,7 +422,7 @@ void light_mode_fft_visibility() {
         for (std::size_t c = 0; c < values.size(); ++c) values[c][i] = std::sin(i * (0.1 + c * 0.2));
     }
     reset_document({"A", "B", "C"}, time, values);
-    g.light_mode = true; g.visible = {1, 1, 0}; g.mode = AnalysisMode::FFT;
+    g.visible = {1, 1, 0}; g.mode = AnalysisMode::FFT;
     // A message-only window exercises the production asynchronous branch
     // without showing any UI. Earlier GUI tests used only its synchronous path.
     struct TestWindow {
@@ -657,7 +669,63 @@ void routed_window_messages() {
             "loading routing consumes cancelled results without replacing the document");
 }
 
-void light_mode_and_history() {
+void display_load_budget() {
+    constexpr std::uint64_t gib=1024ULL*1024*1024;
+    require(display_load_memory_budget(24*gib,24*gib)==2*gib,
+            "large display loads stay bounded even on a machine with ample memory");
+    require(display_load_memory_budget(4*gib,8*gib)==gib/2,
+            "display loading reserves physical memory for processing and other documents");
+    require(display_load_memory_budget(24*gib,gib)==gib/8,
+            "low available commit restricts loading despite ample physical memory");
+    require(display_load_memory_budget(0,24*gib)==1 && display_load_memory_budget(24*gib,0)==1,
+            "memory pressure never turns the display limit into an unbounded load");
+}
+
+void loading_window_ownership() {
+    reset_document({"existing"},{0,1},{{7,8}});
+    struct OwnerWindow {
+        HWND handle=CreateWindowExW(0,L"STATIC",L"Loading owner regression",WS_OVERLAPPEDWINDOW,
+                                   200,200,800,600,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+        ~OwnerWindow() { hide_loading();g.main=nullptr;if(handle)DestroyWindow(handle); }
+    } owner;
+    require(owner.handle!=nullptr,"loading regression creates a hidden top-level owner");
+    g.main=owner.handle;
+    const HWND foreground=GetForegroundWindow();
+    g.async_load_cancel_flag=std::make_shared<std::atomic<bool>>(false);
+    show_loading(L"Please wait",true);
+    require(g_loading_wnd && GetWindow(g_loading_wnd,GW_OWNER)==g.main,
+            "loading notice belongs to the AMSignal window");
+    require((GetWindowLongPtrW(g_loading_wnd,GWL_EXSTYLE)&WS_EX_TOPMOST)==0,
+            "loading notice is not globally topmost");
+    require(!IsWindowVisible(g_loading_wnd) && GetForegroundWindow()==foreground,
+            "a hidden owner does not show a notice over other applications or take focus");
+    require(!IsWindowEnabled(g.main) && g_loading_cancel_btn,
+            "loading still disables the owner and provides cancellation");
+    SendMessageW(g_loading_wnd,WM_COMMAND,MAKEWPARAM(IDC_LOADING_CANCEL,BN_CLICKED),
+                 reinterpret_cast<LPARAM>(g_loading_cancel_btn));
+    require(g.async_load_cancel_flag->load(),"loading cancel button still cancels the worker");
+    hide_loading();
+    require(!g_loading_wnd && IsWindowEnabled(g.main) && GetForegroundWindow()==foreground,
+            "closing a background loading notice re-enables its owner without taking focus");
+    g.async_load_cancel_flag.reset();
+}
+
+void bounded_load_recovery() {
+    reset_document({"existing"},{0,1},{{7,8}});
+    const auto path=test_dir/"bounded_load.txt";
+    {std::ofstream out(path);out<<"0\t1\n1\t2\n";}
+    g.cached_scan_valid=false;
+    AsyncLoadResult failed;failed.path=std::filesystem::absolute(path).wstring();
+    failed.ds.time.assign(1024,0);failed.ds.resident_limit_exceeded=true;
+    require(retry_load_as_source(failed),"bounded load recovery starts the complete source automatically");
+    require(g.async_load_stage==AsyncLoadStage::ScanningRange,"bounded load recovery scans instead of retrying an unbounded full load");
+    require(failed.ds.time.capacity()==0,"failed display arrays are freed before recovery");
+    require(g.ds.channels==std::vector<std::vector<double>>{{7,8}},"bounded load recovery preserves the current document");
+    request_async_load_cancel();if(g_load_worker.joinable())g_load_worker.join();
+    g.async_load_stage=AsyncLoadStage::None;g.async_load_cancel_flag.reset();
+}
+
+void resident_envelope_and_history() {
     reset_document({"gap"}, {0, 1, 2, 102, 103, 104}, {{0, 1, 2, 3, 4, 5}});
     g.stitch_time_gaps = true;
     invalidate_stitched_time_cache();
@@ -671,7 +739,6 @@ void light_mode_and_history() {
     for (std::size_t i = 0; i < time.size(); ++i) time[i] = i * 0.001;
     values[11] = 100;
     reset_document({"impulse"}, time, {values});
-    g.light_mode = true;
     double low = 0, high = 0;
     require(current_time_yrange_window(0, time.size(), low, high) && high >= 100, "Light Mode auto Y includes a single-sample impulse");
     g.global_formula = L"2*x"; rebuild_formula_cache_from_state(); recompute_transforms_from_state();
@@ -801,7 +868,10 @@ void frf_integration() {
     clear_fft_window();
     g.win_start=t[512]; g.win_end=t.back();
     ensure_current_frf();
-    near(lvm::frf_dynamic_coefficient(g.frf.result.common(),8),4,"FRF visible-range fallback updates both channels");
+    require(g.frf.result.ok && g.frf.result.common().sample_count==t.size(),"FRF falls back to the entire recording independently of zoom");
+    require(change_analysis_range(lvm::AnalysisRange::selected(g.win_start,g.win_end)),"a visible interval can be explicitly chosen for both analyses");
+    ensure_current_frf();
+    near(lvm::frf_dynamic_coefficient(g.frf.result.common(),8),4,"FRF explicitly chosen interval updates both channels");
     g.frf.apply_processing=true;
     g.channel_formulas[1]=L"3*x"; rebuild_formula_cache_from_state();
     on_frf_processing_changed();
@@ -1390,7 +1460,7 @@ void streamed_frf_file_and_invalidation() {
         }
         require(!g.frf.pending && g.frf.result.ok,"streaming worker result reaches the active document");
     };
-    handle_commands_message(g.main,WM_COMMAND,IDM_FRF_FULL_RECORD,0);wait();
+    handle_commands_message(g.main,WM_COMMAND,IDM_ANALYSIS_ENTIRE,0);wait();
     require(g.frf.result.common().sample_count==16384 && g.ds.rows()<16384,"entire-file FRF does not replace or expand the display fragment");
     require(!g.fft_window_active,"entire-recording FRF preserves the independent FFT selection");
     const auto generation=g.frf.generation;
@@ -1434,6 +1504,43 @@ void streamed_frf_file_and_invalidation() {
     g.noise_threshold_enabled=true;g.noise_threshold_min=10;g.noise_threshold_max=100;
     on_frf_processing_changed();wait();
     require(g.frf.result.common().sample_count==16384,"processed full-record FRF retains every original sample across the filter cadence pass");
+    lvm::FrfBatchInput filtered_input;filtered_input.time=full_samples.time;
+    std::vector<std::vector<double>> filtered_channels;
+    for(std::size_t c=0;c<2;++c) {
+        std::vector<double> values;
+        for(auto x:full_samples.channels[c])values.push_back(transform_channel_value(c,x));
+        filtered_channels.push_back(filter_signal(full_samples.time,values,
+            {g.noise_threshold_mode,g.noise_threshold_topology,g.noise_threshold_min,g.noise_threshold_max,1./1024}));
+    }
+    filtered_input.references.push_back(std::move(filtered_channels[0]));
+    filtered_input.responses.push_back(std::move(filtered_channels[1]));
+    const auto filtered_expected=lvm::analyze_frf_batch(std::move(filtered_input),g.frf.options);
+    const auto& filtered_actual=g.frf.result.common();
+    const auto scalar_equal=[](double a,double b){return a==b || (std::isnan(a) && std::isnan(b));};
+    const auto arrays_equal=[&](const auto& a,const auto& b) {
+        if(a.size()!=b.size())return false;
+        for(std::size_t i=0;i<a.size();++i)if(!scalar_equal(a[i],b[i]))return false;
+        return true;
+    };
+    bool complex_equal=filtered_actual.transfer.size()==filtered_expected.common().transfer.size();
+    if(complex_equal)for(std::size_t i=0;i<filtered_actual.transfer.size();++i) {
+        const auto a=filtered_actual.transfer[i],b=filtered_expected.common().transfer[i];
+        complex_equal &= scalar_equal(a.real(),b.real()) && scalar_equal(a.imag(),b.imag());
+    }
+    require(filtered_expected.ok && filtered_actual.ok && filtered_actual.error==filtered_expected.common().error &&
+            filtered_actual.sample_dt==filtered_expected.common().sample_dt &&
+            filtered_actual.sample_count==filtered_expected.common().sample_count &&
+            filtered_actual.source_start==filtered_expected.common().source_start && filtered_actual.source_end==filtered_expected.common().source_end &&
+            filtered_actual.segment_length==filtered_expected.common().segment_length &&
+            filtered_actual.averages==filtered_expected.common().averages && filtered_actual.overlap_samples==filtered_expected.common().overlap_samples &&
+            filtered_actual.gaps_ignored==filtered_expected.common().gaps_ignored &&
+            filtered_actual.frequencies==filtered_expected.common().frequencies &&
+            complex_equal && filtered_actual.valid==filtered_expected.common().valid &&
+            arrays_equal(filtered_actual.reference_amplitude,filtered_expected.common().reference_amplitude) &&
+            filtered_actual.reference_amplitude_valid==filtered_expected.common().reference_amplitude_valid &&
+            arrays_equal(filtered_actual.coherence,filtered_expected.common().coherence) &&
+            filtered_actual.coherence_valid==filtered_expected.common().coherence_valid,
+            "recording reader retains exact H1, coherence, masks and reference spectrum after the filter cadence pass");
     g.frf.apply_processing=false;compute_frf_from_current_source();wait();
     require(g.frf.processing_description==L"raw","raw/processed change selects a different numerical input");
     {
@@ -1454,11 +1561,682 @@ void bounded_formula_cache_selection() {
     near(selection.channels[0][0],std::sin(.5),"uncached selection preserves formula values");
 }
 
+void document_source_and_resources() {
+    const auto path=test_dir/"document_source.lvm";
+    {std::ofstream f(path);f<<"Time\tA\tB\n0\t4\t7\n1\t5\t8\n2\t6\t9\n";}
+    reset_document({"old"},{0,1},{{1,2}});
+    auto loaded=lvm::read_lvm_file(path);lvm::drop_duplicate_time_channels(loaded,loaded.raw_time);
+    require(apply_loaded_dataset(std::move(loaded),path.wstring(),false,false,0,false),"valid load publishes a document source");
+    const auto source=current_recording_source();const auto samples=g.ds.time.data();
+    require(source==g.recording_source && source==current_recording_source(),"repeated jobs share the document descriptor without copying samples");
+    const auto occupied=document_data_memory_bytes();
+    require(occupied>=g.ds.time.capacity()*sizeof(double)+g.ds.raw_time.capacity()*sizeof(double),"resource account includes actual time capacities");
+    DocumentState other;other.ds.ok=true;other.ds.time={0,1};other.ds.channels={{2,3}};other.file_name=L"other";
+    g.inactive_documents.push_back(std::move(other));
+    require(document_data_memory_bytes()>occupied,"resource account includes inactive documents");
+    require(switch_to_document(g.inactive_documents.size()) && switch_to_document(g.inactive_documents.size()),"document source survives a document round trip");
+    require(g.recording_source==source && g.ds.time.data()==samples,"document switching moves source and samples without duplication");
+    const auto before=g.numerical_revision;const auto count=open_document_count();
+    const auto old_stamp=*source->stamp();
+    {std::ofstream f(path,std::ios::app);f<<"# changed\n";}
+    auto replacement=lvm::read_lvm_file(path);lvm::drop_duplicate_time_channels(replacement,replacement.raw_time);
+    require(!apply_loaded_dataset(std::move(replacement),path.wstring(),false,false,0,false,old_stamp) &&
+        g.ds.time.data()==samples && open_document_count()==count,"stale publication rejects before replacing the active document");
+    bool stale=false;try{current_recording_source();}catch(const lvm::RecordingFailure& e){stale=e.error==lvm::RecordingError::SourceChanged;}
+    require(stale,"shared source detects changed files after document switching");
+    require(set_resource_policy(false,1024) && g.numerical_revision==before,"manual resource policy does not invalidate numerical input");
+    save_runtime_settings_now();g.resource_policy={true,2048};load_runtime_settings();
+    require(!g.resource_policy.automatic && g.resource_policy.manual_mib==1024,"manual memory limit persists in INI");
+    WritePrivateProfileStringW(L"ui",L"light_mode",L"1",g_config_path.c_str());load_runtime_settings();
+    save_runtime_settings_now();
+    require(read_ini_int(L"ui",L"light_mode",-1)==-1 && !g.resource_policy.automatic,"legacy Light Mode preference is retired without losing the data budget");
+    require(!set_resource_policy(false,0) && g.resource_policy.manual_mib==1024,"invalid manual limit cannot enable unlimited loading");
+    require(set_resource_policy(true,1024),"user can return to Auto without losing their manual value");
+    save_runtime_settings_now();
+    WritePrivateProfileStringW(L"resources",L"manual_mib",L"-1",g_config_path.c_str());load_runtime_settings();
+    require(g.resource_policy.automatic && g.resource_policy.manual_mib==2048,"invalid saved memory policy falls back to Auto");
+    // A request retains a descriptor after the document itself is closed.
+    auto independent=lvm::RecordingSource::from_file(path,{0,2},{1,2});
+    g.recording_source=independent;std::weak_ptr<const lvm::RecordingSource> weak=independent;
+    close_active_document();
+    lvm::RecordingReadRequest request;request.channels={0};std::size_t rows=0;
+    independent->replay(request,[&](const auto& t,const auto&){rows+=t.size();});
+    require(rows==3 && !weak.expired(),"closing a document leaves an owned background source readable");
+    independent.reset();require(weak.expired(),"source is released after both document and task owners finish");
+}
+
+void background_document_overview() {
+    const auto path=test_dir/"overview-document.txt",cache=test_dir/"overview-document.bin";
+    {std::ofstream out(path);out<<"Time\tA\tB\n";
+     for(int i=0;i<12000;++i)out<<i<<'\t'<<i%17<<'\t'<<i%23<<'\n';}
+    reset_document({"A","B"},{0,1,2},{{4,5,6},{7,8,9}});
+    g.recording_source=lvm::RecordingSource::from_file(path,{0,11999},{1,2});
+    const auto source=g.recording_source;const auto samples=g.ds.time.data();const auto revision=g.numerical_revision;
+    const auto budget=refresh_load_memory_budget();const auto baseline=budget->reserved();
+    const auto wait=[&] {
+        const auto start=std::chrono::steady_clock::now();
+        while(g.overview.pending && std::chrono::steady_clock::now()-start<std::chrono::seconds(10)) {
+            poll_recording_overview();Sleep(1);
+        }
+    };
+    require(request_recording_overview(cache,lvm::AnalysisRange::entire(),{1,0},4),"GUI starts a background overview independently of its small Dataset");wait();
+    require(!g.overview.pending && !g.overview.error && g.overview.view && g.overview.view->sample_count==12000,
+            "complete source overview is published in the owning document");
+    require(g.overview.channels==std::vector<std::size_t>({1,0}) && g.overview.index->source()==source,
+            "overview publication preserves logical channel mapping and source identity");
+    require(g.ds.time.data()==samples && g.ds.rows()==3 && g.numerical_revision==revision,
+            "overview never substitutes aggregate values for Dataset or changes numerical revision");
+    const auto view=g.overview.view;const auto index=g.overview.index;
+    require(budget->reserved()>baseline,"published GUI overview retains its own admission without double-counting document arrays");
+    DocumentState other;other.ds.ok=true;other.ds.time={0,1};other.ds.channels={{1,2}};
+    g.inactive_documents.push_back(std::move(other));
+    require(request_recording_overview(cache,lvm::AnalysisRange::selected(100,110),{0},500) && switch_to_document(1),
+            "switching a document cancels its pending background view");
+    Sleep(20);require(!poll_recording_overview() && !g.overview.view,"cancelled result cannot replace the other document's view");
+    require(switch_to_document(1) && !g.overview.pending && g.overview.view==view && g.overview.index==index,
+            "returning restores the completed immutable overview without copying buckets");
+    require(request_recording_overview(cache,lvm::AnalysisRange::selected(200,210),{0},500),"indexed GUI zoom can be requested again");wait();
+    require(!g.overview.error && g.overview.view->sample_count==11 && g.overview.view->buckets.front().channels[0].first.value==200%17,
+            "background zoom returns original samples outside the loaded Dataset");
+    require(request_recording_overview(cache,lvm::AnalysisRange::selected(300,310),{1},500),"GUI can queue a subsequent viewport");
+    const auto started=std::chrono::steady_clock::now();
+    while(g_overview_worker.progress().phase!=lvm::OverviewWorker::Phase::Idle &&
+          std::chrono::steady_clock::now()-started<std::chrono::seconds(10))Sleep(1);
+    {std::ofstream out(path,std::ios::app);out<<"# changed after worker finished\n";}
+    require(poll_recording_overview() && g.overview.error==lvm::RecordingError::SourceChanged && !g.overview.view && !g.overview.index,
+            "GUI revalidates source at publication even when the file changes after completion");
+    require(g.ds.time.data()==samples && g.numerical_revision==revision,"failed overview leaves resident samples and numerical input untouched");
+    cancel_recording_overview();g.inactive_documents.clear();
+    require(close_active_document() && !g.overview.pending && !g.overview.view,"closing the last document discards its overview state");
+}
+
+void overview_renderer() {
+    const auto path=test_dir/"renderer.txt",cache=test_dir/"renderer.bin";
+    {std::ofstream out(path);out<<"Time\tA\tB\n"<<std::setprecision(17);
+     for(int i=0;i<20001;++i) {
+         const double t=i*.001+(i>=9000 ? .5 : 0);
+         out<<t<<'\t';if(i==6666)out<<"nan";else out<<(i==0 ? -0.0 : (i==4444 ? 100.0 : std::sin(i*.01)));
+         out<<'\t'<<(i==12000 ? -7.0 : std::cos(i*.02))<<'\n';
+     }}
+    double start=0,end=0;std::string error;auto scan=std::make_shared<lvm::ScanIndex>();
+    require(lvm::scan_time_bounds(path,start,end,error,nullptr,scan.get()),"overview renderer fixture scans");
+    auto source=lvm::RecordingSource::from_file(path,{start,end},{1,2},scan);
+    std::vector<double> time;std::vector<std::vector<double>> values(2);lvm::RecordingReadRequest raw;raw.channels={0,1};
+    source->replay(raw,[&](const auto& t,const auto& v){time.insert(time.end(),t.begin(),t.end());
+        for(int c=0;c<2;++c)values[c].insert(values[c].end(),v[c].begin(),v[c].end());});
+    reset_document({"A","B"},{0,.001,.002},{{1000,1000,1000},{2000,2000,2000}});
+    g.channel_colors={RGB(43,124,202),RGB(231,96,51)};
+    g.main=CreateWindowExW(0,L"STATIC",L"Overview rendering regression",WS_OVERLAPPEDWINDOW,
+                          0,0,1100,700,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(g.main!=nullptr,"overview PNG uses a hidden window with defined client bounds");
+    g.recording_source=source;g.source_scan_index=scan;
+    g.data_t0=g.win_start=start;g.data_t1=g.win_end=end;
+    g.cached_global_gap_step=.001;g.cached_global_gap_step_ready=true;g.show_channel_legend=false;
+    const auto resident=g.ds.time.data();const auto revision=g.numerical_revision;
+    const auto wait=[&] {
+        const auto started=std::chrono::steady_clock::now();
+        while(g.overview.pending && std::chrono::steady_clock::now()-started<std::chrono::seconds(10)) {
+            poll_recording_overview();Sleep(1);
+        }
+    };
+    require(request_recording_overview(cache,lvm::AnalysisRange::entire(),{0,1},880,true),"display density is requested separately from the numerical source");wait();
+    g.overview.render_enabled=true;
+    require(!g.overview.error && overview_view_matches_viewport() && g.overview.view->sample_count==20001 &&
+            g.overview.view->buckets.size()<=1762,"ready projection covers all original samples with bounded buckets");
+    double low=0,high=0;
+    require(current_time_yrange(low,high) && low< -7 && high>100 && high<110,
+            "overview auto-Y uses original extrema outside the resident Dataset");
+    bool exact=true,bridges=false;int count=0,breaks=0;
+    for(std::size_t c=0;c<2;++c) {
+        std::size_t previous=0;bool first=true;
+        visit_overview_curve(c,.064,[&](OverviewCurvePoint point) {
+            const auto at=std::lower_bound(time.begin(),time.end(),point.time);
+            if(at==time.end() || *at!=point.time){exact=false;return;}
+            const auto i=static_cast<std::size_t>(at-time.begin());exact=exact && point.value==values[c][i] &&
+                (point.value!=0 || std::signbit(point.value)==std::signbit(values[c][i]));
+            if(!point.connect)++breaks;
+            else if(first || i<=previous)bridges=true;
+            else for(auto k=previous+1;k<=i;++k)
+                bridges=bridges || time[k]-time[k-1]>.064 || !std::isfinite(values[c][k]);
+            previous=i;first=false;++count;
+        });
+    }
+    require(exact && count>0 && breaks>=4 && !bridges,"overview strokes keep exact original coordinates and never bridge NaN/timing gaps");
+    HDC dc=CreateCompatibleDC(nullptr);BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth=1000;info.bmiHeader.biHeight=-600;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
+    info.bmiHeader.biCompression=BI_RGB;void* pixels=nullptr;
+    HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&pixels,nullptr,0);const auto old=SelectObject(dc,bitmap);
+    require(bitmap && pixels,"overview renderer has a real GDI surface");
+    const RECT plot{60,40,940,520};const Theme* saved_theme=g_theme;
+    for(const auto* theme:{&kLightTheme,&kDarkTheme}) {
+        g_theme=theme;const RECT all{0,0,1000,600};HBRUSH background=CreateSolidBrush(theme->bg_plot);
+        FillRect(dc,&all,background);DeleteObject(background);draw_chart(dc,plot);GdiFlush();
+        require(g.vvalid && g.vx0==start && g.vx1==end && g.vy1>100,"both themes render full overview with correct axes");
+        const auto generation=g.overview.generation;g.axis_x_label=L"Entire recording";g.channel_colors[0]=RGB(43,124,202);
+        draw_chart(dc,plot);require(g.overview.generation==generation,"presentation changes do not reread numerical input or overview");
+    }
+    ULONG_PTR token=0;Gdiplus::GdiplusStartupInput startup;
+    require(Gdiplus::GdiplusStartup(&token,&startup,nullptr)==Gdiplus::Ok,"overview PNG startup");
+    g_theme=&kLightTheme;require(save_png((test_dir/"overview_light.png").wstring()),"overview uses the existing light PNG renderer");
+    g_theme=&kDarkTheme;require(save_png((test_dir/"overview_dark.png").wstring()),"overview uses the existing dark PNG renderer");
+    Gdiplus::GdiplusShutdown(token);wait();
+    require(g.numerical_revision==revision && g.ds.time.data()==resident,
+            "rendering, PNG and viewport jobs leave numerical revision and source arrays unchanged");
+    g.channel_formulas[0]=L"-2*x+3";rebuild_formula_cache_from_state();
+    require(overview_time_yrange(low,high) && low< -197 && high>5 && high<20,
+            "negative affine coefficient reverses extrema correctly without recalculating the raw index");
+    bool affine=true;
+    visit_overview_curve(0,.064,[&](OverviewCurvePoint p){const auto at=std::lower_bound(time.begin(),time.end(),p.time);
+        affine=affine && at!=time.end() && p.value==values[0][at-time.begin()]*(-2)+3;});
+    require(affine,"affine curve values preserve the channel formula arithmetic");
+    g.channel_formulas[0]=L"1e308*x";rebuild_formula_cache_from_state();draw_chart(dc,plot);
+    require(!g.vvalid && !overview_time_yrange(low,high),"affine overflow cannot become an invalid GDI coordinate or a substituted raw curve");
+    g.channel_formulas[0]=L"x";rebuild_formula_cache_from_state();
+    g.win_start=time[7000];g.win_end=time[7030];
+    require(synchronize_overview_viewport(880),"navigation queues a projection of the new viewport");
+    require(!overview_view_matches_viewport(),"the old projection cannot impersonate a different viewport");wait();
+    require(g.overview.view->sample_count==31 && std::all_of(g.overview.view->buckets.begin(),g.overview.view->buckets.end(),
+            [](const auto& b){return b.sample_count==1;}),"deep zoom shows original samples");
+    g.visual_smooth=true;draw_chart(dc,plot);
+    require(g.vvalid && g.vx0==time[7000] && g.vx1==time[7030],"original-sample smoothing keeps the requested time axis");
+    require(!synchronize_overview_viewport(880),"a repeated paint of the same view does not submit another job");
+    const auto navigation_revision=g.numerical_revision;
+    g.resource_policy={false,64};
+    require(synchronize_overview_viewport(880),"changing the resource policy retries the projection with a fresh admission");wait();
+    require(!g.overview.error && g.numerical_revision==navigation_revision && g.overview.view->sample_count==31,
+            "memory policy changes preserve the exact viewport and numerical input revision");
+    double x=time[7005],y=.5;int channel=-1;
+    require(!snap_to_nearest_target(x,y,&channel) && x==time[7005] && y==.5,
+            "internal overview preview cannot snap to the unrelated resident Dataset");
+    const auto wait_snap=[&] {
+        const auto started=std::chrono::steady_clock::now();
+        while(g.overview.snap_pending && std::chrono::steady_clock::now()-started<std::chrono::seconds(10)) {
+            poll_overview_snap();Sleep(1);
+        }
+        require(!g.overview.snap_pending,"original Snap finishes without blocking the GUI thread");
+    };
+    int accepted=0;lvm::RecordingSnapResult picked;
+    const auto accept=[&](const auto& p){++accepted;picked=p;};
+    require(request_overview_snap(x,y,accept),"overview Snap submits original-source I/O separately from the resident Dataset");
+    require(accepted==0,"original measurement is deferred until the UI polls a complete result");wait_snap();
+    require(accepted==1 && picked.found && picked.time>=g.win_start && picked.time<=g.win_end &&
+            picked.value==values[picked.channel][picked.sample] && std::abs(picked.value)<2 && !g.overview.snap_error,
+            "published Snap is an original channel value outside the resident fragment");
+    const auto saved_start=g.win_start;
+    require(request_overview_snap(x,y,accept),"viewport invalidation fixture starts a Snap");g.win_start+=.001;wait_snap();g.win_start=saved_start;
+    require(accepted==1,"changed viewport discards the completed original point");
+    require(request_overview_snap(x,y,accept),"numerical revision invalidation fixture starts a Snap");++g.numerical_revision;wait_snap();
+    require(accepted==1,"changed numerical input discards Snap without publishing an old formula value");
+    require(request_overview_snap(x,y,accept),"visibility invalidation fixture starts a Snap");g.visible[1]=0;wait_snap();g.visible[1]=1;
+    require(accepted==1,"new visible channel set invalidates the nearest-point result");
+    require(request_overview_snap(x,y,accept),"annotation lock fixture starts a Snap");g.annotations_locked=true;wait_snap();g.annotations_locked=false;
+    require(accepted==1,"locking annotations discards an in-flight placement");
+    require(request_overview_snap(x,y,accept),"document identity invalidation fixture starts a Snap");
+    g.recording_source=lvm::RecordingSource::from_file(path,{start,end},{1,2},scan);wait_snap();g.recording_source=source;
+    require(accepted==1,"a different document source cannot receive the previous Snap result");
+    g.inactive_documents.emplace_back();auto& other=g.inactive_documents.back();
+    other.ds.ok=true;other.ds.names={"Other"};other.ds.time={0,1};other.ds.channels={{9,10}};
+    other.visible={1};other.channel_labels={L"Other"};other.channel_formulas={L"x"};other.data_t0=other.win_start=0;other.data_t1=other.win_end=1;
+    require(request_overview_snap(x,y,accept),"real document switch fixture starts a Snap");
+    require(switch_to_document(1),"real document switch cancels original-source I/O");Sleep(10);poll_overview_snap();
+    require(accepted==1 && !g.overview.snap_pending,"the new active document receives no pending measurement from the previous one");
+    require(switch_to_document(1),"the preview document can be restored after Snap cancellation");g.inactive_documents.clear();draw_chart(dc,plot);
+    require(g.recording_source==source && g.ds.time.data()==resident && !g.overview.snap_pending,
+            "restored document keeps the source/view without reviving its cancelled Snap");
+    require(request_overview_snap(x,y,accept),"cancel fixture starts a Snap");cancel_overview_snap();Sleep(10);poll_overview_snap();
+    require(accepted==1 && !g.overview.snap_pending,"explicit cancellation never changes a measurement");
+    require(request_overview_snap(x,y,accept),"replacement fixture starts an old Snap");
+    require(request_overview_snap(time[7025],-.1,accept),"replacement fixture starts the latest Snap");wait_snap();
+    require(accepted==2 && picked.sample>=7000 && picked.sample<=7030,"only the replacement Snap can invoke its publication callback");
+    g.markers.clear();g.guides.clear();g.point_groups.clear();g_undo.clear();g_redo.clear();
+    const auto click=[&](int px,int py) {
+        g.point_click_pending=true;g.point_click_x=px;g.point_click_y=py;
+        handle_input_message(g.main,WM_LBUTTONUP,0,MAKELPARAM(px,py));
+    };
+    const int px=plot.left+(plot.right-plot.left)/3,py=plot.top+(plot.bottom-plot.top)/2;
+    const auto input_revision=g.numerical_revision;
+    g.measure_mode=false;g.pending_line=0;g.pending_marker=true;click(px,py);
+    require(g.markers.empty() && g_undo.empty() && g.overview.snap_pending,"marker click creates neither a free-coordinate fallback nor an early undo");wait_snap();
+    require(g.markers.size()==1 && g.markers[0].snapped && g.markers[0].channel>=0 &&
+            std::abs(g.markers[0].y)<2 && g_undo.size()==1,"marker placement commits the original channel and exactly one undo action");
+    const auto marker=g.markers[0];pop_undo();require(g.markers.empty(),"Undo removes asynchronous marker placement");
+    pop_redo();require(g.markers.size()==1 && g.markers[0].x==marker.x && g.markers[0].y==marker.y,"Redo restores the exact snapped marker");
+    g.pending_marker=false;g.measure_mode=true;click(px,py);wait_snap();
+    require(g.point_groups.size()==1 && g.point_groups[0].points.size()==1 &&
+            g.point_groups[0].points[0]==std::make_pair(marker.x,marker.y),"measurement point uses the same original Snap as the marker");
+    g.measure_mode=false;g.pending_line=1;click(px,py);wait_snap();
+    require(g.guides.size()==1 && g.guides.back().vertical && g.guides.back().value==marker.x,"vertical line snaps to the original time");
+    g.pending_line=2;click(px,py);wait_snap();
+    require(g.guides.size()==2 && !g.guides.back().vertical && g.guides.back().value==marker.y,"horizontal line snaps to the original amplitude");
+    g.pending_line=0;const auto actions=g_undo.size();
+    g.annotation_drag_kind=App::AnnotationDragKind::Marker;g.annotation_drag_index=0;g.annotation_drag_marker_before=marker;
+    update_annotation_drag(plot.right-8,py);finish_annotation_drag(true);
+    require(g.markers[0].x==marker.x && g.markers[0].y==marker.y && g_undo.size()==actions,
+            "released marker drag waits for the original point without transient unsnapped coordinates");wait_snap();
+    require(g.markers[0].snapped && g.markers[0].x!=marker.x && g_undo.size()==actions+1,
+            "asynchronous marker move creates exactly one undo action");
+    pop_undo();require(g.markers[0].x==marker.x && g.markers[0].y==marker.y,"Undo restores the marker before the original-source drag");
+    g.annotation_drag_kind=App::AnnotationDragKind::Point;g.annotation_drag_index=0;g.annotation_drag_point_index=0;
+    g.annotation_drag_point_before=g.point_groups[0].points[0];const auto point_before=g.annotation_drag_point_before;
+    update_annotation_drag(plot.right-8,py);finish_annotation_drag(true);wait_snap();
+    require(g.point_groups[0].points[0]!=point_before && g_undo.back().type==UndoAction::MOVE_POINT,"original-source point drag uses the shared undo path");
+    pop_undo();require(g.point_groups[0].points[0]==point_before,"Undo restores the original measurement point");
+    g.annotation_drag_kind=App::AnnotationDragKind::Guide;g.annotation_drag_index=0;g.annotation_drag_guide_before=g.guides[0];
+    update_annotation_drag(plot.right-8,py);finish_annotation_drag(true);wait_snap();
+    require(g.guides[0].value!=marker.x && g_undo.back().type==UndoAction::MOVE_LINE,"original-source line drag stores the original sample time");
+    pop_undo();require(g.guides[0].value==marker.x,"Undo restores the guide after original-source drag");
+    g.pending_marker=true;click(px+80,py);handle_input_message(g.main,WM_KEYDOWN,VK_ESCAPE,0);Sleep(10);poll_overview_snap();
+    require(g.markers.size()==1 && !g.overview.snap_pending,"Escape cancels a pending native marker click");
+    g.pending_marker=false;
+    require(g.numerical_revision==input_revision && g.ds.time.data()==resident,"asynchronous annotation I/O preserves numerical input and resident arrays");
+    g.channel_formulas[0]=L"-2*x+3";rebuild_formula_cache_from_state();draw_chart(dc,plot);
+    require(request_overview_snap(x,3,accept),"affine original-source Snap starts with the displayed amplitude metric");wait_snap();
+    require(accepted==3 && picked.value==(picked.channel==0 ? values[0][picked.sample]*(-2)+3 : values[1][picked.sample]),
+            "original-source Snap applies the same negative affine arithmetic as the displayed curve");
+    g.channel_formulas[0]=L"x";rebuild_formula_cache_from_state();draw_chart(dc,plot);
+    g.visible[1]=0;require(synchronize_overview_viewport(880),"visibility changes request only the visible channel projection");wait();
+    require(g.overview.channels==std::vector<std::size_t>{0},"hidden channels are excluded from projected storage");
+    g.show_channel_legend=true;draw_chart(dc,plot);
+    require(g_legend_items.size()==2,"ready overview rebuilds the common clickable channel legend");
+    g.noise_threshold_enabled=true;draw_chart(dc,plot);
+    require(!g.vvalid && overview_processing_supported() && g_legend_items.empty() && IsRectEmpty(&g_legend_box),
+            "filter requests a processed source and clears stale raw legend regions while pending");
+    wait();draw_chart(dc,plot);
+    require(g.vvalid && !g.overview.source->processing_identity().empty(),"filtered overview publishes its own processed index");
+    g.noise_threshold_enabled=false;g.channel_formulas[0]=L"x*x";rebuild_formula_cache_from_state();draw_chart(dc,plot);
+    require(!g.vvalid && overview_processing_supported(),"nonlinear formula requests original-sample processing rather than transforming raw extrema");
+    wait();draw_chart(dc,plot);bool squared=true;
+    visit_overview_curve(0,.064,[&](auto point){const auto at=std::lower_bound(time.begin(),time.end(),point.time)-time.begin();
+        squared=squared && at<static_cast<std::ptrdiff_t>(time.size()) && point.value==values[0][at]*values[0][at];});
+    require(g.vvalid && squared,"nonlinear overview extrema and original close-up match squared source samples");
+    require(request_overview_snap(x,y,accept),"nonlinear overview Snap reads the processed source");wait_snap();
+    require(accepted==4 && picked.channel==0 && picked.value==values[0][picked.sample]*values[0][picked.sample],"nonlinear Snap publishes an exact transformed original sample");
+    g.channel_formulas[0]=L"x";rebuild_formula_cache_from_state();g.stitch_time_gaps=true;
+    require(!overview_processing_supported(),"stitched full-source display waits for a full-source gap mapping");
+    require(g.ds.time.data()==resident && g.ds.rows()==3 && g.recording_source==source && g.numerical_revision>revision,
+            "resident samples survive rendering while formula changes invalidate the numerical input");
+    g.stitch_time_gaps=false;draw_chart(dc,plot);wait();draw_chart(dc,plot);
+    require(request_overview_snap(x,y,accept),"file mutation fixture starts an original-source Snap");
+    {std::ofstream changed(path,std::ios::app);changed<<"# source modified after request\n";}
+    wait_snap();
+    require(accepted==4 && g.overview.snap_error==lvm::RecordingError::SourceChanged && !g.overview.view &&
+            !g.overview.index && !g.vvalid,"changed file cannot publish an original point or retain the obsolete overview");
+    g_theme=saved_theme;SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);
+    cancel_recording_overview();g.overview={};DestroyWindow(g.main);g.main=nullptr;
+}
+
+void resource_settings_and_load_ownership() {
+    reset_document({"existing"},{0,1},{{2,3}});
+    const auto inst=GetModuleHandleW(nullptr);
+    WNDCLASSW cls{};cls.lpfnWndProc=SettingsProc;cls.hInstance=inst;cls.lpszClassName=L"ResourceSettingsRegression";
+    RegisterClassW(&cls);
+    for(const auto* language:{&kEn,&kRu}) {
+        g_str=language;
+        g.settings_wnd=CreateWindowExW(WS_EX_TOOLWINDOW,cls.lpszClassName,L"",WS_POPUP,0,0,540,568,nullptr,nullptr,inst,nullptr);
+        require(g.settings_wnd!=nullptr,"resource settings can be created in both languages without visible windows");
+        require(!GetDlgItem(g.settings_wnd,1800),"obsolete Light Mode control is absent in both languages");
+        refresh_settings_controls();
+        require(!IsWindowEnabled(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_EDIT)),"Auto disables manual input");
+        SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_MEMORY_AUTO,BN_CLICKED),0);
+        require(IsWindowEnabled(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_EDIT)) && !g.resource_policy.automatic,"manual budget is available from settings");
+        SetDlgItemTextW(g.settings_wnd,IDC_SET_MEMORY_EDIT,L"1536");
+        SendDlgItemMessageW(g.settings_wnd,IDC_SET_MEMORY_EDIT,WM_KEYDOWN,VK_RETURN,0);
+        require(g.resource_policy.manual_mib==1536,"Enter applies the manual memory limit");
+        RECT memory_rect{},axis_rect{},hotkeys_rect{};
+        GetWindowRect(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_EDIT),&memory_rect);
+        GetWindowRect(GetDlgItem(g.settings_wnd,IDC_SET_FRF_AXIS_Y_EDIT),&axis_rect);
+        GetWindowRect(GetDlgItem(g.settings_wnd,IDC_SET_GROUP_HOTKEYS),&hotkeys_rect);
+        require(memory_rect.top>axis_rect.bottom && memory_rect.bottom<hotkeys_rect.top,"memory controls do not overlap axes or hotkeys");
+        SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_MEMORY_AUTO,BN_CLICKED),0);
+        require(g.resource_policy.automatic && g.resource_policy.manual_mib==1536,"Auto restores automatic admission and retains manual preference");
+        DestroyWindow(g.settings_wnd);
+    }
+    g_str=&kEn;
+    const auto path=test_dir/"reserved_load.lvm";
+    {std::ofstream f(path);f<<"Time\tA\n0\t4\n1\t5\n2\t6\n";}
+    g.main=CreateWindowExW(0,L"STATIC",L"Reserved load",WS_POPUP,0,0,640,480,nullptr,nullptr,inst,nullptr);
+    auto budget=refresh_load_memory_budget();
+    require(start_async_load_task(path.wstring()) && budget->reserved()>0,"loader owns its admission reservation");
+    request_async_load_cancel();g_load_worker.join();
+    require(budget->reserved()>0,"finished cancelled worker retains reservation while its result is queued");
+    MSG result{};
+    require(PeekMessageW(&result,g.main,WM_APP_ASYNC_LOAD_DONE,WM_APP_ASYNC_LOAD_DONE,PM_REMOVE)!=FALSE,"cancelled load posts a result");
+    handle_loading_message(g.main,result.message,result.wParam,result.lParam);
+    require(budget->reserved()==0 && g.ds.channels[0][0]==2,"cancelled load releases memory after discarding samples and preserves current document");
+    require(start_async_load_task(path.wstring()),"new request is accepted after cancellation");
+    g_load_worker.join();
+    require(PeekMessageW(&result,g.main,WM_APP_ASYNC_LOAD_DONE,WM_APP_ASYNC_LOAD_DONE,PM_REMOVE)!=FALSE,"successful load posts its result");
+    handle_loading_message(g.main,result.message,result.wParam,result.lParam);
+    require(budget->reserved()==0 && g.ds.rows()==3 && g.recording_source && g.ds.channels[0][0]==4,
+        "successful publication transfers source and data before releasing reservation");
+    auto stale=std::make_unique<AsyncLoadResult>();stale->token=g.async_load_token-1;
+    refresh_load_memory_budget();stale->memory_reservation=budget->reserve(1024);stale->ds.time.assign(128,0);
+    handle_loading_message(g.main,WM_APP_ASYNC_LOAD_DONE,0,reinterpret_cast<LPARAM>(stale.release()));
+    require(budget->reserved()==0 && g.ds.rows()==3,"stale load result frees its owned buffers without replacing document");
+    DestroyWindow(g.main);g.main=nullptr;
+}
+
+void analysis_admission_and_publication() {
+    std::vector<double> time(4096),x(4096),y(4096);
+    for(std::size_t i=0;i<time.size();++i){time[i]=i/1024.0;x[i]=std::sin(.03125*i);y[i]=2*x[i];}
+    reset_document({"x","y"},time,{x,y});g_frf_worker.clear_cache();
+    g.main=CreateWindowExW(0,L"STATIC",L"Analysis budget",WS_POPUP,0,0,640,480,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    const auto revision=g.numerical_revision;set_resource_policy(false,64);
+    g.ds.time.reserve(9000000); // Account capacity, even when the selected range is short.
+    compute_spectrum_for_window(0,3.999,true);
+    require(!g.spec_pending && !g.spec_valid && g.spec.error.find("resources")!=std::string::npos && g.ds.rows()==4096,
+        "FFT refuses snapshot admission before allocation when resident capacities exhaust the manual budget");
+    g.frf.inputs={0};g.frf.outputs={1};g.frf.options.segment_length=1000;
+    compute_frf_from_current_source();
+    require(!g.frf.pending && g.frf.result.error==lvm::FrfError::ResourceLimit && g.frf.options.segment_length==1000,
+        "FRF input admission returns ResourceLimit without changing the configured segment length");
+    std::vector<double>(g.ds.time).swap(g.ds.time);set_resource_policy(false,256);
+    auto budget=refresh_load_memory_budget();
+    compute_spectrum_for_window(0,3.999,true);
+    std::optional<lvm::SpectrumWorker::Result> fft;const auto started=std::chrono::steady_clock::now();
+    while(!(fft=g_spectrum_worker.take_result()) && std::chrono::steady_clock::now()-started<std::chrono::seconds(5))Sleep(1);
+    require(fft && fft->spectrum.ok && fft->spectrum.memory_reservation,"a retry after restoring memory publishes an accounted FFT result");
+    if(fft)apply_spectrum_result(std::move(fft->spectrum));
+    fft.reset();
+    require(g.spec_valid && !g.spec.memory_reservation && g.numerical_revision==revision,
+        "FFT publication transfers accounting to document capacities without changing numerical input");
+    compute_frf_from_current_source();const auto frf_started=std::chrono::steady_clock::now();
+    while(g.frf.pending && std::chrono::steady_clock::now()-frf_started<std::chrono::seconds(5)){poll_frf_result();Sleep(1);}
+    require(g.frf.result.ok && !g.frf.result.memory_reservation && g.frf.result.common().segment_length==1000,
+        "FRF retry publishes unchanged L and transfers result ownership to the document");
+    const auto retained=budget->reserved();
+    require(retained>0 && retained<2*1024*1024,"the GUI worker cache is included in the shared ledger after publication");
+    require(close_active_document(),"closing the document discards its idle worker input cache");
+    const auto cleared=std::chrono::steady_clock::now();
+    while(budget->reserved()!=0 && std::chrono::steady_clock::now()-cleared<std::chrono::seconds(5))Sleep(1);
+    require(budget->reserved()==0,"discarding the last GUI prepared input releases the remaining reservation");
+    DestroyWindow(g.main);g.main=nullptr;
+}
+
+void persistent_recording_cache() {
+    reset_document({"existing"},{0,1},{{2,3}});
+    const auto root=std::filesystem::absolute(test_dir/"managed_cache");
+    std::filesystem::remove_all(root);configure_recording_disk_cache(root,1024ULL*1024*1024);
+    const auto path=std::filesystem::absolute(test_dir/"cached_scan.lvm");
+    {std::ofstream out(path);out<<"Time\tA\n";for(int i=0;i<10000;++i)out<<i<<'\t'<<i%17<<'\n';}
+    g.main=CreateWindowExW(0,L"STATIC",L"Cached scan",WS_POPUP,0,0,640,480,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    const auto revision=g.numerical_revision;auto budget=refresh_load_memory_budget();
+    const auto take_scan=[&] {
+        g_load_worker.join();MSG message{};
+        require(PeekMessageW(&message,g.main,WM_APP_ASYNC_SCAN_DONE,WM_APP_ASYNC_SCAN_DONE,PM_REMOVE)!=FALSE,"background scan posts a cache-aware result");
+        hide_loading();g.async_load_stage=AsyncLoadStage::None;g.async_load_cancel_flag.reset();
+        return std::unique_ptr<AsyncScanResult>(reinterpret_cast<AsyncScanResult*>(message.lParam));
+    };
+    require(start_async_scan_task(path.wstring()),"new asynchronous scan starts under the document memory budget");auto fresh=take_scan();
+    require(fresh && fresh->ok && !fresh->index_from_disk_cache && fresh->index && fresh->index->memory_reservation,"first GUI scan persists an admitted index");
+    require(start_async_scan_task(path.wstring()),"repeat GUI scan starts");auto hit=take_scan();
+    require(hit && hit->ok && hit->index_from_disk_cache && hit->range_start==fresh->range_start && hit->range_end==fresh->range_end &&
+        hit->index->checkpoints.back().offset==fresh->index->checkpoints.back().offset,"repeat GUI scan restores parser state and bounds from disk");
+    const auto baseline=document_data_memory_bytes();g.source_scan_index=hit->index;
+    require(document_data_memory_bytes()==baseline && budget->reserved()==fresh->index->memory_bytes()+hit->index->memory_bytes(),"admitted ScanIndex is counted through its reservation without duplicating resident accounting");
+    g.recording_source=lvm::RecordingSource::from_file(path,{hit->range_start,hit->range_end},{1},hit->index);
+    fresh.reset();hit.reset();require(budget->reserved()==g.source_scan_index->memory_bytes(),"GUI document and source retain one shared admission after queued scan results are discarded");
+    require(request_recording_overview({},lvm::AnalysisRange::selected(9980,9999),{0},64),"internal overview without an explicit path uses the common managed cache");
+    const auto wait=[&] {const auto start=std::chrono::steady_clock::now();while(g.overview.pending && std::chrono::steady_clock::now()-start<std::chrono::seconds(10)){poll_recording_overview();Sleep(1);}};
+    wait();require(!g.overview.error && g.overview.index && g.overview.view && g.overview.view->sample_count==20,"managed background hierarchy publishes a close-up of original samples");
+    const auto used=recording_disk_cache()->used_bytes();g.overview.index.reset();g.overview.view.reset();
+    require(request_recording_overview({},lvm::AnalysisRange::selected(20,29),{0},64),"managed hierarchy can be requested again after discarding a view");wait();
+    require(!g.overview.error && g.overview.view && g.overview.view->sample_count==10 && recording_disk_cache()->used_bytes()==used,"repeated GUI overview reuses the persisted hierarchy");
+    require(g.numerical_revision==revision && g.ds.channels[0][0]==2,"cache and view requests preserve numerical revision and original active samples");
+    cancel_recording_overview();g.overview={};g.recording_source.reset();g.source_scan_index.reset();
+    require(budget->reserved()==0,"discarding managed GUI views and sources releases index and viewport reservations");
+    const auto bad_root=test_dir/"cache-as-file";{std::ofstream out(bad_root);out<<"not a directory";}
+    configure_recording_disk_cache(bad_root,1024ULL*1024*1024);bool resource_error=false;
+    try{recording_disk_cache();}catch(const lvm::RecordingFailure& e){resource_error=e.error==lvm::RecordingError::ResourceLimit;}
+    require(resource_error,"unavailable managed cache directory has a typed resource error");
+    require(start_async_scan_task(path.wstring()),"optional GUI persistence failure still permits bounded source scanning");auto fallback=take_scan();
+    require(fallback && fallback->ok && !fallback->index_from_disk_cache && g.ds.channels[0][0]==2 && g.numerical_revision==revision,
+        "unavailable disk cache preserves scan result and current numerical document");fallback.reset();
+    require(budget->reserved()==0,"discarding a scan without persistence also releases index admission");
+    g.recording_source=lvm::RecordingSource::from_file(path,{0,9999},{1});
+    require(request_recording_overview({},lvm::AnalysisRange::selected(20,29),{0},64),"unavailable common cache falls back to a private bounded overview cache");wait();
+    require(!g.overview.error && g.overview.view && g.overview.view->sample_count==10,"private fallback publishes original samples");
+    const auto private_root=recording_overview_cache()->directory();
+    require(recording_disk_cache()==recording_overview_cache(),"fallback scan indexes and overviews share one process disk quota");
+    auto pinned=g.overview.index;cancel_recording_overview();g.overview={};
+    configure_recording_disk_cache({},2ULL*1024*1024*1024);
+    require(std::filesystem::exists(private_root),"temporary cache survives until the final index lease is released");
+    pinned.reset();
+    require(!std::filesystem::exists(private_root),"temporary cache removes owned files after the final lease without persistent accumulation");
+    DestroyWindow(g.main);g.main=nullptr;configure_recording_disk_cache({},2ULL*1024*1024*1024);
+}
+
+void unified_source_opening(const std::filesystem::path& external={}) {
+    reset_document({"previous"},{0,1},{{7,8}});
+    const auto path=external.empty() ? std::filesystem::absolute(test_dir/"whole_source.txt") : std::filesystem::absolute(external);
+    if(external.empty()) {
+        std::ofstream out(path);out<<std::setprecision(17)<<"Time\tTimeCopy\tA\tB\tLate\n";
+        for(int i=0;i<5000;++i) {
+            const double t=i/1024.0+(i>=2500 ? 100 : 0);
+            const double a=i<100 ? t : std::sin(i*.07);
+            out<<t<<'\t'<<t<<'\t'<<a<<'\t'<<2*a;
+            if(i>=500)out<<'\t'<<std::cos(i*.11);
+            out<<'\n';
+        }
+    }
+    g.main=CreateWindowExW(0,L"STATIC",L"Whole source opening",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    if(!external.empty())require(set_resource_policy(false,64),"external full-source opening runs with a 64 MiB data budget");
+    const auto started=std::chrono::steady_clock::now();
+    // The small fixture explicitly exercises the source API; external large
+    // files use the actual automatic interactive decision without mode flags.
+    require(external.empty() ? start_async_scan_task(path.wstring()) : load_path_interactive(path.wstring()),"opening starts a full-source job");
+    require(g.async_load_stage==AsyncLoadStage::ScanningRange,"large opening scans the source without a fragment prompt");
+    g_load_worker.join();MSG message{};
+    require(PeekMessageW(&message,g.main,WM_APP_ASYNC_SCAN_DONE,WM_APP_ASYNC_SCAN_DONE,PM_REMOVE)!=FALSE,"opening posts its metadata result");
+    std::cout<<"ScanIndex disk hit="<<reinterpret_cast<AsyncScanResult*>(message.lParam)->index_from_disk_cache<<std::endl;
+    handle_loading_message(g.main,message.message,message.wParam,message.lParam);
+    require(g.async_load_stage==AsyncLoadStage::None && g.overview.render_enabled && g.recording_source && g.ds.rows()==2,
+        "ordinary opening publishes the entire source with only two seed rows and no fragment dialog");
+    require(g.win_start==g.source_scan_index->range_start && g.win_end==g.source_scan_index->range_end && !g.current_file_partial,
+        "initial view spans the complete original recording");
+    const auto wait_view=[&] {
+        const auto start=std::chrono::steady_clock::now();
+        while(g.overview.pending && std::chrono::steady_clock::now()-start<std::chrono::minutes(40)){poll_recording_overview();Sleep(5);}
+        if(g.overview.error)std::cout<<"Overview error="<<static_cast<int>(*g.overview.error)<<std::endl;
+        require(!g.overview.pending && !g.overview.error && g.overview.view && g.cached_global_gap_step_ready,"full source view and original global gap step publish");
+    };
+    wait_view();
+    PROCESS_MEMORY_COUNTERS_EX memory{};memory.cb=sizeof(memory);
+    GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory));
+    std::cout<<"Source opening: bytes="<<std::filesystem::file_size(path)<<", N="<<g.recording_rows<<", seconds="
+        <<std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count()<<", seed_rows="<<g.ds.rows()
+        <<", peak_ws_mib="<<memory.PeakWorkingSetSize/1048576.0<<", private_mib="<<memory.PrivateUsage/1048576.0<<std::endl;
+    require(g.overview.index->sample_count()==g.recording_rows,"display sample count describes the full source, not its seed");
+    if(external.empty()) {
+        require(g.ds.source_columns==std::vector<std::size_t>{2,3,4},"whole-source discovery removes true time copies and keeps prefix-matching and late columns");
+        auto original=lvm::read_lvm_file(path);lvm::drop_duplicate_time_channels(original,original.raw_time);
+        require(g.ds.names==original.names,"source names match the original complete-file parser after duplicate removal");
+        require(g.overview.gaps.size()==1 && g.overview.gaps[0].right-g.overview.gaps[0].left>100,"gap details retain the original outage");
+        std::vector<double> times(5000);for(int i=0;i<5000;++i)times[i]=i/1024.0+(i>=2500 ? 100 : 0);
+        require(g.cached_global_gap_step==precompute_global_gap_step(times),"streaming global gap rule equals the old complete-vector rule");
+    }
+    double a=0,b=0;bool selected=false;
+    require(current_fft_source_window(a,b,selected) && !selected && a==g.data_t0 && b==g.data_t1,"FFT defaults to the entire recording");
+    zoom_at(.75,.2);
+    double a2=0,b2=0;bool selected2=false;current_fft_source_window(a2,b2,selected2);
+    require(a==a2 && b==b2 && !selected2,"zoom leaves the common analysis area unchanged");
+    const double begin=external.empty() ? 103 : g.source_scan_index->checkpoints.at(g.source_scan_index->checkpoints.size()*3/5).adjusted_time;
+    const double end=external.empty() ? 104 : begin+.2;
+    require(change_analysis_range(lvm::AnalysisRange::selected(begin,end)),"a numerical interval outside the seed can be selected");
+    const auto undo_count=g_undo.size();pop_undo();
+    require(!has_fft_window(),"Undo restores the entire analysis range");pop_redo();
+    require(has_fft_window() && g.fft_window_start==begin && g_undo.size()==undo_count,"Redo restores the exact numerical interval");
+    g.visible.assign(g.ds.channel_count(),0);g.visible[0]=1;
+    if(external.empty()) {
+        // Supersede an actual file-reading FFT before publishing the new area.
+        change_analysis_range(lvm::AnalysisRange::entire());compute_spectrum_from_current_source();
+        change_analysis_range(lvm::AnalysisRange::selected(begin,end));
+    }
+    compute_spectrum_from_current_source();
+    const auto fft_start=std::chrono::steady_clock::now();std::optional<lvm::SpectrumWorker::Result> fft;
+    while(!(fft=g_spectrum_worker.take_result()) && std::chrono::steady_clock::now()-fft_start<std::chrono::minutes(2))Sleep(1);
+    require(fft && fft->generation==g.spec_generation && fft->spectrum.ok,"FFT reads the chosen interval outside the seed in the background");
+    lvm::LoadOptions read;read.use_time_window=true;read.time_start=begin;read.time_end=end;read.scan_index=g.source_scan_index;
+    auto control=lvm::read_lvm_file(path,read);lvm::drop_duplicate_time_channels(control,control.raw_time);
+    // Select by physical column: dropping time duplicates in a short control
+    // interval can differ from the complete-recording metadata discovery.
+    const auto physical=g.ds.source_columns[0];
+    const auto found=std::find(control.source_columns.begin(),control.source_columns.end(),physical);
+    require(found!=control.source_columns.end(),"reference reader contains the selected physical signal");
+    lvm::Dataset input;input.ok=true;input.time=control.time;input.names={g.ds.names[0]};input.channels={control.channels.at(found-control.source_columns.begin())};
+    const auto expected=lvm::compute_spectrum(input,0);
+    require(expected.ok && fft->spectrum.n==expected.n && fft->spectrum.freqs==expected.freqs && fft->spectrum.amp==expected.amp,
+        "file-backed FFT grid and every amplitude match the original vector calculation exactly");
+    apply_spectrum_result(std::move(fft->spectrum));fft.reset();
+    if(g.ds.channel_count()>1) {
+        g.frf.inputs={0};g.frf.outputs={1};g.frf.options.segment_length=128;
+        compute_frf_from_current_source();const auto frf_start=std::chrono::steady_clock::now();
+        while(g.frf.pending && std::chrono::steady_clock::now()-frf_start<std::chrono::minutes(2)){poll_frf_result();Sleep(1);}
+        require(g.frf.result.ok && g.frf.source_start==begin && g.frf.source_end==end && g.frf.from_selection,
+            "streaming FRF uses the same selected interval outside the displayed seed");
+        if(external.empty()) {
+            const auto response=std::find(control.source_columns.begin(),control.source_columns.end(),g.ds.source_columns[1]);
+            lvm::FrfBatchInput oracle;oracle.time=control.time;oracle.references={input.channels[0]};
+            oracle.responses={control.channels.at(response-control.source_columns.begin())};
+            auto batch=lvm::analyze_frf_batch(std::move(oracle),g.frf.options);
+            const auto& frf=batch.common();
+            const auto& actual=g.frf.result.common();
+            require(frf.ok && actual.frequencies==frf.frequencies,"selected-source FRF frequency grid matches the vector control");
+            require(actual.valid==frf.valid,"selected-source FRF H1 mask matches the vector control");
+            require(actual.coherence_valid==frf.coherence_valid,"selected-source coherence mask matches the vector control");
+            require(actual.reference_amplitude_valid==frf.reference_amplitude_valid,"selected-source reference spectrum mask matches the vector control");
+            for(std::size_t i=0;i<frf.reference_amplitude.size();++i)
+                require(actual.reference_amplitude[i]==frf.reference_amplitude[i] ||
+                    (std::isnan(actual.reference_amplitude[i]) && std::isnan(frf.reference_amplitude[i])),"reference amplitude equals the vector control, including invalid bins");
+            for(std::size_t i=0;i<frf.transfer.size();++i)if(frf.valid[i])
+                require(actual.transfer[i]==frf.transfer[i],"valid selected-source complex H1 matches the vector control exactly");
+            for(std::size_t i=0;i<frf.coherence.size();++i)if(frf.coherence_valid[i])
+                require(actual.coherence[i]==frf.coherence[i],"valid selected-source coherence matches the vector control exactly");
+        }
+    }
+    g.mode=AnalysisMode::Time;g.win_start=begin;g.win_end=end;
+    synchronize_overview_viewport(512);wait_view();
+    HDC screen=GetDC(nullptr),dc=CreateCompatibleDC(screen);HBITMAP image=CreateCompatibleBitmap(screen,800,500);auto old=SelectObject(dc,image);
+    draw_chart(dc,{70,45,750,450});
+    require(g.vvalid && g.vx0==begin && g.vx1==end,"source graph close-up is rendered from the requested original range");
+    SelectObject(dc,old);DeleteObject(image);DeleteDC(dc);ReleaseDC(nullptr,screen);
+    ExportOptions options;
+    // Stream originals outside the seed, including cancellation/atomic preservation.
+    const auto destination=test_dir/"seed_export.csv";{std::ofstream out(destination);out<<"keep";}
+    options.selected_range=ExportRangeMode::Selected;options.apply_processing_to_data=false;
+    std::atomic<bool> cancelled{true};
+    require(!save_source_export(destination.wstring(),options,&cancelled),"cancelled streaming export returns no partial file");
+    {std::ifstream preserved(destination);require(std::string((std::istreambuf_iterator<char>(preserved)),{})=="keep","cancelled streaming export preserves the previous destination");}
+    require(save_tabular_export(destination.wstring(),options),"streaming export reads the selected originals outside the seed");
+    const auto exported=lvm::read_lvm_file(destination);
+    require(exported.ok && exported.time==control.time && exported.channels[0]==input.channels[0],"streamed selected export matches every original sample");
+    require(!save_source_export(path.wstring(),options),"source export rejects overwriting its live source");
+    if(!external.empty()) {
+        ULONG_PTR picture_token=0;
+        if(std::filesystem::file_size(path)>=20000000000ULL) {
+            Gdiplus::GdiplusStartupInput startup;
+            require(Gdiplus::GdiplusStartup(&picture_token,&startup,nullptr)==Gdiplus::Ok,"large-record PNG startup");
+        }
+        g.mode=AnalysisMode::FFT;change_analysis_range(lvm::AnalysisRange::entire());
+        const auto started_fft=std::chrono::steady_clock::now();compute_spectrum_from_current_source();
+        std::optional<lvm::SpectrumWorker::Result> full;
+        while(!(full=g_spectrum_worker.take_result()) && std::chrono::steady_clock::now()-started_fft<std::chrono::minutes(90))Sleep(5);
+        require(full && full->generation==g.spec_generation && full->spectrum.ok && full->spectrum.disk,"full real-file FFT selects bounded disk computation");
+        require(full->spectrum.n==static_cast<int>(g.recording_rows) && full->spectrum.bin_count()==g.recording_rows/2+1,"full real-file FFT keeps every sample and exact bin count");
+        if(std::filesystem::file_size(path)>=10000000000ULL) {
+            std::vector<double> peak;
+            full->spectrum.read_amplitudes(0,g.recording_rows*31/2048,1,peak);
+            const double error=std::abs(peak[0]-1.0);
+            std::cout<<"Synthetic full FFT analytic peak error="<<error<<std::endl;
+            require(error<1e-5,"complete synthetic FFT preserves the analytic sinusoid amplitude");
+        }
+        GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory));
+        std::cout<<"Full disk FFT: N="<<full->spectrum.n<<", channels="<<full->spectrum.names.size()<<", seconds="
+            <<std::chrono::duration<double>(std::chrono::steady_clock::now()-started_fft).count()<<", result_disk_mib="<<full->spectrum.disk->disk_bytes/1048576.0
+            <<", peak_ws_mib="<<memory.PeakWorkingSetSize/1048576.0<<", private_mib="<<memory.PrivateUsage/1048576.0<<std::endl;
+        apply_spectrum_result(std::move(full->spectrum));full.reset();g.freq_start=0;g.freq_end=g.spec.nyquist;
+        HDC target=CreateCompatibleDC(nullptr);draw_chart(target,{50,40,700,400});DeleteDC(target);
+        require(g.vvalid && g.vx1==g.spec.nyquist,"complete real-file disk spectrum renders without resident amplitudes");
+        if(picture_token)require(save_png((test_dir/"large_disk_fft.png").wstring()),"full large disk FFT exports a real rendered PNG");
+        if(std::filesystem::file_size(path)>=10000000000ULL && g.ds.channel_count()==8) {
+            g.spec={};g.spec_valid=false;g.mode=AnalysisMode::Time;
+            g.frf.inputs={0};g.frf.outputs={1,2,3,4,5,6,7};g.frf.options.segment_length=2048;g.frf.options.remove_mean=false;
+            const auto started_frf=std::chrono::steady_clock::now();compute_frf_from_current_source();
+            while(g.frf.pending && std::chrono::steady_clock::now()-started_frf<std::chrono::minutes(30)){poll_frf_result();Sleep(5);}
+            require(g.frf.result.ok && g.frf.result.responses.size()==7 && !g.frf.from_selection,"full large-file FRF computes all seven responses through the GUI worker");
+            double error=0;
+            for(std::size_t c=0;c<7;++c)for(auto bin:{31u,67u}) {
+                const auto& response=g.frf.result.responses[c];
+                require(response.valid[bin] && response.coherence_valid[bin],"synthetic excited FRF bins remain valid");
+                error=std::max(error,std::abs(response.transfer[bin]-std::complex<double>(c+2.0,0)));
+                error=std::max(error,std::abs(response.coherence[bin]-1));
+            }
+            require(error<1e-9,"full large-file H1 and coherence match analytic gains");
+            GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory));
+            std::cout<<"Full GUI FRF: N="<<g.recording_rows<<", L=2048, responses=7, seconds="
+                <<std::chrono::duration<double>(std::chrono::steady_clock::now()-started_frf).count()<<", peak_ws_mib="<<memory.PeakWorkingSetSize/1048576.0<<", analytic_error="<<error<<std::endl;
+            if(picture_token){g.mode=AnalysisMode::FRF;require(save_png((test_dir/"large_frf.png").wstring()),"full seven-response large FRF exports a real rendered PNG");}
+        }
+        if(picture_token)Gdiplus::GdiplusShutdown(picture_token);
+        change_analysis_range(lvm::AnalysisRange::selected(begin,end));g.mode=AnalysisMode::Time;
+    }
+    if(external.empty()) {
+        g.channel_formulas[0]=L"x*x";rebuild_formula_cache_from_state();
+        g.noise_threshold_enabled=true;g.noise_threshold_mode=FilterModeLowPass;g.noise_threshold_max=80;g.noise_threshold_min=0;
+        const auto processed=processed_recording_source();lvm::RecordingReadRequest request;request.channels={0};request.range=lvm::AnalysisRange::selected(begin,end);request.block_rows=17;
+        std::vector<double> processed_time,processed_values;
+        processed->replay(request,[&](const auto& time,const auto& values){processed_time.insert(processed_time.end(),time.begin(),time.end());processed_values.insert(processed_values.end(),values[0].begin(),values[0].end());});
+        auto whole=lvm::read_lvm_file(path);lvm::drop_duplicate_time_channels(whole,whole.raw_time);
+        auto samples=whole.channels[0];for(auto& value:samples)value*=value;
+        std::vector<double> spacing;for(std::size_t i=1;i<whole.rows();++i)spacing.push_back(whole.time[i]-whole.time[i-1]);
+        FilterSettings settings{FilterModeLowPass,FilterTopologyButterworth,0,80,lvm::typical_sample_spacing(spacing)};
+        const auto filtered=filter_signal(whole.time,samples,settings);
+        const auto lo=std::lower_bound(whole.time.begin(),whole.time.end(),begin)-whole.time.begin(),hi=std::upper_bound(whole.time.begin(),whole.time.end(),end)-whole.time.begin();
+        require(processed_time==control.time && processed_values==std::vector<double>(filtered.begin()+lo,filtered.begin()+hi),"processed source preserves nonlinear formula, full filter warm-up and states across 17-row blocks");
+        options.apply_processing_to_data=true;require(save_source_export(destination.wstring(),options),"streaming export supports processed selected data");
+        const auto applied=lvm::read_lvm_file(destination);require(applied.ok && applied.channels[0]==processed_values,"processed export uses the same source as analysis and overview");
+        const auto project=test_dir/"source_project.AMSig";require(save_project_file(project.wstring()),"source project streams all original channels with processing as settings");
+        const auto restored=lvm::read_lvm_file(project);require(restored.ok && restored.rows()==whole.rows() && restored.time==whole.time,"source project contains the complete original timeline, not seed rows");
+        auto project_data=restored;lvm::drop_duplicate_time_channels(project_data,project_data.raw_time);
+        bool same=project_data.channels.size()==whole.channels.size();
+        for(std::size_t c=0;same && c<whole.channels.size();++c){same=project_data.channels[c].size()==whole.channels[c].size();
+            for(std::size_t i=0;same && i<whole.rows();++i)same=project_data.channels[c][i]==whole.channels[c][i] || (std::isnan(project_data.channels[c][i]) && std::isnan(whole.channels[c][i]));}
+        require(same,"source project preserves all original channel samples, including NaN");
+        auto resources=current_analysis_resources();
+        auto disk=lvm::compute_disk_spectrum(processed,request,{g.ds.names[0]},resources);
+        lvm::Dataset oracle;oracle.ok=true;oracle.time=processed_time;oracle.channels={processed_values};oracle.names={g.ds.names[0]};
+        const auto reference=lvm::compute_spectrum(oracle,0);std::vector<double> amplitudes;disk.read_amplitudes(0,0,disk.bin_count(),amplitudes);
+        require(disk.ok && amplitudes==reference.amp[0],"filtered-source disk FFT matches the vector calculation exactly");
+        apply_spectrum_result(std::move(disk));g.mode=AnalysisMode::FFT;g.freq_start=0;g.freq_end=g.spec.nyquist;
+        HDC target=CreateCompatibleDC(nullptr);draw_chart(target,{50,40,700,400});DeleteDC(target);
+        require(g.vvalid && g.vx1==g.spec.nyquist,"disk spectrum uses the production GUI renderer");
+        options.format=ExportFileFormat::Csv;options.selected_range=ExportRangeMode::Whole;
+        require(save_source_export(destination.wstring(),options),"spectrum export streams exact disk bins");
+        const auto spectrum_file=lvm::read_lvm_file(destination);require(spectrum_file.ok && spectrum_file.frequency_axis && spectrum_file.rows()==reference.freqs.size(),"streamed disk spectrum reopens with the exact bin count");
+        options.save_mode=ExportSaveMode::Project;
+        require(start_source_export((test_dir/"async_source_project.AMSig").wstring(),options),"source project export runs in the background");
+        cancel_source_export();shutdown_source_exports();
+        require(!std::filesystem::exists(test_dir/"async_source_project.AMSig"),"cancelled source project worker publishes no destination");
+        hide_loading();g.mode=AnalysisMode::Time;
+        const auto invalid=test_dir/"formula_nonfinite.txt";{std::ofstream out(invalid);out<<"0\t0\n1\tnan\n2\tinf\n";}
+        const auto previous_source=g.recording_source;
+        g.recording_source=lvm::RecordingSource::from_file(invalid,{0,2},{1});g.noise_threshold_enabled=false;
+        g.channel_formulas[0]=L"1/(1+abs(x))";rebuild_formula_cache_from_state();
+        auto nonfinite=processed_recording_source();lvm::RecordingReadRequest nonfinite_read;nonfinite_read.channels={0};std::vector<double> checked;
+        nonfinite->replay(nonfinite_read,[&](const auto&,const auto& values){checked.insert(checked.end(),values[0].begin(),values[0].end());});
+        require(checked.size()==3 && checked[0]==1 && std::isnan(checked[1]) && std::isnan(checked[2]),"nonlinear source formulas retain GUI NaN/Inf policy even when the expression could turn infinity into a finite value");
+        g.recording_source=previous_source;
+    }
+    cancel_recording_overview();g_spectrum_worker.cancel();g_frf_worker.cancel();g_frf_worker.clear_cache();
+    g.overview={};DestroyWindow(g.main);g.main=nullptr;
+}
+
 void multiple_open_documents() {
     reset_document({"first"}, {0, 1, 2}, {{1, 2, 3}});
     g.file_name = L"first.lvm";
     g.source_path = L"C:\\data\\first.lvm";
     g.win_start = .5; g.win_end = 1.5;
+    set_fft_window(.25,1.75);
     g.mode = AnalysisMode::FFT;
     g.channel_colors = {RGB(1, 2, 3)};
 
@@ -1495,20 +2273,39 @@ void multiple_open_documents() {
             "switch restores the selected document's analysis state and time range");
     require(g.channel_colors == std::vector<COLORREF>{RGB(9, 8, 7)},
             "switch restores per-document channel presentation without duplicating samples");
+    require(!has_fft_window(),"the second document does not inherit the first document's analysis interval");
     require(switch_to_document(1), "switches back to the original document");
     require(g.file_name == L"first.lvm" && g.mode == AnalysisMode::FFT && g.win_start == .5,
             "original signal and FFT state survive a document round trip");
+    require(has_fft_window() && g.fft_window_start==.25 && g.fft_window_end==1.75,"the first document restores its own common analysis interval");
     require(close_active_document() && open_document_count() == 1 && g.file_name == L"second.lvm",
             "closing one file keeps the remaining document open");
 }
 }
 
-int main() {
+int main(int argc,char** argv) {
     std::filesystem::create_directories(test_dir);
     try {
+        if((argc==3 || argc==4) && std::string(argv[1])=="--source-opening") {
+            HANDLE job=nullptr;
+            if(argc==4) {
+                require(std::string(argv[3])=="--commit-128","known process commit cap option");
+                job=CreateJobObjectW(nullptr,nullptr);
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+                limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+                limits.ProcessMemoryLimit=128ULL*1024*1024;
+                require(job && SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits)) &&
+                    AssignProcessToJobObject(job,GetCurrentProcess()),"128 MiB process commit cap is enforced by Windows Job Object");
+                std::cout<<"Windows process commit cap: 128 MiB; data admission: Manual 64 MiB (not physical 8 GiB hardware)"<<std::endl;
+            }
+            unified_source_opening(std::filesystem::u8path(argv[2]));
+            g_spectrum_worker.shutdown();g_overview_worker.shutdown();g_frf_worker.shutdown();
+            if(job)CloseHandle(job);
+            std::cout<<checks<<" source opening checks passed\n";return 0;
+        }
         document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); multiple_open_documents(); processing(); fft_recording_recovery();
-        light_mode_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
-        light_mode_fft_visibility();
+        display_load_budget(); loading_window_ownership(); bounded_load_recovery(); document_source_and_resources(); background_document_overview(); overview_renderer(); resource_settings_and_load_ownership(); analysis_admission_and_publication(); persistent_recording_cache(); resident_envelope_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
+        unified_source_opening();spectrum_visibility_cache();
         user_axis_names_outside_plot();
         channel_legend_visibility();
         routed_window_messages();
@@ -1521,11 +2318,13 @@ int main() {
         streamed_frf_file_and_invalidation();
         bounded_formula_cache_selection();
         g_spectrum_worker.shutdown();
+        g_overview_worker.shutdown();
         g_frf_worker.shutdown();
         require(!g_spectrum_worker.take_result(),"GUI exit joins the FFT caller before analysis pool teardown");
         std::cout << checks << " GUI integration checks passed\n";
         return 0;
     } catch(const std::exception& ex) {
+        g_overview_worker.shutdown();
         g_spectrum_worker.shutdown();
         g_frf_worker.shutdown();
         std::cerr << "FAIL after " << checks << " checks: " << ex.what() << '\n';

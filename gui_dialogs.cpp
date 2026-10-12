@@ -1126,7 +1126,7 @@ bool prompt_numeric_value(const wchar_t* title, const wchar_t* label,
     return true;
 }
 
-bool prompt_light_mode_window(double range_start, double range_end, double& out_start, double& out_end) {
+bool prompt_analysis_window(double range_start, double range_end, double& out_start, double& out_end) {
     static ATOM atom = 0;
     if (!atom) {
         WNDCLASSEXW wc{};
@@ -1151,15 +1151,15 @@ bool prompt_light_mode_window(double range_start, double range_end, double& out_
 
     g_range_prompt.min_value = range_start;
     g_range_prompt.max_value = range_end;
-    g_range_prompt.start_value = normalize_prompt_bound(std::clamp(g.light_mode_open_start, range_start, range_end));
-    g_range_prompt.end_value = normalize_prompt_bound(std::clamp(g.light_mode_open_end, g_range_prompt.start_value + 1e-9, range_end));
+    g_range_prompt.start_value = normalize_prompt_bound(std::clamp(g.fft_window_active ? g.fft_window_start : range_start, range_start, range_end));
+    g_range_prompt.end_value = normalize_prompt_bound(std::clamp(g.fft_window_active ? g.fft_window_end : range_end, range_start, range_end));
     if (g_range_prompt.end_value <= g_range_prompt.start_value) {
         g_range_prompt.end_value = std::min(range_end, g_range_prompt.start_value + 10.0);
     }
-    g_range_prompt.title = g_str->light_mode_range_title;
-    g_range_prompt.start_label = g_str->light_mode_range_start;
-    g_range_prompt.end_label = g_str->light_mode_range_end;
-    g_range_prompt.apply_text = g_str->light_mode_range_apply;
+    g_range_prompt.title = en ? L"Analysis interval — FFT / FRF" : L"Участок анализа — БПФ / АЧХ";
+    g_range_prompt.start_label = g_str->analysis_range_start;
+    g_range_prompt.end_label = g_str->analysis_range_end;
+    g_range_prompt.apply_text = en ? L"Apply" : L"Применить";
     g_range_prompt.cancel_text = speed_prompt_cancel_text();
     g_range_prompt.info_label = (en ? L"Available range:\r\n" : L"Доступный диапазон:\r\n") +
                                 format_edit_number(range_start) + L" .. " +
@@ -1167,7 +1167,7 @@ bool prompt_light_mode_window(double range_start, double range_end, double& out_
     g_range_prompt.invalid_start_text = en
         ? (L"Enter a finite number not less than " + format_edit_number(range_start) + L".")
         : (L"Введите конечное число не меньше " + format_edit_number(range_start) + L".");
-    g_range_prompt.invalid_end_text = g_str->light_mode_range_invalid_end;
+    g_range_prompt.invalid_end_text = g_str->analysis_range_invalid_end;
     g_range_prompt.wnd = CreateWindowExW(
         WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW,
         L"LvmRangePrompt",
@@ -1204,9 +1204,6 @@ bool prompt_light_mode_window(double range_start, double range_end, double& out_
     EnableWindow(g.main, TRUE);
     SetForegroundWindow(g.main);
     if (!g_range_prompt.accepted) return false;
-    g.light_mode_open_start = g_range_prompt.start_value;
-    g.light_mode_open_end = g_range_prompt.end_value;
-    save_runtime_settings();
     out_start = g_range_prompt.start_value;
     out_end = g_range_prompt.end_value;
     return true;

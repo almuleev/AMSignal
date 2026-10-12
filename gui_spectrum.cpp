@@ -4,6 +4,10 @@
 #include "gui_processing.hpp"
 #include "gui_state.hpp"
 #include "gui_text.hpp"
+#include "gui_resources.hpp"
+#include "gui_recording_processing.hpp"
+#include "disk_spectrum.hpp"
+#include "gui_documents.hpp"
 
 namespace gui {
 
@@ -21,13 +25,13 @@ std::wstring fft_window_status(double start, double end, bool from_selection) {
     wchar_t buf[220];
     if (g_str == &kEn) {
         swprintf(buf, 220, from_selection
-            ? L"   |   FFT window: selected %.6g..%.6g s (Shift-click or right-click to clear)"
-            : L"   |   FFT window: visible %.6g..%.6g s",
+            ? L"   |   Analysis: interval %.6g..%.6g s"
+            : L"   |   Analysis: entire recording %.6g..%.6g s",
             start, end);
     } else {
         swprintf(buf, 220, from_selection
-            ? L"   |   FFT окно: выбранный участок %.6g..%.6g c (Shift-клик или ПКМ для сброса)"
-            : L"   |   FFT окно: видимый участок %.6g..%.6g c",
+            ? L"   |   Анализ: участок %.6g..%.6g c"
+            : L"   |   Анализ: вся запись %.6g..%.6g c",
             start, end);
     }
     return buf;
@@ -68,16 +72,20 @@ void refresh_spec_channel_indices() {
 }
 
 void apply_spectrum_result(lvm::Spectrum spectrum) {
+    if(spectrum.recording_source)try{spectrum.recording_source->check_current();}
+        catch(const std::exception& e){spectrum={};spectrum.error=e.what();}
     g.spec = std::move(spectrum);
+    // The arrays now belong to the document and enter resident accounting.
+    g.spec.memory_reservation.reset();
     g.spec_valid = g.spec.ok;
     g.spec_pending = false;
     refresh_spec_channel_indices();
     if (g.spec_valid && g.spec_fit_pending) { g.freq_start = 0; g.freq_end = g.spec.nyquist; }
     g.spec_fit_pending = false;
+    trim_document_analysis_caches();
 }
 
 bool spectrum_needs_visible_channels() {
-    if (!g.light_mode) return false;
     // This mask describes channels included in the current attempt (including
     // an in-flight request), not the current display. Hiding a channel cannot
     // invalidate its FFT. Keep attempted channels even when they have too few
@@ -119,22 +127,32 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
         return;
     }
     std::vector<std::size_t> visible_channels;
-    if (g.light_mode) {
-        visible_channels.reserve(g.visible.size());
-        for (std::size_t i = 0; i < g.visible.size(); ++i) {
-            if (g.visible[i]) visible_channels.push_back(i);
-        }
-    } else {
-        visible_channels.resize(g.ds.channel_count());
-        for (std::size_t i = 0; i < visible_channels.size(); ++i) visible_channels[i] = i;
-    }
-    if (g.light_mode && visible_channels.empty()) {
-        clear_spectrum_cache_state();
-        g.spec_source_valid = end > start;
-        g.spec_visible_state = g.visible;
-        return;
+    visible_channels.reserve(g.visible.size());
+    for (std::size_t i = 0; i < g.visible.size(); ++i) {
+        if (g.visible[i]) visible_channels.push_back(i);
     }
     try {
+        if(g.main) {g_spectrum_worker.cancel();++g.spec_generation;}
+        const auto resources=current_analysis_resources();
+        if(g.overview.render_enabled || (g.current_file_partial && g.source_scan_index)) {
+            const auto source=processed_recording_source();
+            lvm::RecordingReadRequest read;read.range=lvm::AnalysisRange::selected(start,end);
+            read.channels=visible_channels;read.block_bytes=1024*1024;read.block_rows=4096;
+            std::vector<std::string> names;
+            for(auto c:visible_channels)names.push_back(g.ds.names[c]);
+            auto compute=[source,read,resources,names](const std::atomic<bool>* cancel) {
+                auto io=resources.budget->reserve(2ULL*1024*1024);
+                if(!io)throw std::runtime_error("Insufficient memory for FFT source reading.");
+                return lvm::compute_recording_spectrum(source,read,names,resources,cancel);
+            };
+            g.spec_attempted=true;g.spec_pending=true;g.spec_valid=false;
+            g_spectrum_worker.submit_computation(std::move(compute),visible_channels,g.spec_generation);
+            g.spec_visible_state=g.visible;return;
+        }
+        const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),start);
+        const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),end);
+        // Admit the snapshot before build_time_window_dataset allocates it.
+        auto reservation=reserve_analysis_input(resources,static_cast<std::size_t>(hi-lo),visible_channels.size(),false);
         ensure_channel_formula_vectors();
         bool worker_can_prepare = g.main && !g.noise_threshold_enabled;
         if (worker_can_prepare) {
@@ -164,9 +182,9 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
             }
             g.spec_pending = true;
             g.spec_valid = false;
-            g_spectrum_worker.submit(std::move(view), visible_channels, ++g.spec_generation, std::move(transforms));
+            g_spectrum_worker.submit(std::move(view),visible_channels,g.spec_generation,std::move(transforms),resources,std::move(reservation));
         } else {
-            auto spectrum = lvm::compute_spectrum(view, 0);
+            auto spectrum = lvm::compute_spectrum(view,0,nullptr,resources);
             for (auto& c : spectrum.source_channels) c = visible_channels[c];
             apply_spectrum_result(std::move(spectrum));
         }
@@ -200,7 +218,11 @@ void compute_spectrum() {
 
 bool ensure_current_spectrum() {
     if (!has_data()) return false;
-    if (!g.spec_attempted || spectrum_needs_visible_channels()) compute_spectrum();
+    if(g.overview.render_enabled && g.spec_valid) {
+        try{current_recording_source();}
+        catch(const std::exception& e){clear_spectrum_cache_state();g.spec.error=e.what();g.spec_attempted=true;return false;}
+    }
+    if (!g.spec_attempted || spectrum_needs_visible_channels()) compute_spectrum_from_current_source();
     return g.spec_valid;
 }
 

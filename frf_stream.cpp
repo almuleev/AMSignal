@@ -183,8 +183,10 @@ void PreparedFrf::read(std::size_t first,std::size_t count,std::vector<std::vect
     }
 }
 
-std::shared_ptr<const PreparedFrf> prepare_frf_batch(FrfBatchInput input,const std::atomic<bool>* cancel) {
+std::shared_ptr<const PreparedFrf> prepare_frf_batch(FrfBatchInput input,const std::atomic<bool>* cancel,
+    std::shared_ptr<MemoryBudget::Reservation> reservation) {
     auto prepared=std::make_shared<PreparedFrf>();auto& m=prepared->metadata;
+    prepared->memory_reservation=std::move(reservation);
     auto memory=std::make_shared<FrfBatchInput>(std::move(input));
     prepared->memory=memory;
     prepared->resident_bytes=memory->time.capacity()*8;
@@ -239,8 +241,10 @@ std::shared_ptr<const PreparedFrf> prepare_frf_batch(FrfBatchInput input,const s
     return prepared;
 }
 
-std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,const std::atomic<bool>* cancel) {
+std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,const std::atomic<bool>* cancel,
+    std::shared_ptr<MemoryBudget::Reservation> reservation) {
     auto p=std::make_shared<PreparedFrf>();auto& m=p->metadata;
+    p->memory_reservation=std::move(reservation);
     if(!source.references || !source.responses || !source.replay) {m.error=FrfError::InvalidChannels;return p;}
     p->response_errors.resize(source.responses,FrfError::None);
     p->storage=std::make_shared<PreparedFrf::Storage>();p->storage->channels=1+source.responses;

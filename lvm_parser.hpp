@@ -13,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "resource_budget.hpp"
 
 namespace lvm {
 
@@ -40,6 +41,9 @@ struct ScanIndexCheckpoint {
 };
 
 struct ScanIndex {
+    // Cache-owned indices retain their admission through Source/document sharing.
+    // Declared first so arrays are destroyed before releasing the reservation.
+    std::shared_ptr<MemoryBudget::Reservation> memory_reservation;
     double range_start = 0.0;
     double range_end = 0.0;
     std::vector<std::string> column_labels;
@@ -47,6 +51,14 @@ struct ScanIndex {
     std::vector<std::string> export_comments;
     std::uintmax_t file_size = 0;
     std::filesystem::file_time_type modified{};
+    std::size_t memory_bytes() const {
+        std::uint64_t bytes=sizeof(ScanIndex)+checkpoints.capacity()*sizeof(ScanIndexCheckpoint);
+        for(const auto* list:{&column_labels,&export_comments}) {
+            bytes=saturated_add(bytes,list->capacity()*sizeof(std::string));
+            for(const auto& text:*list)bytes=saturated_add(bytes,text.capacity()+1);
+        }
+        return static_cast<std::size_t>(std::min<std::uint64_t>(bytes,std::numeric_limits<std::size_t>::max()));
+    }
 };
 
 struct LoadOptions {
@@ -57,6 +69,9 @@ struct LoadOptions {
     std::shared_ptr<const ScanIndex> scan_index;
     // Physical file columns: time is column 0. Blocks never use display envelopes.
     std::vector<std::size_t> stream_columns;
+    // Metadata discovery: stream every physical column, including original X
+    // at position zero. The separate time vector remains normalized.
+    bool stream_all_columns = false;
     std::size_t block_rows = 65536;
     std::size_t max_resident_bytes = 0; // 0 = caller-controlled; GUI supplies a bound.
     std::function<void(const std::vector<double>&,
@@ -76,6 +91,7 @@ struct Dataset {
     bool partial = false;                      // true when loading stopped early by options
     bool frequency_axis = false;               // first column contains stored spectrum frequencies
     bool ok = false;
+    bool resident_limit_exceeded = false;      // Display selection exceeded LoadOptions memory bound.
     std::string error;
 
     std::size_t rows() const { return time.size(); }
@@ -86,7 +102,8 @@ struct Dataset {
 Dataset read_lvm_file(const std::filesystem::path& path);
 Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& options);
 bool scan_time_bounds(const std::filesystem::path& path, double& out_start, double& out_end, std::string& error,
-                      const std::atomic<bool>* cancel_flag = nullptr, ScanIndex* out_index = nullptr);
+                      const std::atomic<bool>* cancel_flag = nullptr, ScanIndex* out_index = nullptr,
+                      std::size_t max_index_bytes = 0);
 
 // Rebuild a monotonically increasing timeline (mirrors the Python "prepare"
 // step that flattens Multi_Headings sections which reset local time).

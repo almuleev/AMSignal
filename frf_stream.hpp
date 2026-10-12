@@ -18,6 +18,7 @@ struct FrfSource {
     std::function<void(const FrfBlockConsumer&,const std::atomic<bool>*)> replay;
 };
 struct PreparedFrf {
+    std::shared_ptr<MemoryBudget::Reservation> memory_reservation;
     FrfSamples metadata; // No sample vectors in streamed inputs.
     std::vector<FrfError> response_errors;
     std::shared_ptr<const FrfBatchInput> memory;
@@ -28,9 +29,11 @@ struct PreparedFrf {
     void read(std::size_t first,std::size_t count,std::vector<std::vector<double>>& channels,
               const std::atomic<bool>* cancel=nullptr) const;
 };
-std::shared_ptr<const PreparedFrf> prepare_frf_batch(FrfBatchInput input,const std::atomic<bool>* cancel=nullptr);
-std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,const std::atomic<bool>* cancel=nullptr);
+std::shared_ptr<const PreparedFrf> prepare_frf_batch(FrfBatchInput input,const std::atomic<bool>* cancel=nullptr,
+    std::shared_ptr<MemoryBudget::Reservation> reservation={});
+std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,const std::atomic<bool>* cancel=nullptr,
+    std::shared_ptr<MemoryBudget::Reservation> reservation={});
 FrfSamples inspect_frf_timeline(const FrfSource& source,const std::atomic<bool>* cancel=nullptr);
 FrfBatchResult compute_prepared_frf(const PreparedFrf& input,const FrfOptions& options={},
-                                   const std::atomic<bool>* cancel=nullptr);
+                                   const std::atomic<bool>* cancel=nullptr,const AnalysisResources& resources={});
 }

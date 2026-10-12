@@ -112,13 +112,17 @@ void add_recent_file(const std::wstring& path) {
 
 void save_runtime_settings_now() {
     if (g_config_path.empty()) g_config_path = app_config_path();
+    // Retire only obsolete loading-policy keys; preserve other user settings.
+    for(const auto key:{L"light_mode",L"light_mode_open_start",L"light_mode_open_end"})
+        WritePrivateProfileStringW(L"ui",key,nullptr,g_config_path.c_str());
 
     WritePrivateProfileStringW(L"ui", L"language", (g_str == &kEn) ? L"en" : L"ru", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"smoothing", g.visual_smooth ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"curve_symbols", g.distinguish_curves ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"vertical_pan", g.vertical_pan ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"snap_to_data", g.snap_to_data ? L"1" : L"0", g_config_path.c_str());
-    WritePrivateProfileStringW(L"ui", L"light_mode", g.light_mode ? L"1" : L"0", g_config_path.c_str());
+    WritePrivateProfileStringW(L"resources", L"automatic", g.resource_policy.automatic ? L"1" : L"0", g_config_path.c_str());
+    WritePrivateProfileStringW(L"resources", L"manual_mib", std::to_wstring(g.resource_policy.manual_mib).c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"show_gap_markers", g.show_gap_markers ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"stitch_time_gaps", g.stitch_time_gaps ? L"1" : L"0", g_config_path.c_str());
     normalize_filter_bounds();
@@ -133,8 +137,6 @@ void save_runtime_settings_now() {
     WritePrivateProfileStringW(L"ui", L"side_panel_visible", g.side_panel_visible ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"side_panel_tab", std::to_wstring(std::clamp(g.side_panel_tab, 0, 2)).c_str(), g_config_path.c_str());
     write_ini_double(L"ui", L"play_speed", g.play_speed);
-    write_ini_double(L"ui", L"light_mode_open_start", g.light_mode_open_start);
-    write_ini_double(L"ui", L"light_mode_open_end", g.light_mode_open_end);
     WritePrivateProfileStringW(L"ui", L"axis_x_label", g.axis_x_label.c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"axis_y_label", g.axis_y_label.c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"time_axis_y_label", g.time_axis_y_label.c_str(), g_config_path.c_str());
@@ -179,34 +181,6 @@ void save_runtime_settings_now() {
 void save_runtime_settings() {
     g_settings_dirty = true;
     if (g.main && IsWindow(g.main)) SetTimer(g.main, 3, 400, nullptr);
-}
-
-void apply_light_mode(bool enabled, bool persist) {
-    const bool changed = g.light_mode != enabled;
-    g.light_mode = enabled;
-    if (!g.light_mode && g.formula_ini_deferred) {
-        ensure_channel_formulas_loaded();
-    }
-    if (persist) save_runtime_settings();
-    if (changed) {
-        recompute_transforms_from_state();
-        load_side_transform_controls();
-        if (g.welcome_wnd && IsWindow(g.welcome_wnd)) {
-            if (HWND light = GetDlgItem(g.welcome_wnd, IDW_LIGHT_MODE)) {
-                set_toggle_checked(light, g.light_mode);
-            }
-            InvalidateRect(g.welcome_wnd, nullptr, FALSE);
-        }
-        if (g.settings_wnd) {
-            if (HWND light = GetDlgItem(g.settings_wnd, IDW_LIGHT_MODE)) {
-                set_toggle_checked(light, g.light_mode);
-            }
-            refresh_settings_controls();
-        }
-        if (g.main && IsWindow(g.main)) {
-            InvalidateRect(g.main, nullptr, FALSE);
-        }
-    }
 }
 
 int read_ini_int(const wchar_t* section, const wchar_t* key, int def_value) {
@@ -330,13 +304,10 @@ void load_runtime_settings() {
     if (g.side_panel_tab < 0 || g.side_panel_tab > 2) g.side_panel_tab = 0;
     g.play_speed = read_ini_double(L"ui", L"play_speed", g.play_speed);
     if (!(g.play_speed > 0.0) || !std::isfinite(g.play_speed)) g.play_speed = 1.0;
-    g.light_mode = read_ini_int(L"ui", L"light_mode", g.light_mode ? 1 : 0) != 0;
-    g.light_mode_open_start = read_ini_double(L"ui", L"light_mode_open_start", g.light_mode_open_start);
-    g.light_mode_open_end = read_ini_double(L"ui", L"light_mode_open_end", g.light_mode_open_end);
-    if (!std::isfinite(g.light_mode_open_start) || g.light_mode_open_start < 0.0) g.light_mode_open_start = 0.0;
-    if (!std::isfinite(g.light_mode_open_end) || g.light_mode_open_end <= g.light_mode_open_start) {
-        g.light_mode_open_end = g.light_mode_open_start + 10.0;
-    }
+    g.resource_policy.automatic=read_ini_int(L"resources",L"automatic",1)!=0;
+    const auto manual_mib=read_ini_int(L"resources",L"manual_mib",2048);
+    if(manual_mib<64 || manual_mib>65536)g.resource_policy={true,2048};
+    else g.resource_policy.manual_mib=static_cast<unsigned>(manual_mib);
 
     g.pdisp.number = read_ini_int(L"points", L"number", g.pdisp.number ? 1 : 0) != 0;
     g.pdisp.x = read_ini_int(L"points", L"x", g.pdisp.x ? 1 : 0) != 0;

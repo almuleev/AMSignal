@@ -6,6 +6,7 @@
 #include "gui_menu.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_processing.hpp"
+#include "gui_overview.hpp"
 #include "gui_render_data.hpp"
 #include "gui_settings.hpp"
 #include "gui_side_panel.hpp"
@@ -376,6 +377,8 @@ void clear_active_document_history() {
 SettingsSnapshot capture_settings_snapshot() {
     ensure_channel_formula_vectors();
     SettingsSnapshot snapshot;
+    snapshot.analysis_interval=g.fft_window_active;
+    snapshot.analysis_start=g.fft_window_start;snapshot.analysis_end=g.fft_window_end;
     snapshot.visible = g.visible;
     snapshot.channel_labels = g.channel_labels;
     snapshot.channel_colors = g.channel_colors;
@@ -461,6 +464,7 @@ bool settings_snapshot_differs(const SettingsSnapshot& a, const SettingsSnapshot
            a.channel_labels != b.channel_labels ||
            a.channel_colors != b.channel_colors ||
            a.global_formula != b.global_formula ||
+           a.analysis_interval != b.analysis_interval || a.analysis_start != b.analysis_start || a.analysis_end != b.analysis_end ||
            a.channel_formulas != b.channel_formulas ||
            a.snap_to_data != b.snap_to_data ||
            a.noise_threshold_enabled != b.noise_threshold_enabled ||
@@ -533,6 +537,11 @@ void apply_settings_snapshot(const SettingsSnapshot& snapshot) {
         g.noise_threshold_min!=snapshot.noise_threshold_min || g.noise_threshold_max!=snapshot.noise_threshold_max ||
         g.noise_threshold_mode!=snapshot.noise_threshold_mode || g.noise_threshold_topology!=snapshot.noise_threshold_topology;
     const bool visibility_changed=g.visible!=snapshot.visible;
+    const bool range_changed=g.fft_window_active!=snapshot.analysis_interval ||
+        g.fft_window_start!=snapshot.analysis_start || g.fft_window_end!=snapshot.analysis_end;
+    g.fft_window_active=snapshot.analysis_interval;
+    g.fft_window_start=snapshot.analysis_start;g.fft_window_end=snapshot.analysis_end;
+    if(range_changed){invalidate_frf();clear_spectrum_cache_state();}
     g.visible = snapshot.visible;
     g.channel_labels = snapshot.channel_labels;
     g.channel_colors = snapshot.channel_colors;
@@ -571,7 +580,7 @@ void apply_settings_snapshot(const SettingsSnapshot& snapshot) {
     if(formulas_changed || filter_changed)recompute_transforms_from_state();
     else {
         invalidate_plot_analysis_cache();
-        if(visibility_changed && g.light_mode && g.mode==AnalysisMode::FFT)ensure_current_spectrum();
+        if(visibility_changed && g.mode==AnalysisMode::FFT)ensure_current_spectrum();
         sync_menu();
     }
     refresh_frf_channel_names();
@@ -594,6 +603,7 @@ bool record_settings_change(const SettingsSnapshot& before) {
 }
 
 void pop_undo() {
+    cancel_overview_snap();
     if (g_undo.empty()) return;
     UndoAction a = std::move(g_undo.back());
     g_undo.pop_back();
@@ -728,6 +738,7 @@ void pop_undo() {
 }
 
 void pop_redo() {
+    cancel_overview_snap();
     if (g_redo.empty()) return;
     UndoAction a = std::move(g_redo.back());
     g_redo.pop_back();

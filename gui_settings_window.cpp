@@ -15,6 +15,7 @@
 #include "gui_settings.hpp"
 #include "gui_render_data.hpp"
 #include "gui_window.hpp"
+#include "gui_resources.hpp"
 
 namespace gui {
 
@@ -26,6 +27,10 @@ LRESULT CALLBACK AxisLabelEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return CallWindowProcW(g_axis_label_edit_proc, hwnd, msg, wp, lp) | DLGC_WANTALLKEYS;
     }
     if (msg == WM_KEYDOWN && wp == VK_RETURN) {
+        if(GetDlgCtrlID(hwnd)==IDC_SET_MEMORY_EDIT) {
+            SendMessageW(GetParent(hwnd),WM_COMMAND,MAKEWPARAM(IDC_SET_MEMORY_APPLY,BN_CLICKED),0);
+            return 0;
+        }
         SetFocus(GetParent(hwnd));
         return 0;
     }
@@ -229,12 +234,19 @@ const wchar_t* settings_window_title() {
 
 void refresh_settings_controls() {
     if (!g.settings_wnd) return;
+    set_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_AUTO),g.resource_policy.automatic);
+    SetDlgItemTextW(g.settings_wnd,IDC_SET_MEMORY_EDIT,std::to_wstring(g.resource_policy.manual_mib).c_str());
+    EnableWindow(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_EDIT),!g.resource_policy.automatic);
+    EnableWindow(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_APPLY),!g.resource_policy.automatic);
+    const auto memory=resource_snapshot();
+    const auto limit=lvm::resource_limit(g.resource_policy,memory)/(1024*1024);
+    const auto occupied=memory.resident/(1024*1024);
+    const auto status=(g_str==&kEn ? L"Data budget: " : L"Бюджет данных: ")+std::to_wstring(limit)+
+        (g_str==&kEn ? L" MiB; document data: " : L" MiB; данные документов: ")+std::to_wstring(occupied)+L" MiB";
+    SetDlgItemTextW(g.settings_wnd,IDC_SET_MEMORY_STATUS,status.c_str());
     CheckRadioButton(g.settings_wnd, IDC_SET_LANG_RU, IDC_SET_LANG_EN, g_str == &kEn ? IDC_SET_LANG_EN : IDC_SET_LANG_RU);
     if (HWND theme = GetDlgItem(g.settings_wnd, IDW_THEME_LIGHT)) InvalidateRect(theme, nullptr, FALSE);
     if (HWND theme = GetDlgItem(g.settings_wnd, IDW_THEME_DARK)) InvalidateRect(theme, nullptr, FALSE);
-    if (HWND light = GetDlgItem(g.settings_wnd, IDW_LIGHT_MODE)) {
-        set_toggle_checked(light, g.light_mode);
-    }
     set_toggle_checked(GetDlgItem(g.settings_wnd, IDC_SET_GAP_MARKERS), g.show_gap_markers);
     if (HWND gap = GetDlgItem(g.settings_wnd, IDC_SET_GAP_MARKERS)) SetWindowTextW(gap, gap_markers_toggle_text());
     set_toggle_checked(GetDlgItem(g.settings_wnd, IDC_SET_STITCH_GAPS), g.stitch_time_gaps);
@@ -276,10 +288,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mk(L"BUTTON", g_str->lang_en, BS_OWNERDRAW, 144, 36, 110, 22, IDC_SET_LANG_EN);
             mk(L"BUTTON", g_str->theme_light, BS_OWNERDRAW, 264, 36, 120, 22, IDW_THEME_LIGHT);
             mk(L"BUTTON", g_str->theme_dark, BS_OWNERDRAW, 390, 36, 120, 22, IDW_THEME_DARK);
-            mkcheck(g_str->light_mode, 28, 64, 278, 28, IDW_LIGHT_MODE);
-            set_toggle_checked(GetDlgItem(hwnd, IDW_LIGHT_MODE), g.light_mode);
-            mkcheck(gap_markers_toggle_text(), 28, 98, 278, 28, IDC_SET_GAP_MARKERS);
-            mkcheck(stitch_gaps_toggle_text(), 28, 128, 360, 28, IDC_SET_STITCH_GAPS);
+            mkcheck(gap_markers_toggle_text(), 28, 70, 278, 28, IDC_SET_GAP_MARKERS);
+            mkcheck(stitch_gaps_toggle_text(), 28, 104, 360, 28, IDC_SET_STITCH_GAPS);
             // Keep coordinate names visibly separate from the general settings.
             mk(L"STATIC", en ? L"Signal" : L"Сигнал", SS_LEFT, 28, 180, 120, 20, 0);
             install_axis_label_edit(mk(L"EDIT", g.axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 176, 120, 24, IDC_SET_TIME_AXIS_X_EDIT));
@@ -290,6 +300,17 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mk(L"STATIC", en ? L"FRF" : L"АЧХ", SS_LEFT, 28, 236, 120, 20, 0);
             install_axis_label_edit(mk(L"EDIT", g.frf_axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 232, 120, 24, IDC_SET_FRF_AXIS_X_EDIT));
             install_axis_label_edit(mk(L"EDIT", g.frf_axis_y_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 276, 232, 120, 24, IDC_SET_FRF_AXIS_Y_EDIT));
+            mkcheck(en ? L"Data: Auto" : L"Данные: Auto",28,266,190,26,IDC_SET_MEMORY_AUTO);
+            set_toggle_checked(GetDlgItem(hwnd,IDC_SET_MEMORY_AUTO),g.resource_policy.automatic);
+            // Keep the budget separate from coordinate-name controls above.
+            mk(L"STATIC",L"MiB",SS_LEFT,234,270,42,20,0);
+            install_axis_label_edit(mk(L"EDIT",std::to_wstring(g.resource_policy.manual_mib).c_str(),
+                WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP,276,266,80,24,IDC_SET_MEMORY_EDIT));
+            SendDlgItemMessageW(hwnd,IDC_SET_MEMORY_EDIT,EM_SETLIMITTEXT,5,0);
+            mk(L"BUTTON",en ? L"Apply" : L"Применить",BS_OWNERDRAW | WS_TABSTOP,366,264,144,28,IDC_SET_MEMORY_APPLY);
+            mk(L"STATIC",L"",SS_LEFT,28,300,482,32,IDC_SET_MEMORY_STATUS);
+            EnableWindow(GetDlgItem(hwnd,IDC_SET_MEMORY_EDIT),!g.resource_policy.automatic);
+            EnableWindow(GetDlgItem(hwnd,IDC_SET_MEMORY_APPLY),!g.resource_policy.automatic);
             mk(L"BUTTON", en ? L"Hotkeys" : L"Горячие клавиши", BS_OWNERDRAW, 12, 342, 510, 188, IDC_SET_GROUP_HOTKEYS);
             mk(L"LISTBOX", L"", LBS_NOTIFY | WS_VSCROLL | WS_BORDER | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
                 24, 366, 240, 146, IDC_SET_HOTKEY_LIST);
@@ -307,7 +328,6 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             populate_hotkey_list(hwnd);
             load_selected_hotkey_controls(hwnd);
             CheckRadioButton(hwnd, IDC_SET_LANG_RU, IDC_SET_LANG_EN, g_str == &kEn ? IDC_SET_LANG_EN : IDC_SET_LANG_RU);
-            set_toggle_checked(GetDlgItem(hwnd, IDW_LIGHT_MODE), g.light_mode);
             set_toggle_checked(GetDlgItem(hwnd, IDC_SET_GAP_MARKERS), g.show_gap_markers);
             set_toggle_checked(GetDlgItem(hwnd, IDC_SET_STITCH_GAPS), g.stitch_time_gaps);
             enable_file_drop_support(hwnd);
@@ -319,19 +339,30 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!ctl && id) ctl = GetDlgItem(hwnd, id);
             auto checked = [&]() { return is_toggle_checked(ctl); };
             switch (id) {
+                case IDC_SET_MEMORY_AUTO:
+                    if(HIWORD(wp)==BN_CLICKED) {
+                        set_resource_policy(!g.resource_policy.automatic,g.resource_policy.manual_mib);
+                        refresh_settings_controls();
+                    }
+                    return 0;
+                case IDC_SET_MEMORY_APPLY:
+                    if(HIWORD(wp)==BN_CLICKED) {
+                        wchar_t value[16]{};GetDlgItemTextW(hwnd,IDC_SET_MEMORY_EDIT,value,16);
+                        wchar_t* end=nullptr;const auto mib=wcstoul(value,&end,10);
+                        if(!value[0] || !end || *end || mib>65536 ||
+                           !set_resource_policy(false,static_cast<unsigned>(mib))) {
+                            MessageBoxW(hwnd,g_str==&kEn ? L"Enter a data budget from 64 to 65536 MiB."
+                                : L"Введите бюджет данных от 64 до 65536 MiB.",settings_window_title(),MB_OK | MB_ICONINFORMATION);
+                        }
+                        refresh_settings_controls();
+                    }
+                    return 0;
                 case IDC_SET_LANG_RU:
                     if (HIWORD(wp) == BN_CLICKED && g_str != &kRu) { g_str = &kRu; save_runtime_settings(); rebuild_ui(); }
                     break;
                 case IDC_SET_LANG_EN:
                     if (HIWORD(wp) == BN_CLICKED && g_str != &kEn) { g_str = &kEn; save_runtime_settings(); rebuild_ui(); }
                     break;
-                case IDW_LIGHT_MODE:
-                    if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED) {
-                        HWND light = GetDlgItem(hwnd, IDW_LIGHT_MODE);
-                        toggle_checked_state(light);
-                        apply_light_mode(is_toggle_checked(light));
-                    }
-                    return 0;
                 case IDW_THEME_LIGHT:
                     if (HIWORD(wp) == BN_CLICKED) apply_theme_choice(&kLightTheme);
                     return 0;
@@ -497,7 +528,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return TRUE;
             }
-            if (is_settings_checkbox_id(ctl_id)) {
+            if (is_settings_checkbox_id(ctl_id) || ctl_id==IDC_SET_MEMORY_AUTO) {
                 const bool enabled = IsWindowEnabled(dis->hwndItem) != FALSE;
                 draw_themed_check_control(dis->hDC, dis->rcItem, txt,
                     is_toggle_checked(dis->hwndItem), pressed, enabled, false, false);

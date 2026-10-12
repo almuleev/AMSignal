@@ -4,6 +4,7 @@
 #include "gui_dialogs.hpp"
 #include "gui_ids.hpp"
 #include "gui_loading.hpp"
+#include "gui_source_export.hpp"
 #include "gui_documents.hpp"
 #include "gui_state.hpp"
 #include "gui_text.hpp"
@@ -20,6 +21,10 @@ std::wstring g_loading_text;
 
 bool g_loading_cancellable = false;
 
+static bool loading_owner_in_foreground() {
+    return g.main && GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) == g.main;
+}
+
 LRESULT CALLBACK LoadingProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_ERASEBKGND:
@@ -27,6 +32,7 @@ LRESULT CALLBACK LoadingProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COMMAND:
             if (LOWORD(wp) == IDC_LOADING_CANCEL && HIWORD(wp) == BN_CLICKED) {
                 request_async_load_cancel();
+                cancel_source_export();
                 return 0;
             }
             break;
@@ -63,8 +69,11 @@ LRESULT CALLBACK LoadingProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 void show_loading(const std::wstring& msg, bool cancellable) {
+    const bool owner_foreground = loading_owner_in_foreground();
     if (g_loading_wnd) { DestroyWindow(g_loading_wnd); g_loading_wnd = nullptr; }
     g_loading_cancel_btn = nullptr;
+    g_loading_cancellable = false;
+    if (!g.main || !IsWindow(g.main)) return;
     HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetWindowLongPtr(g.main, GWLP_HINSTANCE));
     std::wstring display = msg;
     for (std::size_t i = 0; i < display.size(); ++i) {
@@ -103,18 +112,21 @@ void show_loading(const std::wstring& msg, bool cancellable) {
     const int button_extra = cancellable ? 44 : 0;
     const int height = std::clamp(text_height + 42 + button_extra, 76, 164);
     g_loading_wnd = CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        WS_EX_TOOLWINDOW,
         L"LvmLoadingOverlay", L"",
-        WS_POPUP | WS_VISIBLE,
+        WS_POPUP,
         0, 0, width, height, g.main, nullptr, inst, nullptr);
     if (!g_loading_wnd) return;
-    RECT mr, wr;
+    RECT mr{}, wr{};
     GetWindowRect(g.main, &mr);
     GetWindowRect(g_loading_wnd, &wr);
-    SetWindowPos(g_loading_wnd, HWND_TOPMOST,
+    const UINT position_flags = SWP_NOSIZE |
+        (IsWindowVisible(g.main) ? SWP_SHOWWINDOW : 0) |
+        (owner_foreground ? 0 : SWP_NOACTIVATE | SWP_NOZORDER);
+    SetWindowPos(g_loading_wnd, HWND_TOP,
                  mr.left + ((mr.right - mr.left) - (wr.right - wr.left)) / 2,
                  mr.top + ((mr.bottom - mr.top) - (wr.bottom - wr.top)) / 2,
-                 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+                 0, 0, position_flags);
     if (cancellable) {
         g_loading_cancel_btn = CreateWindowExW(
             0, L"BUTTON", speed_prompt_cancel_text(),
@@ -133,11 +145,12 @@ void show_loading(const std::wstring& msg, bool cancellable) {
 }
 
 void hide_loading() {
+    const bool owner_foreground = loading_owner_in_foreground();
     g_loading_cancel_btn = nullptr;
     g_loading_cancellable = false;
     if (g_loading_wnd) { DestroyWindow(g_loading_wnd); g_loading_wnd = nullptr; }
     if (g.main && IsWindow(g.main)) EnableWindow(g.main, TRUE);
-    raise_main_window();
+    if (owner_foreground && IsWindowVisible(g.main) && !IsIconic(g.main)) raise_main_window();
 }
 
 LRESULT CALLBACK drop_forward_subclass_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,

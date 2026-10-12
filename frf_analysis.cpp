@@ -77,7 +77,8 @@ void finish_frf(FrfResult& r, const std::vector<long double>& xx,
 }
 
 FrfBatchResult compute_shared_frf(const PreparedFrf& input,
-                                 const FrfOptions& options, const std::atomic<bool>* cancel) {
+                                 const FrfOptions& options, const std::atomic<bool>* cancel,
+                                 const AnalysisResources& resources) {
     const auto& s=input.metadata;
     FrfBatchResult batch; batch.options=options;
     const std::size_t n=s.source_count, response_count=input.response_errors.size();
@@ -99,16 +100,31 @@ FrfBatchResult compute_shared_frf(const PreparedFrf& input,
     // All possible caller/helper plans, accumulations, results, window, raw tile
     // and transformed frames. Auto/Direct never silently change the FFT length.
     const long double io_block=input.memory ? 0 : 4096.0L*(response_count+1)*8;
-    const long double fixed=fft_cached_plan_bytes() + io_block + L*8.0L + bins*(16.0L+response_count*100.0L);
+    const long double fixed=fft_cached_plan_bytes() + 1024.0L*1024 + io_block + L*8.0L + bins*(16.0L+response_count*100.0L);
     const long double frame_bytes=static_cast<long double>(L)*(response_count+1)*24.0L;
     std::size_t fft_m=1;
     if(error==FrfError::None && (L & (L-1))!=0)while(fft_m<2*L-1)fft_m*=2;
     const long double scratch=(L & (L-1)) ? (L+fft_m)*32.0L : 0;
-    if(error==FrfError::None && fixed+frame_bytes+scratch>analysis_memory_budget)error=FrfError::ResourceLimit;
     std::size_t tile_capacity=1;
-    if(error==FrfError::None)tile_capacity=std::max<std::size_t>(1,std::min<std::size_t>(8,
-        static_cast<std::size_t>(std::min(16.0L*1024*1024,analysis_memory_budget-fixed-scratch)/frame_bytes)));
-    if(error==FrfError::None && (n-L)/hop+1<7)tile_capacity=1;
+    std::size_t participants=1;
+    const auto cap=std::min(analysis_memory_budget,resources.memory_bytes);
+    while(error==FrfError::None) {
+        check_cancel(cancel);
+        const auto available=resources.budget ? std::min<std::uint64_t>(cap,resources.budget->available()) : cap;
+        if(fixed+frame_bytes+scratch>available) {error=FrfError::ResourceLimit;break;}
+        tile_capacity=std::max<std::size_t>(1,std::min<std::size_t>(8,
+            static_cast<std::size_t>(std::min(16.0L*1024*1024,available-fixed-scratch)/frame_bytes)));
+        const auto segments=(n-L)/hop+1;
+        if(segments<7)tile_capacity=1;
+        const auto hardware=std::thread::hardware_concurrency();
+        participants=segments>=7 && L>=256 ? std::min({tile_capacity,std::size_t(4),
+            std::size_t(hardware ? hardware : 1),std::max<std::size_t>(1,resources.max_participants)}) : 1;
+        while(participants>1 && fixed+tile_capacity*frame_bytes+participants*scratch>available)--participants;
+        if(!resources.budget)break;
+        const auto required=static_cast<std::uint64_t>(std::ceil(fixed+tile_capacity*frame_bytes+participants*scratch));
+        batch.memory_reservation=resources.budget->reserve(required);
+        if(batch.memory_reservation)break;
+    }
     std::size_t active=0;
     for (std::size_t c=0;c<response_count;++c) {
         auto& r=batch.responses[c]; r.options=options;
@@ -135,9 +151,6 @@ FrfBatchResult compute_shared_frf(const PreparedFrf& input,
     std::vector<std::vector<double>> raw;
     const auto segments=(n-L)/hop+1;
     std::size_t tile_base=0, tile_used=0;
-    const auto hardware=std::thread::hardware_concurrency();
-    std::size_t participants=segments>=7 && L>=256 ? std::min<std::size_t>(4,hardware ? hardware : 1) : 1;
-    while(participants>1 && fixed+tile_capacity*frame_bytes+participants*scratch>analysis_memory_budget)--participants;
     for (std::size_t at=0; n-at>=L; at+=hop) {
         check_cancel(cancel);
         const std::size_t segment=at/hop;
@@ -223,7 +236,7 @@ const char* frf_error_text(FrfError e) {
         case FrfError::InvalidOptions: return "Invalid options: H1 needs an even segment length >= 4, or Auto.";
         case FrfError::WeakReference: return "The reference has no usable AC excitation.";
         case FrfError::Overflow: return "FRF exceeded numeric or sample-count limits.";
-        case FrfError::ResourceLimit: return "FRF resources are insufficient. Check scratch disk space or set a smaller explicit H1 segment length.";
+        case FrfError::ResourceLimit: return "FRF resources are insufficient. Check the data budget and scratch disk space, or set a smaller explicit H1 segment length.";
         case FrfError::SourceChanged: return "The source file changed. Reopen the recording before calculating FRF.";
     }
     return "FRF calculation failed.";
@@ -382,8 +395,9 @@ const FrfResult& FrfBatchResult::common() const {
 FrfBatchResult analyze_frf_batch(FrfBatchInput input, const FrfOptions& options, const std::atomic<bool>* cancel) {
     return compute_prepared_frf(*prepare_frf_batch(std::move(input),cancel),options,cancel);
 }
-FrfBatchResult compute_prepared_frf(const PreparedFrf& input,const FrfOptions& options,const std::atomic<bool>* cancel) {
+FrfBatchResult compute_prepared_frf(const PreparedFrf& input,const FrfOptions& options,const std::atomic<bool>* cancel,
+                                  const AnalysisResources& resources) {
     check_cancel(cancel);
-    return compute_shared_frf(input,options,cancel);
+    return compute_shared_frf(input,options,cancel,resources);
 }
 } // namespace lvm

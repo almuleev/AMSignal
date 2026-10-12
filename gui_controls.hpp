@@ -29,7 +29,6 @@ bool is_settings_hotkey_modifier_id(int id);
 
 bool is_settings_checkbox_id(int id);
 
-bool is_welcome_checkbox_id(int id);
 
 bool uses_manual_toggle_state(HWND hwnd);
 

@@ -1,5 +1,7 @@
 #pragma once
 #include "gui_platform.hpp"
+#include "resource_budget.hpp"
+#include "recording_source.hpp"
 
 namespace gui {
 
@@ -14,9 +16,14 @@ struct AsyncScanResult {
     double range_end = 0.0;
     std::string error;
     std::shared_ptr<lvm::ScanIndex> index;
+    bool index_from_disk_cache=false;
+    lvm::Dataset source_metadata;
+    std::uint64_t source_rows=0;
 };
 
 struct AsyncLoadResult {
+    // Declared before ds, so samples are destroyed before admission is released.
+    std::shared_ptr<lvm::MemoryBudget::Reservation> memory_reservation;
     unsigned long long token = 0;
     std::wstring path;
     lvm::Dataset ds;
@@ -37,18 +44,27 @@ void request_async_load_cancel();
 // Registers the per-user Windows association for AMSignal project files.
 void register_project_file_association();
 
-void apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_channels,
+bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_channels,
                           bool requested_time_window, double cached_global_gap_step,
-                          bool cached_global_gap_step_ready);
+                          bool cached_global_gap_step_ready,
+                          std::optional<lvm::RecordingStamp> expected_stamp = {});
 
 bool start_async_scan_task(const std::wstring& wpath);
+
+// Publishes a bounded metadata snapshot and opens the full source overview.
+bool apply_scanned_recording(AsyncScanResult& result);
+
+// Per-load display allowance; reserves headroom for other documents and processing.
+std::size_t display_load_memory_budget(std::uint64_t available_physical,
+                                     std::uint64_t available_commit);
 
 bool start_async_load_task(const std::wstring& wpath, const double* fragment_start = nullptr,
                            const double* fragment_end = nullptr, bool hide_channels = false);
 
-bool prompt_and_start_light_mode_load(const std::wstring& wpath, double range_start, double range_end);
-
 bool load_path_interactive(const std::wstring& wpath);
+
+// Recovery after resident admission failure: open the complete bounded source.
+bool retry_load_as_source(AsyncLoadResult& result);
 
 void open_file();
 

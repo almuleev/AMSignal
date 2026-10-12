@@ -390,8 +390,9 @@ static bool is_frequency_data(const std::vector<std::string>& labels, const std:
 }
 
 bool scan_time_bounds(const std::filesystem::path& path, double& out_start, double& out_end, std::string& error,
-                      const std::atomic<bool>* cancel_flag, ScanIndex* out_index) {
+                      const std::atomic<bool>* cancel_flag, ScanIndex* out_index,std::size_t max_index_bytes) {
     if (out_index) {
+        if(out_index->memory_reservation){error="Cannot overwrite an admitted scan index.";return false;}
         *out_index = ScanIndex{};
         std::error_code ec;
         out_index->file_size = std::filesystem::file_size(path, ec);
@@ -426,6 +427,19 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
     int header_count = 0;
     bool section_metadata_seen = false;
     std::vector<std::string> column_labels;
+    const auto string_bytes=[](const auto& labels) {
+        std::uint64_t bytes=labels.capacity()*sizeof(std::string);
+        for(const auto& text:labels)bytes=saturated_add(bytes,text.capacity()+1);
+        return bytes;
+    };
+    const auto within_index_budget=[&](std::size_t extra=0) {
+        if(!max_index_bytes || !out_index)return true;
+        // The scanner retains labels separately until the final move. Capacity
+        // growth and the incoming comment/checkpoint are checked before append.
+        const auto estimate=saturated_add(saturated_add(out_index->memory_bytes(),string_bytes(column_labels)),extra);
+        if(estimate<=max_index_bytes)return true;
+        error="Scan index exceeds the memory allowance.";return false;
+    };
     std::vector<std::string> cells;
     cells.reserve(64);
     std::size_t numeric_row_index = 0;
@@ -442,7 +456,13 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
         const std::string& line = raw_line;
         if (line.empty()) continue;
         if (starts_with(line, "#")) {
-            if (out_index) out_index->export_comments.push_back(strip(line.substr(1)));
+            if(out_index) {
+                const auto growth=out_index->export_comments.size()==out_index->export_comments.capacity() ?
+                    (out_index->export_comments.capacity()+1)*sizeof(std::string) : 0;
+                if(!within_index_budget(saturated_add(growth,line.size()+1)))return false;
+                out_index->export_comments.push_back(strip(line.substr(1)));
+                if(!within_index_budget())return false;
+            }
             continue;
         }
         if (!csv_mode && starts_with(line, "***End_of_Header***")) {
@@ -458,7 +478,9 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
             if (row.numeric_count == 0) {
                 split_cells_into(line, delimiter, normalize_decimal_commas, cells);
                 if (cells.size() > 1) {
+                    if(max_index_bytes && string_bytes(cells)>max_index_bytes){error="Scan index labels exceed the memory allowance.";return false;}
                     column_labels = cells;
+                    if(!within_index_budget())return false;
                     continue;
                 }
             }
@@ -472,7 +494,9 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
             if (row.numeric_count == 0) {
                 split_cells_into(line, delimiter, normalize_decimal_commas, cells);
                 if (cells.size() > 1) {
+                    if(max_index_bytes && string_bytes(cells)>max_index_bytes){error="Scan index labels exceed the memory allowance.";return false;}
                     column_labels = cells;
+                    if(!within_index_budget())return false;
                     continue;
                 }
             }
@@ -492,9 +516,15 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
 
         ++numeric_row_index;
         const std::uint64_t next_offset = current_stream_offset(in);
+        if(out_index && (numeric_row_index==1 || numeric_row_index%kScanCheckpointStride==0)) {
+            const auto growth=out_index->checkpoints.size()==out_index->checkpoints.capacity() ?
+                (out_index->checkpoints.capacity()+1)*sizeof(ScanIndexCheckpoint) : 0;
+            if(!within_index_budget(growth))return false;
+        }
         maybe_add_scan_checkpoint(out_index, numeric_row_index, next_offset, adjusted_time, prev_raw_time,
                                   prev_adjusted_time, time_offset, fallback_step, have_time,
                                   have_section_anchor, section_anchor_seconds, active_section);
+        if(out_index && (numeric_row_index==1 || numeric_row_index%kScanCheckpointStride==0) && !within_index_budget())return false;
     }
 
     if (in.bad()) { error = "Error reading file or incomplete CSV record."; return false; }
@@ -708,10 +738,17 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
 
         if (!keep_row) continue;
         if (options.consume_block) {
+            if(options.stream_all_columns && options.max_resident_bytes &&
+               (static_cast<long double>(parsed.size())+1)*std::max<std::size_t>(1,options.block_rows)*16>options.max_resident_bytes) {
+                ds.resident_limit_exceeded=true;ds.error="Source metadata block exceeds the memory budget.";return ds;
+            }
+            if(options.stream_all_columns && parsed.size()>stream_channels.size())
+                stream_channels.resize(parsed.size(),std::vector<double>(stream_time.size(),nan_value));
             stream_time.push_back(parsed[0]);
-            for (std::size_t c=0;c<options.stream_columns.size();++c) {
-                const auto column=options.stream_columns[c];
-                stream_channels[c].push_back(column<parsed.size() ? parsed[column] : nan_value);
+            for (std::size_t c=0;c<stream_channels.size();++c) {
+                const auto column=options.stream_all_columns ? c : options.stream_columns[c];
+                stream_channels[c].push_back(options.stream_all_columns && !c ? raw_time :
+                    column<parsed.size() ? parsed[column] : nan_value);
             }
             ++row_count;
             if (stream_time.size()>=std::max<std::size_t>(1,options.block_rows)) flush_stream();
@@ -723,6 +760,7 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         if(options.max_resident_bytes &&
            static_cast<long double>(row_count+1)*(std::max<std::size_t>(columns.size(),part_count)+1)*16>
                options.max_resident_bytes) {
+            ds.resident_limit_exceeded=true;
             ds.error="Selected data exceed the memory budget. Use Light Mode and a smaller display fragment; FRF can analyze the entire recording.";
             return ds;
         }
@@ -758,6 +796,16 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
     ds.stats.max_columns = static_cast<int>(columns.size());
     if (options.consume_block) {
         flush_stream();
+        if(options.stream_all_columns) {
+            ds.stats.max_columns=static_cast<int>(stream_channels.size());
+            for(std::size_t c=1;c<stream_channels.size();++c) {
+                bool generated=false;
+                ds.names.push_back(sanitize_channel_label(c<column_labels.size() ? column_labels[c] : "",c-1,generated));
+                ds.generated_names.push_back(generated);
+                ds.source_columns.push_back(c);
+            }
+            ds.frequency_axis=is_frequency_data(column_labels,ds.export_comments);
+        }
         ds.ok=row_count>0;
         if (!ds.ok) ds.error="No data found in the selected time range.";
         return ds;

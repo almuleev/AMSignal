@@ -85,7 +85,7 @@ void set_status() {
     } else {
         swprintf(buf, 512,
                  g_str->st_time,
-                 g.ds.channel_count(), g.ds.rows(), g.win_start, g.win_end);
+                 g.ds.channel_count(), static_cast<std::size_t>(g.overview.render_enabled ? g.recording_rows : g.ds.rows()), g.win_start, g.win_end);
         s = buf;
         s += g.auto_y ? g_str->st_yauto : g_str->st_yfix;
         if (g.visual_smooth) s += g_str->st_spline;
@@ -99,10 +99,10 @@ void set_status() {
                 s += fft_window_status(fft_start, fft_end, from_selection);
             }
             if (g.spec_valid) s += spectrum_sampling_status(g.spec);
-        } else if (has_fft_window()) {
-            s += fft_window_status(g.fft_window_start, g.fft_window_end, true);
+        } else if (!g.ds.frequency_axis) {
+            if(current_fft_source_window(fft_start,fft_end,from_selection))s+=fft_window_status(fft_start,fft_end,from_selection);
         }
-        if (g.current_file_partial) s += g_str->light_mode_status;
+        if (g.current_file_partial) s += g_str==&kEn ? L"   |   Source interval" : L"   |   Участок источника";
     }
     if (has_data()) {
         std::size_t nlines = 0;

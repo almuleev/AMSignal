@@ -73,9 +73,10 @@ handled separately by filling with the channel mean, without shifting channels.
 
 ### Operational notes
 
-- Light Mode includes every sample in its min/max ranges, preserving single-sample impulses.
-- Light Mode computes FFT in the background for requested channels. Hiding and restoring a channel from the current cache does not restart FFT. Showing an uncached channel schedules a new job for visible channels; the cache holds the latest job, not every previously viewed channel. Changing the source interval or processing requires recalculation.
-- Settings include “Stitch time gaps in the graph”. It compresses only the displayed time axis and navigation; source data, measurements, and export retain real timestamps.
+- Large recordings open automatically through a complete disk overview; there is no separate Light Mode. Peaks are preserved and Snap reads original samples.
+- Analysis → Entire recording / Interval / Use visible interval defines one FFT/FRF area independently of zoom. Large FFTs use temporary disk storage while preserving N and the frequency grid. Formulas/filters, streaming CSV/TXT/LVM and portable projects read the original source.
+- Settings provide Auto or manual data admission (64…65536 MiB), constrained by available RAM/commit. This is not a process-wide memory cap. Distant filtered intervals require prefix warm-up; disk-source time stitching is currently unavailable. See [test scope and limits](docs/LARGE_RECORDINGS_PLAN.md).
+- For resident recordings, “Stitch time gaps in the graph” compresses only the displayed time axis and navigation; source data, measurements, and export retain real timestamps. Stitching is currently unavailable for disk sources.
 - Filter sliders apply on release and create one undo action, including affected measurements.
 - History retains up to 128 actions and 64 MiB of payload. Old entries are removed at the limit; an action larger than the entire budget clears history.
 - `.AMSig` projects restore their raw samples and saved AMSignal settings. After the first run, Windows opens this per-user associated extension in AMSignal on double-click. CSV/TXT files with a `Frequency` column open directly as stored spectra, without another FFT. They contain no time-domain signal.

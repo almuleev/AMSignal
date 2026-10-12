@@ -1,4 +1,5 @@
 #pragma once
+#include "analysis_resources.hpp"
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -9,7 +10,6 @@
 #include <vector>
 
 namespace lvm {
-inline constexpr std::size_t analysis_memory_budget = 384ULL * 1024 * 1024;
 // Shared by Spectrum and FRF. Synchronous admission; contention never waits.
 class AnalysisExecutor {
     std::mutex admission_, mutex_;

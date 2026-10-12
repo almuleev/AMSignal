@@ -195,7 +195,7 @@ bool prompt_numeric_value(const wchar_t* title, const wchar_t* label,
                           const wchar_t* invalid_text, double initial_value,
                           bool positive_only, double& out_value);
 
-bool prompt_light_mode_window(double range_start, double range_end, double& out_start, double& out_end);
+bool prompt_analysis_window(double range_start, double range_end, double& out_start, double& out_end);
 
 bool prompt_export_options(ExportOptions& out_options);
 

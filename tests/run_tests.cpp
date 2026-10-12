@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "analysis.hpp"
+#include "disk_spectrum.hpp"
 #include "analysis_executor.hpp"
 #include "fft.hpp"
 #include "frf_analysis.hpp"
@@ -25,9 +26,13 @@
 #include "gap_details.hpp"
 #include "formula_engine.hpp"
 #include "lvm_parser.hpp"
+#include "recording_source.hpp"
+#include "resource_budget.hpp"
 #include "data_io.hpp"
 #include "minmax_index.hpp"
 #include <limits>
+void test_recording_overview(void (*check)(bool,const std::string&));
+void test_recording_cache(void (*check)(bool,const std::string&));
 
 namespace {
 
@@ -414,6 +419,172 @@ void test_scan_and_window_load() {
     check_near(ds.time[0], 0.2, 1e-12, "windowed load first time");
     check_near(ds.time[1], 0.3, 1e-12, "windowed load second time");
     check(ds.channel_count() == 2, "windowed load channel count");
+    options.use_time_window=false;
+    options.max_resident_bytes=128;
+    ds=lvm::read_lvm_file(temp.path,options);
+    check(!ds.ok && ds.resident_limit_exceeded,"display budget failure has a distinct recovery status");
+    check(ds.rows()==0 && ds.channels.empty(),"display budget failure does not publish partial samples");
+    options.use_time_window=true;options.time_start=0.15;options.time_end=0.25;
+    ds=lvm::read_lvm_file(temp.path,options);
+    check(ds.ok && !ds.resident_limit_exceeded && ds.rows()==1,"smaller display fragment succeeds within the same memory budget");
+    ds=lvm::read_lvm_file(temp.path+".missing",options);
+    check(!ds.ok && !ds.resident_limit_exceeded,"file access error is not a display budget retry");
+}
+
+void test_recording_source() {
+    std::printf("test_recording_source\n");
+    lvm::TimeRange resolved{-1,-1};
+    check(lvm::AnalysisRange::entire().resolve({0,100},resolved) && resolved.start==0 && resolved.end==100,
+          "whole analysis resolves against the recording, not a display fragment");
+    check(lvm::AnalysisRange::selected(50,75).resolve({0,100},resolved) && resolved.start==50 && resolved.end==75,
+          "an independent analysis interval can be outside the resident viewport");
+    check(!lvm::AnalysisRange::selected(75,50).resolve({0,100},resolved) &&
+          !lvm::AnalysisRange::selected(-1,50).resolve({0,100},resolved) &&
+          !lvm::AnalysisRange::selected(0,101).resolve({0,100},resolved) &&
+          !lvm::AnalysisRange::selected(0,std::numeric_limits<double>::infinity()).resolve({0,100},resolved),
+          "invalid ranges are rejected without silent clipping");
+    check(lvm::AnalysisRange::selected(50,50).resolve({0,100},resolved),
+          "one-timestamp selection is readable; the numerical kernel decides minimum length");
+
+    // Duplicate physical time columns and a section reset exercise the mapping
+    // and timeline semantics of the production reader.
+    const TempFile file("recording-source.lvm",
+        "***End_of_Header***\nTime\tA\tTime\tB\n"
+        "0\t10\t0\t20\n1\t11\t1\t21\n2\t12\t2\t22\n"
+        "***End_of_Header***\nTime\tA\tTime\tB\n"
+        "0\t13\t0\t23\n1\t14\t1\t24\n2\t15\t2\t25\n");
+    auto data=lvm::read_lvm_file(file.path);
+    lvm::drop_duplicate_time_channels(data,data.raw_time);
+    lvm::make_monotonic(data.time);
+    check(data.ok && data.channel_count()==2 && data.source_columns==std::vector<std::size_t>{1,3},
+          "recording source fixture preserves physical columns after dropping duplicate time");
+    auto index=std::make_shared<lvm::ScanIndex>();double low=0,high=0;std::string error;
+    check(lvm::scan_time_bounds(file.path,low,high,error,nullptr,index.get()),"recording source index is built");
+    const auto stamp=lvm::RecordingStamp{index->file_size,index->modified};
+    auto disk=lvm::RecordingSource::from_file(file.path,{-1,-1},data.source_columns,index,stamp);
+    auto memory=lvm::RecordingSource::from_memory(std::move(data));
+    index.reset(); // File source retains its index after the caller/document dies.
+    check(disk->file_backed() && !disk->sample_count() && !memory->file_backed() && memory->sample_count()==6,
+          "file size and sample count remain distinct and memory source owns the moved data");
+    check(disk->bounds().start==memory->bounds().start && disk->bounds().end==memory->bounds().end,
+          "file and memory sources expose identical recording bounds");
+
+    lvm::RecordingReadRequest request;request.channels={1,0};request.range=lvm::AnalysisRange::selected(1,4);
+    for(std::size_t block:{1u,2u,317u}) {
+        request.block_rows=block;
+        std::vector<double> file_time, memory_time;
+        std::vector<std::vector<double>> file_values(2),memory_values(2);
+        bool bounded=true;
+        const auto collect=[&](auto& times,auto& values) {
+            return [&](const auto& t,const auto& v) {
+                bounded &= t.size()<=block && v.size()==2;
+                times.insert(times.end(),t.begin(),t.end());
+                for(std::size_t c=0;c<v.size();++c)values[c].insert(values[c].end(),v[c].begin(),v[c].end());
+            };
+        };
+        const auto n=disk->replay(request,collect(file_time,file_values));
+        const auto m=memory->replay(request,collect(memory_time,memory_values));
+        check(n==4 && m==n && file_time==memory_time && file_values==memory_values &&
+              file_values[0]==std::vector<double>{21,22,23,24} && bounded,
+              "block reads preserve section normalization, inclusive selection and requested channel order");
+    }
+    const auto fails=[&](lvm::RecordingError expected,const auto& action) {
+        try {action();}catch(const lvm::RecordingFailure& e){return e.error==expected;}catch(...){return false;}
+        return false;
+    };
+    std::size_t calls=0;
+    const lvm::RecordingBlockConsumer discard=[&](const auto&,const auto&){++calls;};
+    request.range=lvm::AnalysisRange::entire();request.channels.clear();request.block_rows=65536;request.block_bytes=32;
+    std::size_t maximum_rows=0;
+    check(disk->replay(request,[&](const auto& t,const auto& v){maximum_rows=std::max(maximum_rows,t.size());check(v.empty(),"timeline pass has no channel arrays");})==6 && maximum_rows<=2,
+          "block allowance bounds a timeline-only read independently of requested rows");
+    request.channels={0,1};request.block_bytes=47;
+    check(fails(lvm::RecordingError::ResourceLimit,[&]{disk->replay(request,discard);}) && calls==0,
+          "insufficient block memory fails before reading or delivering data");
+    request.block_bytes=0;
+    check(fails(lvm::RecordingError::InvalidRequest,[&]{disk->replay(request,discard);}),
+          "zero block budget never enables unbounded reading");
+    request.block_bytes=1024;request.channels={2};
+    check(fails(lvm::RecordingError::InvalidRequest,[&]{disk->replay(request,discard);}),"invalid channel is rejected before delivery");
+    request.channels={0};request.range=lvm::AnalysisRange::selected(-1,3);
+    check(fails(lvm::RecordingError::InvalidRequest,[&]{memory->replay(request,discard);}),"memory and file readers share range validation");
+    request.range=lvm::AnalysisRange::selected(.25,.75);
+    check(fails(lvm::RecordingError::ReadFailure,[&]{disk->replay(request,discard);}) &&
+          fails(lvm::RecordingError::ReadFailure,[&]{memory->replay(request,discard);}),"empty sample intervals have the same file/memory status");
+    request.range=lvm::AnalysisRange::entire();request.block_rows=1;
+    std::atomic<bool> cancel{true};calls=0;
+    check(fails(lvm::RecordingError::Cancelled,[&]{disk->replay(request,discard,&cancel);}) && calls==0,
+          "pre-cancelled replay does not deliver blocks");
+    for(const auto& source:{disk,memory}) {
+        cancel=false;calls=0;
+        check(fails(lvm::RecordingError::Cancelled,[&]{source->replay(request,[&](const auto&,const auto&){++calls;cancel=true;},&cancel);}) && calls==1,
+              "cancellation during consumption stops both source kinds at the block boundary");
+    }
+    std::size_t concurrent_count=0;
+    auto independent=std::async(std::launch::async,[disk,request]{return disk->replay(request,[](const auto&,const auto&){});});
+    concurrent_count=disk->replay(request,[](const auto&,const auto&){});
+    check(independent.get()==6 && concurrent_count==6,"concurrent replays use independent readers and buffers");
+    bool consumer_error=false;
+    try {memory->replay(request,[](const auto&,const auto&){throw std::runtime_error("consumer sentinel");});}
+    catch(const std::runtime_error& e){consumer_error=std::string(e.what())=="consumer sentinel";}
+    check(consumer_error,"consumer failures retain their original meaning");
+    calls=0;
+    check(fails(lvm::RecordingError::SourceChanged,[&]{disk->replay(request,[&](const auto&,const auto&){
+        ++calls;std::ofstream append(file.path,std::ios::app);append<<"# changed during read\n";
+    });}) && calls==1,"changed source aborts during reading without another block");
+    calls=0;
+    check(fails(lvm::RecordingError::SourceChanged,[&]{disk->replay(request,discard);}) && calls==0,
+          "stale descriptors cannot replay a different file revision");
+    check(fails(lvm::RecordingError::SourceChanged,[&]{lvm::RecordingSource::from_file(file.path,{0,5},{1,3},{},stamp);}),
+          "source construction checks the expected revision even without an index");
+    check(memory->replay(request,[](const auto&,const auto&){})==6,"owned memory source survives changes to its original file");
+    lvm::Dataset invalid;invalid.ok=true;invalid.time={1,0};invalid.channels={{1,2}};
+    check(fails(lvm::RecordingError::InvalidRequest,[&]{lvm::RecordingSource::from_memory(std::move(invalid));}),
+          "unprepared memory data is rejected instead of silently sorting or changing it");
+}
+
+void test_recording_indexed_range() {
+    std::printf("test_recording_indexed_range\n");
+    const TempFile file("recording-indexed.lvm", "");
+    {
+        std::ofstream out(file.path);out.precision(17);
+        for(std::size_t i=0;i<70000;++i) {
+            if(i%4096==0)out<<"***End_of_Header***\nTime\tA\tTime\tB\n";
+            const double raw_time=(i%4096)/1024.;
+            out<<raw_time<<'\t'<<i<<'\t'<<raw_time<<'\t';
+            if(i==63000)out<<"nan";
+            else if(i==65000)out<<"inf";
+            else out<<3*i;
+            out<<'\n';
+        }
+    }
+    auto index=std::make_shared<lvm::ScanIndex>();double first=0,last=0;std::string error;
+    check(lvm::scan_time_bounds(file.path,first,last,error,nullptr,index.get()) && !index->checkpoints.empty(),
+          "large source fixture creates resumable parser checkpoints");
+    lvm::LoadOptions full;full.use_time_window=true;full.time_start=first;full.time_end=last;
+    auto expected=lvm::read_lvm_file(file.path,full);
+    lvm::drop_duplicate_time_channels(expected,expected.raw_time);
+    check(expected.ok && expected.rows()==70000 && expected.channel_count()==2,
+          "non-indexed control includes every sample across section resets");
+    const auto source=lvm::RecordingSource::from_file(file.path,{0,0},expected.source_columns,index);
+    lvm::RecordingReadRequest request;request.channels={1,0};request.block_rows=317;request.block_bytes=4096;
+    request.range=lvm::AnalysisRange::selected(expected.time[60000],expected.time[68000]);
+    std::size_t position=60000,blocks=0;bool identical=true,bounded=true;
+    const auto count=source->replay(request,[&](const auto& time,const auto& values) {
+        ++blocks;
+        std::size_t capacities=time.capacity()*sizeof(double);
+        for(const auto& column:values)capacities+=column.capacity()*sizeof(double);
+        bounded &= capacities<=request.block_bytes && time.size()<=317;
+        for(std::size_t i=0;i<time.size();++i,++position) {
+            if(position>=expected.rows()) {identical=false;break;}
+            identical &= time[i]==expected.time[position] && values[1][i]==expected.channels[0][position];
+            const auto a=values[0][i],b=expected.channels[1][position];
+            identical &= a==b || (std::isnan(a) && std::isnan(b));
+        }
+    });
+    check(count==8001 && position==68001 && identical,
+          "indexed range outside the display preserves resets, channels, NaN and Inf exactly");
+    check(blocks>1 && bounded,"actual parser sample capacities stay within the requested block allowance");
 }
 
 void test_data_integrity_regressions() {
@@ -1266,9 +1437,280 @@ void test_fft_channel_pool() {
     check(!worker.take_result(),"terminal shutdown joins work, clears results and ignores new submissions");
 }
 
+void test_analysis_resources() {
+    constexpr std::size_t mib=1024*1024;
+    const auto equal=[](double a,double b){return a==b || (std::isnan(a) && std::isnan(b));};
+    const auto arrays_equal=[&](const auto& a,const auto& b) {
+        if(a.size()!=b.size())return false;
+        for(std::size_t i=0;i<a.size();++i)if(!equal(a[i],b[i]))return false;
+        return true;
+    };
+    for(auto n:{std::size_t(4096),std::size_t(65536),std::size_t(337132)})for(auto count:{1,7}) {
+        lvm::Dataset data;data.ok=true;data.channels.resize(count);
+        for(int c=0;c<count;++c)data.names.push_back("response"+std::to_string(c));
+        for(std::size_t i=0;i<n;++i) {
+            data.time.push_back(i/1024.0);
+            for(int c=0;c<count;++c)data.channels[c].push_back(std::sin(.03125*i)*(c+1)+.1*std::cos(.125*i));
+        }
+        const auto control=lvm::compute_spectrum(data,0);
+        lvm::AnalysisResources resources;resources.max_participants=1;
+        resources.budget=std::make_shared<lvm::MemoryBudget>();resources.budget->configure(384*mib,0,384*mib);
+        auto actual=lvm::compute_spectrum(data,0,nullptr,resources);
+        check(control.ok && actual.ok && actual.freqs==control.freqs && actual.amp==control.amp &&
+              actual.n==control.n && actual.sample_dt==control.sample_dt && actual.gaps_ignored==control.gaps_ignored &&
+              actual.resampled==control.resampled,"budgeted sequential FFT exactly matches the shared executor path");
+        std::vector<std::complex<double>> signal(n);long double sum=0;
+        for(std::size_t i=0;i<n;++i){signal[i]=data.channels[0][i];sum+=data.channels[0][i];}
+        const double mean=sum/n;for(auto& z:signal)z-=mean;
+        const auto expected=lvm::dft(signal);
+        bool exact=actual.ok;
+        for(std::size_t k=0;k<=n/2 && exact;++k)
+            exact=actual.amp[0][k]==((k==0 || (n%2==0 && k==n/2)) ? 1.0/n : 2.0/n)*std::abs(expected[k]);
+        check(exact,"in-place radix-2 and arbitrary-length FFT retain the previous DFT amplitudes bit for bit");
+        check(actual.memory_reservation && resources.budget->reserved()>0,"FFT output retains its admission reservation");
+        actual={};check(resources.budget->reserved()==0,"discarding FFT output frees its reservation");
+        resources.memory_bytes=1;
+        const auto denied=lvm::compute_spectrum(data,0,nullptr,resources);
+        check(!denied.ok && denied.amp.empty() && denied.error.find("resources")!=std::string::npos,
+              "FFT refuses insufficient serial workspace without reducing N");
+    }
+    for(auto n:{std::size_t(4096),std::size_t(337132)})for(auto count:{1,7})for(bool mean:{false,true}) {
+        lvm::FrfBatchInput data;data.references.resize(2);data.responses.resize(count);
+        for(std::size_t i=0;i<n;++i) {
+            data.time.push_back(i/1024.0);
+            const auto x=std::sin(.03125*i)+.3*std::cos(.125*i)+.2;
+            data.references[0].push_back(x*.75);data.references[1].push_back(x*1.25);
+            for(int c=0;c<count;++c)data.responses[c].push_back((c+1)*x+.1*std::sin(.0625*i));
+        }
+        const auto prepared=lvm::prepare_frf_batch(std::move(data));
+        for(int mode=0;mode<4;++mode) {
+            lvm::FrfOptions options;options.remove_mean=mean;
+            options.segment_length=mode==0 ? 2048 : mode==1 ? 1000 : 0;
+            if(mode==3)options.estimator=lvm::FrfEstimator::Direct;
+            const auto control=lvm::compute_prepared_frf(*prepared,options);
+            if(!control.ok) {check(false,"FRF resource control must succeed before comparing budgets");continue;}
+            const auto L=control.common().segment_length;
+            std::size_t m=1;while(m<2*L-1)m*=2;
+            const long double scratch=(L & (L-1)) ? (L+m)*32.0L : 0;
+            const long double fixed=lvm::fft_cached_plan_bytes()+mib+L*8.0L+(L/2+1)*(16.0L+count*100.0L);
+            lvm::AnalysisResources resources;
+            resources.memory_bytes=static_cast<std::size_t>(std::ceil(fixed+L*(count+1)*48.0L+scratch));
+            resources.max_participants=1;resources.budget=std::make_shared<lvm::MemoryBudget>();
+            resources.budget->configure(384*mib,0,384*mib);
+            auto actual=lvm::compute_prepared_frf(*prepared,options,nullptr,resources);
+            bool same=actual.ok==control.ok && actual.error==control.error && actual.responses.size()==control.responses.size();
+            for(std::size_t c=0;c<actual.responses.size() && same;++c) {
+                const auto& a=actual.responses[c];const auto& b=control.responses[c];
+                same=a.ok==b.ok && a.error==b.error && a.frequencies==b.frequencies && a.valid==b.valid &&
+                    a.coherence_valid==b.coherence_valid && a.reference_amplitude_valid==b.reference_amplitude_valid &&
+                    arrays_equal(a.coherence,b.coherence) && arrays_equal(a.reference_amplitude,b.reference_amplitude) &&
+                    a.sample_dt==b.sample_dt && a.sample_count==b.sample_count && a.source_start==b.source_start &&
+                    a.source_end==b.source_end && a.segment_length==b.segment_length && a.averages==b.averages &&
+                    a.overlap_samples==b.overlap_samples && a.gaps_ignored==b.gaps_ignored && a.transfer.size()==b.transfer.size();
+                for(std::size_t k=0;k<a.transfer.size() && same;++k)
+                    same=equal(a.transfer[k].real(),b.transfer[k].real()) && equal(a.transfer[k].imag(),b.transfer[k].imag());
+            }
+            check(control.ok && same,"budgeted FRF tiles preserve exact complex H1, coherence, masks, reference spectrum and metadata");
+            check(actual.memory_reservation && resources.budget->reserved()<=resources.memory_bytes,
+                  "FRF numeric workspace fits its admitted allowance");
+            actual={};check(resources.budget->reserved()==0,"discarding FRF result releases numeric reservation");
+            resources.memory_bytes=1;
+            const auto denied=lvm::compute_prepared_frf(*prepared,options,nullptr,resources);
+            check(!denied.ok && denied.error==lvm::FrfError::ResourceLimit &&
+                  denied.common().transfer.empty(),"Auto and Direct refuse insufficient memory without changing L");
+        }
+    }
+    // Cancellation while a source is blocked must not release live preparation buffers.
+    auto budget=std::make_shared<lvm::MemoryBudget>();budget->configure(64*mib,0,64*mib);
+    auto guard=budget->reserve(48*mib);lvm::AnalysisResources resources;resources.budget=budget;
+    std::promise<void> entered,release;auto gate=release.get_future().share();
+    lvm::FrfSource source;source.references=source.responses=1;
+    source.replay=[&](const auto&,const auto*){entered.set_value();gate.wait();};
+    lvm::FrfWorker worker;worker.submit(std::move(source),{},901,"blocked",resources,std::move(guard));
+    entered.get_future().wait();worker.cancel();
+    check(budget->reserved()==48*mib,"worker cancellation retains in-flight preparation reservation");
+    release.set_value();worker.shutdown();
+    check(budget->reserved()==0 && !worker.take_result(),"joined cancelled worker frees all reservations without publishing partial output");
+    budget->configure(384*mib,0,384*mib);
+    lvm::Dataset data;data.ok=true;data.names={"x","y"};data.channels.resize(2);
+    for(int i=0;i<4096;++i) {
+        data.time.push_back(i/1024.0);data.channels[0].push_back(std::sin(.03125*i));data.channels[1].push_back(2*std::sin(.03125*i));
+    }
+    lvm::SpectrumWorker spectrum_worker;
+    auto input_guard=budget->reserve(mib);
+    spectrum_worker.submit(data,{0,1},902,{},resources,std::move(input_guard));
+    std::optional<lvm::SpectrumWorker::Result> spectrum_result;
+    const auto wait_spectrum=std::chrono::steady_clock::now();
+    while(!(spectrum_result=spectrum_worker.take_result()) &&
+          std::chrono::steady_clock::now()-wait_spectrum<std::chrono::seconds(5))std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    check(spectrum_result && spectrum_result->spectrum.ok && spectrum_result->spectrum.memory_reservation,
+          "queued FFT result carries its numeric reservation through take_result");
+    spectrum_worker.shutdown();
+    check(budget->reserved()>0,"taken FFT result remains accounted after worker shutdown");
+    spectrum_result.reset();check(budget->reserved()==0,"discarded FFT result releases its last reservation");
+    lvm::FrfBatchInput input;input.time=data.time;input.references={data.channels[0]};input.responses={data.channels[1]};
+    lvm::FrfWorker cached_worker;lvm::FrfOptions options;options.segment_length=1000;
+    auto prepare_guard=budget->reserve(2*mib);
+    cached_worker.submit(std::move(input),options,903,"retained",resources,std::move(prepare_guard));
+    const auto wait_frf=[&]() {
+        std::optional<lvm::FrfWorker::Result> result;const auto start=std::chrono::steady_clock::now();
+        while(!(result=cached_worker.take_result()) &&
+              std::chrono::steady_clock::now()-start<std::chrono::seconds(5))std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return result;
+    };
+    auto first=wait_frf();
+    check(first && first->frf.ok && first->frf.memory_reservation,"FRF queued result owns the numeric allowance");
+    first.reset();
+    check(budget->reserved()>0 && budget->reserved()<2*mib,"cached prepared input holds a shrunken resident reservation after output is discarded");
+    check(cached_worker.submit_cached(options,904,"retained",resources),"cached input can be reused under the same shared budget");
+    auto repeat=wait_frf();check(repeat && repeat->generation==904 && repeat->frf.ok,"repeat request publishes the expected generation");
+    cached_worker.clear_cache();cached_worker.shutdown();
+    check(budget->reserved()>0,"clearing input cache does not release a taken FRF output reservation");
+    repeat.reset();check(budget->reserved()==0,"worker shutdown and output discard release all FRF reservations");
+}
+
+void test_resource_budget() {
+    constexpr std::uint64_t mib=1024*1024,gib=1024*mib;
+    lvm::ResourcePolicy policy;
+    check(lvm::resource_limit(policy,{4*gib,6*gib,0})==gib,"Auto uses free RAM on a constrained machine");
+    check(lvm::resource_limit(policy,{24*gib,26*gib,0})==6*gib,"Auto scales with machine resources");
+    check(lvm::resource_limit(policy,{40*gib,40*gib,0})==8*gib,"Auto has a bounded upper limit");
+    check(lvm::resource_limit(policy,{24*gib,2*gib,0})==gib/2,"commit can constrain Auto independently of RAM");
+    check(lvm::resource_limit(policy,{4*gib,4*gib,4*gib})==2*gib,"resident data do not become new free memory");
+    check(lvm::resource_limit(policy,{0,0,0})==0,"zero resources do not mean unlimited memory");
+    policy={false,4096};
+    check(lvm::resource_limit(policy,{4*gib,4*gib,gib})==3*gib,"manual limit preserves half the free system memory");
+    check(lvm::resource_limit(policy,{24*gib,24*gib,gib})==4*gib,"manual limit is respected when safe");
+    auto budget=std::make_shared<lvm::MemoryBudget>();budget->configure(100,20,100);
+    auto a=budget->reserve(30);auto b=budget->reserve(50);
+    check(a && b && budget->reserved()==80 && budget->available()==0,"admission accounts for resident and concurrent buffers");
+    check(!budget->reserve(1) && !budget->reserve(0),"over-budget and zero reservations are rejected");
+    auto owner=a;a.reset();check(budget->reserved()==80,"cancellation cannot release a reservation still owned by work");
+    owner.reset();check(budget->available()==30,"last owner releases reserved memory");
+    check(b->shrink_to(40) && b->bytes()==40 && budget->reserved()==40 && !b->shrink_to(41),
+          "completed preparation can shrink its reservation without permitting unadmitted growth");
+    budget->configure(40,20,100);
+    check(budget->available()==0 && budget->reserved()==40,"lowering limit retains in-flight ownership without underflow");
+    b.reset();check(budget->available()==20,"completed work releases memory after lowering a limit");
+    budget->configure(64,0,64);
+    std::vector<std::future<std::shared_ptr<lvm::MemoryBudget::Reservation>>> tasks;
+    for(int i=0;i<8;++i)tasks.push_back(std::async(std::launch::async,[budget]{return budget->reserve(16);}));
+    std::vector<std::shared_ptr<lvm::MemoryBudget::Reservation>> held;
+    for(auto& t:tasks)if(auto r=t.get())held.push_back(std::move(r));
+    check(held.size()==4 && budget->reserved()==64,"concurrent admission cannot exceed shared budget");
+    held.clear();check(budget->reserved()==0 && budget->available()==64,"concurrent reservations release exactly once");
+    check(lvm::saturated_add(std::numeric_limits<std::uint64_t>::max(),1)==std::numeric_limits<std::uint64_t>::max(),
+          "resource accounting saturates rather than wrapping");
+}
+
 }  // namespace
 
+void test_disk_spectrum() {
+    for(const auto n:{4096,4093,337132}) {
+        lvm::Dataset data;data.ok=true;const std::size_t channels=n==337132 ? 1 : 7;
+        data.time.resize(n);data.channels.resize(channels,std::vector<double>(n));
+        for(std::size_t c=0;c<channels;++c)data.names.push_back("channel"+std::to_string(c));
+        for(int i=0;i<n;++i){data.time[i]=i*.001+(i>n/2 ? 10 : 0)+(i%3)*1e-9;
+            for(std::size_t c=0;c<channels;++c)data.channels[c][i]=std::sin(i*.07+c)+.2*std::cos(i*.17)+3;}
+        data.channels[0][13]=std::numeric_limits<double>::quiet_NaN();
+        const auto expected=lvm::compute_spectrum(data,0);
+        auto source=lvm::RecordingSource::from_memory(std::move(data));lvm::RecordingReadRequest read;
+        for(std::size_t c=0;c<channels;++c)read.channels.push_back(c);
+        lvm::AnalysisResources resources;resources.memory_bytes=64ULL*1024*1024;
+        resources.budget=std::make_shared<lvm::MemoryBudget>();resources.budget->configure(32ULL*1024*1024,0,32ULL*1024*1024);
+        const auto begin=std::chrono::steady_clock::now();
+        auto actual=lvm::compute_disk_spectrum(source,read,expected.names,resources);
+        check(actual.ok && actual.disk && actual.freqs.empty() && actual.amp.empty(),"disk FFT retains no full resident output");
+        check(actual.n==expected.n && actual.sample_dt==expected.sample_dt && actual.source_start==expected.source_start && actual.source_end==expected.source_end &&
+            actual.resampled==expected.resampled && actual.gaps_ignored==expected.gaps_ignored && actual.names==expected.names,"disk FFT exact sampling metadata");
+        double maximum=0;bool grid=true;std::vector<double> values;
+        for(std::size_t c=0;c<channels;++c)for(std::size_t at=0;at<actual.bin_count();at+=8192){const auto count=std::min<std::size_t>(8192,actual.bin_count()-at);
+            actual.read_amplitudes(c,at,count,values);
+            for(std::size_t k=0;k<count;++k){maximum=std::max(maximum,std::fabs(values[k]-expected.amp[c][at+k]));grid=grid && actual.frequency(at+k)==expected.freqs[at+k];}}
+        check(grid,"disk FFT exact frequency grid");check(maximum<=1e-12,"disk FFT amplitude error within measured bound");
+        const auto points=actual.disk->display_points(0,0,actual.bin_count(),512);
+        double peak=0;for(auto p:points)peak=std::max(peak,p.second);
+        check(peak==*std::max_element(expected.amp[0].begin(),expected.amp[0].end()),"disk display preserves the exact peak");
+        check(resources.budget->reserved()<2ULL*1024*1024,"disk FFT releases scratch and keeps only bounded overview allowance");
+        std::printf("disk FFT N=%d, channels=%zu: %.3f s, max abs error %.17g\n",n,channels,
+            std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count(),maximum);
+        lvm::DiskSpectrumOptions too_small;too_small.disk_bytes=1;
+        bool rejected=false;try{lvm::compute_disk_spectrum(source,read,expected.names,resources,nullptr,too_small);}catch(const lvm::RecordingFailure& e){rejected=e.error==lvm::RecordingError::ResourceLimit;}
+        check(rejected,"disk FFT rejects insufficient disk allowance");
+        std::atomic<bool> cancelled{true};rejected=false;try{lvm::compute_disk_spectrum(source,read,expected.names,resources,&cancelled);}catch(const lvm::RecordingFailure& e){rejected=e.error==lvm::RecordingError::Cancelled;}
+        check(rejected,"disk FFT cancellation returns no partial output");
+        actual={};check(resources.budget->reserved()==0,"disk FFT result destruction releases its allowance");
+    }
+    const auto directory=std::filesystem::temp_directory_path()/("AMSignal-test-disk-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directory(directory);
+    lvm::DiskSpectrumOptions options;options.temporary_directory=directory;
+    lvm::AnalysisResources resources;resources.budget=std::make_shared<lvm::MemoryBudget>();resources.budget->configure(32ULL*1024*1024,0,32ULL*1024*1024);
+    const auto fixture=[](double special) {
+        lvm::Dataset data;data.ok=true;data.names={"a"};data.time.resize(4096);data.channels.resize(1,std::vector<double>(4096));
+        for(std::size_t i=0;i<data.rows();++i){data.time[i]=i/1024.0;data.channels[0][i]=std::sin(i*.1);}
+        data.channels[0][13]=special;
+        if(special==1e308)for(std::size_t i=0;i<data.rows();++i)data.channels[0][i]=i%2 ? 1e308 : -1e308;
+        return data;
+    };
+    for(auto special:{std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN(),1e308}) {
+        auto data=fixture(special);const auto expected=lvm::compute_spectrum(data,0);
+        auto source=lvm::RecordingSource::from_memory(std::move(data));lvm::RecordingReadRequest read;read.channels={0};
+        auto actual=lvm::compute_disk_spectrum(source,read,{"a"},resources,nullptr,options);
+        check(actual.ok==expected.ok && actual.error==expected.error,"disk FFT NaN/Inf/overflow statuses match the vector path");
+        auto copy=actual;actual={};
+        check(!copy.ok || !std::filesystem::is_empty(directory),"a shared disk result keeps its files alive");
+        copy={};check(std::filesystem::is_empty(directory) && resources.budget->reserved()==0,"failed/shared disk results release files and memory");
+    }
+    auto data=fixture(0);auto source=lvm::RecordingSource::from_memory(std::move(data));lvm::RecordingReadRequest read;read.channels={0};
+    std::atomic<bool> cancelled{false};
+    auto phases=std::make_shared<unsigned>(0);
+    auto cancelling=lvm::RecordingSource::processed(source,"cancel-test",[source,phases,&cancelled](const auto& request,const auto& visitor,const auto* cancel) {
+        const auto phase=++*phases;source->replay(request,[&](const auto& time,const auto& values){visitor(time,values);if(phase==3)cancelled=true;},cancel);
+    });
+    bool rejected=false;try{lvm::compute_disk_spectrum(cancelling,read,{"a"},resources,&cancelled,options);}catch(const lvm::RecordingFailure& e){rejected=e.error==lvm::RecordingError::Cancelled;}
+    check(rejected && std::filesystem::is_empty(directory),"in-flight disk FFT cancellation removes temporary arrays");
+    std::ostringstream text;for(int i=0;i<4096;++i)text<<i/1024.0<<'\t'<<std::sin(i*.1)<<'\n';
+    TempFile file("disk_changed.txt",text.str());auto raw=lvm::RecordingSource::from_file(file.path,{0,4095/1024.0},{1});
+    auto replays=std::make_shared<unsigned>(0);
+    auto changing=lvm::RecordingSource::processed(raw,"change-test",[raw,replays,path=file.path](const auto& request,const auto& visitor,const auto* cancel) {
+        const auto phase=++*replays;raw->replay(request,[&](const auto& time,const auto& values){visitor(time,values);
+            if(phase==3){std::ofstream changed(path,std::ios::app);changed<<"# changed\n";}},cancel);
+    });
+    rejected=false;try{lvm::compute_disk_spectrum(changing,read,{"a"},resources,nullptr,options);}catch(const lvm::RecordingFailure& e){rejected=e.error==lvm::RecordingError::SourceChanged;}
+    check(rejected && std::filesystem::is_empty(directory) && resources.budget->reserved()==0,"source change during disk preparation publishes no partial result and releases files");
+    std::filesystem::remove(directory);
+}
+
 int main(int argc, char** argv) {
+    if(argc>1 && std::string(argv[1])=="--disk-fft") {
+        test_disk_spectrum();std::printf("\n%d disk FFT checks, %d failure(s)\n",g_checks,g_failures);return g_failures==0 ? 0 : 1;
+    }
+    if(argc>1 && std::string(argv[1])=="--cache") {
+        test_recording_cache(check);
+        std::printf("\n%d cache checks, %d failure(s)\n",g_checks,g_failures);
+        return g_failures==0 ? 0 : 1;
+    }
+    if(argc>1 && std::string(argv[1])=="--overview") {
+        test_recording_overview(check);
+        std::printf("\n%d overview checks, %d failure(s)\n",g_checks,g_failures);
+        return g_failures==0 ? 0 : 1;
+    }
+    if(argc>1 && std::string(argv[1])=="--analysis-resources") {
+        test_analysis_resources();
+        std::printf("\n%d analysis resource checks, %d failure(s)\n",g_checks,g_failures);
+        return g_failures==0 ? 0 : 1;
+    }
+    if(argc>1 && std::string(argv[1])=="--resources") {
+        test_resource_budget();
+        std::printf("\n%d resource checks, %d failure(s)\n",g_checks,g_failures);
+        return g_failures==0 ? 0 : 1;
+    }
+    if (argc>1 && std::string(argv[1])=="--recording") {
+        test_recording_source();
+        test_recording_indexed_range();
+        std::printf("\n%d recording checks, %d failure(s)\n",g_checks,g_failures);
+        return g_failures==0 ? 0 : 1;
+    }
     test_frf_streaming();
     test_frf_multi();
     test_frf();
@@ -1301,6 +1743,15 @@ int main(int argc, char** argv) {
     test_export_helpers();
     test_gap_details();
     test_scan_and_window_load();
+    test_recording_source();
+    test_recording_indexed_range();
+    test_resource_budget();
+    test_analysis_resources();
+
+    test_recording_overview(check);
+
+    test_recording_cache(check);
+    test_disk_spectrum();
 
     std::printf("\n%d checks, %d failure(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

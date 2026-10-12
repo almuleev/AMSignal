@@ -1,5 +1,133 @@
 # Changelog
 
+## v0.17.0-rc.2 (pre-release)
+
+### RU
+
+Большие записи автоматически открываются целиком через дисковый обзор.
+«Анализ → Вся запись / Участок / Взять видимый участок» задаёт общую область
+FFT и FRF независимо от zoom. Удалены Light Mode из приветствия/настроек,
+его флаги, обязательный диалог фрагмента и отдельная команда полного FRF
+в меню «Вид». Старый ключ проекта игнорируется, устаревшие INI-ключи удаляются
+при сохранении настроек; номера действующих команд сохранены.
+
+- Общий immutable RecordingSource удерживает файл/ScanIndex и проверяет
+  размер/mtime до/после чтения и перед публикацией. Две seed-строки служат
+  только UI; N хранится отдельно. Полный состав каналов проверяется по всей
+  записи, поздние столбцы и каналы, похожие на время только в начале, сохраняются.
+- Overview хранит точные extrema/позиции/разрывы на диске. Zoom читает нужный
+  уровень или оригиналы; Signal-Snap читает исходные отсчёты асинхронно.
+  Отмена, смена документа, Undo/Redo и SourceChanged не публикуют устаревшую точку.
+- Формулы и причинный фильтр используют общий обработанный источник для
+  обзора, Snap, FFT/FRF и экспорта. Состояния biquad переносятся между блоками;
+  участок прогревается от начала записи, Fs определяется по полной временной
+  оси прежним точным правилом. Нелинейная огибающая строится по значениям,
+  не преобразованием готовых min/max. Недействительные значения нелинейной
+  формулы следуют GUI-правилу, включая конечные выражения от Inf.
+- Полный FFT сохраняет N, сетку, интерполяцию, удаление DC, сжатие разрывов
+  и нормировку. При недостаточном RAM-допуске выполняется tiled дисковый
+  radix-2/Bluestein; усреднение FFT блоков не используется. Рабочий резерв
+  24 MiB, численный максимум 384 MiB с сохранёнными планами; временный диск
+  до 64 GiB с предварительной оценкой места. После расчёта остаются дисковые
+  амплитуды и ограниченные summaries; неактивные результаты ограничены 2 GiB.
+- FRF сохраняет Welch-перекрытие, порядок накопления Sxx/Syy/Sxy, общую FFT
+  средней опоры, H1/coherence, слабую маску и точное определение Fs.
+  Spectrum/FRF используют общий исполнитель; дисковый FFT последовательный.
+- Auto/manual бюджет данных (64…65536 MiB) учитывает capacity документов,
+  допуски загрузки/анализа и общие индексы, ограничивается доступными RAM/commit.
+  Отмена удерживает резерв до уничтожения массивов. Это частичный учёт данных,
+  не лимит всей памяти процесса; N/L не сокращаются при отказе.
+- Частный дисковый LRU ScanIndex/обзоров: 2 GiB/256 элементов, lease активных
+  файлов, versioned пути и owner-lock. Повторное открытие использует AMSCIDX1;
+  повреждённый/недоступный кэш сохраняет ограниченное сканирование.
+  Если общий каталог занят другим процессом или недоступен, обзор использует
+  временный частный кэш с той же общей квотой ScanIndex/overview; последний
+  lease удаляет только собственные файлы.
+- CSV/TXT/LVM и переносимый проект потоково читают оригиналы всей записи или
+  выбранного участка, FFT экспортирует настоящие бины. Проект содержит полную
+  raw запись и настройки. Экспорт выполняется в фоне с отменой и атомарной
+  заменой назначения; открытый source не перезаписывается.
+- Уведомление ожидания принадлежит главному окну, не является topmost и не
+  захватывает фокус фонового приложения. Обновлены README и карта архитектуры.
+
+Проверки: 1157 core / 851 GUI; синтетические 10/20 GB, N=47 390 720/94 785 536,
+46/49 внешних проверок при Manual 64 MiB и commit-пределе процесса 128 MiB.
+Полный FFT одного канала: 1189,27/2431,28 с; H1 семи откликов с L=2048:
+221,776/441,325 с; Peak WS до H1 31,5859/33,293 MiB. Ошибки FFT-пика
+5,60284e-11/2,98433e-09, H1/coherence 9,8323e-16/4,44089e-16.
+20 GB открыт повторно с готовым обзором; холодный прогон превысил прежний
+таймаут стенда и не считается успешным замером открытия.
+Остальные проверенные размеры/замеры и ограничения перечислены в описании этого
+предварительного выпуска. Физический ПК с 8 GiB не испытывался; Windows
+Job Object с ограничением commit — отдельная проверка. Нет нового сопоставимого
+замера FAMOS. Склейка дискового времени недоступна, далёкий фильтр/Snap требует
+повторного прогрева, широкий FFT-Snap синхронный, временный диск обязателен.
+Дисковый спектр пока рисует ломаную без визуального сплайна/символов кривых.
+CLI собран, его пользовательское открытие остаётся векторным.
+
+### EN
+
+Large recordings open automatically as complete disk overviews.
+Analysis → Entire recording / Interval / Use visible interval defines one
+FFT/FRF area independently of zoom. Light Mode controls/flags, the mandatory
+fragment prompt and the separate full-FRF View command are removed. Legacy
+project keys are ignored and obsolete INI keys retired on settings save;
+active command numbers remain compatible.
+
+- Immutable RecordingSource owns the file/index and checks size/mtime around
+  reads and publication. Two seed rows are UI-only; N is stored separately.
+  Whole-source channel discovery preserves late columns and signals that
+  resemble time only in the prefix.
+- Disk overview stores exact extrema, positions and gaps. Zoom reads levels
+  or originals; asynchronous Signal-Snap always reads source samples.
+  Cancellation, document switching, Undo/Redo and SourceChanged reject stale points.
+- A shared processed source supplies formulas/causal filters to overview,
+  Snap, FFT/FRF and exports. Biquad states span blocks, intervals warm up from
+  the beginning, and filter Fs follows the original exact full-timeline rule.
+  Nonlinear extrema are built from samples. Non-finite nonlinear inputs
+  follow the canonical GUI policy, including expressions finite at Inf.
+- Full FFT preserves N, grid, interpolation, DC removal, gap compression and
+  scaling. Insufficient RAM admission selects tiled disk radix-2/Bluestein,
+  never averaged block FFTs. Working admission is 24 MiB; the 384 MiB numerical
+  cap includes retained plans. Temporary disk allowance is 64 GiB with space
+  preflight. Only amplitudes/bounded summaries survive; inactive disk results
+  are limited to 2 GiB.
+- FRF preserves Welch overlap, Sxx/Syy/Sxy accumulation order, shared averaged
+  reference FFT, H1/coherence, weak-input masks and exact Fs. Spectrum/FRF
+  share an executor; disk FFT is sequential.
+- Auto/manual data budgets (64…65536 MiB) track document capacities, load and
+  analysis reservations and shared indexes, constrained by available RAM/commit.
+  Cancellation retains admission until buffers die. This is partial data
+  accounting, not a process-wide cap; failures never silently reduce N/L.
+- Private ScanIndex/overview LRU: 2 GiB/256 entries, active leases, versioned
+  paths and an owner lock. AMSCIDX1 accelerates index reuse; unavailable or
+  corrupt caches fall back to bounded scanning.
+  If the shared directory is locked by another process or unavailable, overview
+  uses a private temporary cache with the same shared ScanIndex/overview quota;
+  the last lease removes only owned files.
+- CSV/TXT/LVM and portable projects stream originals for the whole recording
+  or selected interval; FFT exports exact bins. Projects include all raw samples
+  and settings. Background export supports cancellation and atomic replacement;
+  it cannot overwrite a live source.
+- The owned loading notice is not topmost and does not steal background focus.
+  README and architecture documentation are updated.
+
+Validation: 1157 core / 851 GUI checks; synthetic 10/20 GB,
+N=47,390,720/94,785,536, 46/49 external checks with Manual 64 MiB and a hard
+128 MiB process commit cap. Full one-channel FFT: 1189.27/2431.28 s;
+seven-response H1, L=2048: 221.776/441.325 s; process Peak WS through H1:
+31.5859/33.293 MiB. FFT peak errors: 5.60284e-11/2.98433e-09;
+H1/coherence: 9.8323e-16/4.44089e-16. The 20 GB opening reused an overview
+index; its preceding cold run exceeded the old harness timeout and is not
+a successful opening measurement.
+Other verified sizes, measurements and limitations are listed in the prerelease
+description. Physical 8 GiB hardware was not tested; Windows Job Object commit
+limits are a separate test. No new comparable FAMOS benchmark was made.
+Disk-source time stitching is unavailable, distant filtered reads/Snap replay
+the warm-up prefix, wide FFT-Snap is synchronous, and temporary disk is required.
+Disk spectra currently use polylines without visual splines/curve symbols.
+CLI builds successfully but its user-facing loading remains vector-based.
+
 ## v0.17.0-rc.1 (pre-release)
 
 ### Ограниченная память и H1/coherence

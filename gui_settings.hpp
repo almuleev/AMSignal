@@ -27,7 +27,6 @@ void save_runtime_settings_now();
 
 void save_runtime_settings();
 
-void apply_light_mode(bool enabled, bool persist = true);
 
 int read_ini_int(const wchar_t* section, const wchar_t* key, int def_value);
 

@@ -18,15 +18,10 @@ struct Strings {
     const wchar_t* hover_open; const wchar_t* hover_png; const wchar_t* hover_play; const wchar_t* hover_pause; const wchar_t* hover_measure; const wchar_t* hover_reset; const wchar_t* hover_autoy;
     const wchar_t* lang_ru; const wchar_t* lang_en;
     const wchar_t* m_lang;
-    const wchar_t* light_mode;
-    const wchar_t* light_mode_status;
-    const wchar_t* light_mode_range_title;
-    const wchar_t* light_mode_range_start;
-    const wchar_t* light_mode_range_end;
-    const wchar_t* light_mode_range_apply;
-    const wchar_t* light_mode_range_invalid_end;
+    const wchar_t* analysis_range_start;
+    const wchar_t* analysis_range_end;
+    const wchar_t* analysis_range_invalid_end;
     const wchar_t* msg_loading;
-    const wchar_t* msg_loading_light;
     const wchar_t* msg_scanning_range;
     const wchar_t* msg_delta_f;
     const wchar_t* msg_delta_t;

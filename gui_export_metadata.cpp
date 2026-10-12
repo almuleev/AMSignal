@@ -53,11 +53,11 @@ std::wstring export_point_display_text(const PointDisplay& display) {
     return buf;
 }
 
-void write_export_comment(std::ofstream& out, const std::wstring& text, const char* line_end) {
+void write_export_comment(std::ostream& out, const std::wstring& text, const char* line_end) {
     out << "# " << to_utf8(text) << line_end;
 }
 
-void write_export_key_value(std::ofstream& out, const std::wstring& key, const std::wstring& value, const char* line_end) {
+void write_export_key_value(std::ostream& out, const std::wstring& key, const std::wstring& value, const char* line_end) {
     write_export_comment(out, key + L"=" + value, line_end);
 }
 
@@ -86,7 +86,7 @@ std::wstring export_metadata_text(const std::wstring& value) {
     return encoded;
 }
 
-void write_export_metadata(std::ofstream& out,
+void write_export_metadata(std::ostream& out,
                            const ExportOptions& opts,
                            bool csv,
                            double range_start,
@@ -127,11 +127,13 @@ void write_export_metadata(std::ofstream& out,
         write_export_key_value(out, L"smoothing", g.visual_smooth ? L"1" : L"0", line_end);
         write_export_key_value(out, L"distinguish_curves", g.distinguish_curves ? L"1" : L"0", line_end);
         write_export_key_value(out, L"show_channel_legend", g.show_channel_legend ? L"1" : L"0", line_end);
+        write_export_key_value(out,L"analysis_interval",g.fft_window_active ? L"1" : L"0",line_end);
+        write_export_key_value(out,L"analysis_start",format_edit_number(g.fft_window_start),line_end);
+        write_export_key_value(out,L"analysis_end",format_edit_number(g.fft_window_end),line_end);
         write_export_key_value(out, L"vertical_pan", g.vertical_pan ? L"1" : L"0", line_end);
         write_export_key_value(out, L"snap_to_data", g.snap_to_data ? L"1" : L"0", line_end);
         write_export_key_value(out, L"show_gap_markers", g.show_gap_markers ? L"1" : L"0", line_end);
         write_export_key_value(out, L"stitch_time_gaps", g.stitch_time_gaps ? L"1" : L"0", line_end);
-        write_export_key_value(out, L"light_mode", g.light_mode ? L"1" : L"0", line_end);
         write_export_key_value(out, L"auto_y", g.auto_y ? L"1" : L"0", line_end);
         write_export_key_value(out, L"y_lock_min", format_optional_edit_number(g.y_lock_min), line_end);
         write_export_key_value(out, L"y_lock_max", format_optional_edit_number(g.y_lock_max), line_end);
@@ -479,6 +481,12 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 parse_bool(value, g.distinguish_curves);
             } else if (key == "show_channel_legend") {
                 parse_bool(value, g.show_channel_legend);
+            } else if(key=="analysis_interval") {
+                parse_bool(value,g.fft_window_active);
+            } else if(key=="analysis_start") {
+                parse_double(value,g.fft_window_start);
+            } else if(key=="analysis_end") {
+                parse_double(value,g.fft_window_end);
             } else if (key == "vertical_pan") {
                 parse_bool(value, g.vertical_pan);
             } else if (key == "snap_to_data") {
@@ -489,7 +497,7 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 parse_bool(value, g.stitch_time_gaps);
                 if (g.stitch_time_gaps) hide_gap_details_card();
             } else if (key == "light_mode") {
-                // Loading policy is a user preference, not a property of the signal.
+                // Obsolete project key is deliberately ignored; source selection is automatic.
             } else if (key == "auto_y") {
                 parse_bool(value, g.auto_y);
             } else if (key == "y_lock_min") {
@@ -686,6 +694,14 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
 
     normalize_filter_bounds();
 
+    if(g.fft_window_active) {
+        const auto bounds=g.recording_source ? g.recording_source->bounds() : lvm::TimeRange{g.data_t0,g.data_t1};
+        lvm::TimeRange resolved;
+        if(!lvm::AnalysisRange::selected(g.fft_window_start,g.fft_window_end).resolve(bounds,resolved) || resolved.end<=resolved.start) {
+            g.fft_window_active=false;g.fft_window_start=g.fft_window_end=0;
+        }
+    }
+
     if (!point_groups.empty()) {
         g.point_groups = std::move(point_groups);
         g.time_active_point_group = active_time_group >= 0 ? active_time_group : last_time_group;
@@ -716,7 +732,7 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
     sync_channel_controls_from_state();
 }
 
-void write_frf_metadata(std::ofstream& out) {
+void write_frf_metadata(std::ostream& out) {
     const auto& s = g.frf;
     const auto& r = s.result.common();
     const char* nl = "\n";

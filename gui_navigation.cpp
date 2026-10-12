@@ -36,10 +36,10 @@ bool active_axis(double*& lo, double*& hi, double& minb, double& maxb, double& m
         return true;
     }
     if ((g.mode == AnalysisMode::FFT)) {
-        if (!ensure_current_spectrum() || g.spec.freqs.size() < 2) return false;
+        if (!ensure_current_spectrum() || g.spec.bin_count() < 2) return false;
         lo = &g.freq_start; hi = &g.freq_end;
         minb = 0.0; maxb = g.spec.nyquist;
-        minw = (g.spec.freqs[1] - g.spec.freqs[0]) * 0.5;
+        minw = (g.spec.frequency(1) - g.spec.frequency(0)) * 0.5;
         return true;
     }
     if (!has_data()) return false;

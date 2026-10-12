@@ -12,6 +12,9 @@
 #include "gui_side_panel.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_ids.hpp"
+#include "recording_source.hpp"
+#include "gui_resources.hpp"
+#include "gui_recording_processing.hpp"
 
 namespace gui {
 lvm::FrfWorker g_frf_worker;
@@ -234,7 +237,7 @@ std::wstring frf_error_text(lvm::FrfError e) {
         case lvm::FrfError::InvalidOptions: return L"Некорректные параметры FRF.";
         case lvm::FrfError::WeakReference: return L"Во входном канале нет достаточного переменного сигнала.";
         case lvm::FrfError::Overflow: return L"Превышены численные ограничения или недостаточно памяти для FRF.";
-        case lvm::FrfError::ResourceLimit: return L"Недостаточно ресурсов FRF. Проверьте свободное место для временных файлов или уменьшите длину L для H1.";
+        case lvm::FrfError::ResourceLimit: return L"Недостаточно ресурсов FRF. Проверьте бюджет данных и место для временных файлов или задайте меньшую длину L для H1.";
         case lvm::FrfError::SourceChanged: return L"Исходный файл изменился. Откройте запись заново перед расчётом АЧХ.";
     }
     return L"Не удалось рассчитать FRF.";
@@ -517,11 +520,20 @@ void invalidate_frf(bool reset_view) {
 }
 
 namespace {
-bool current_frf_source_window(double& a,double& b,bool& selected) {
-    if(g.frf.entire_recording && g.source_scan_index && has_data()) {
-        a=g.source_scan_index->range_start;b=g.source_scan_index->range_end;selected=false;
-        return b>a;
+void replay_frf_recording(const lvm::RecordingSource& recording,
+                         const lvm::RecordingReadRequest& request,
+                         const lvm::RecordingBlockConsumer& consume,
+                         const std::atomic<bool>* cancel) {
+    try { recording.replay(request,consume,cancel); }
+    catch(const lvm::RecordingFailure& failure) {
+        if(failure.error==lvm::RecordingError::SourceChanged)
+            throw lvm::FrfSourceFailure(lvm::FrfError::SourceChanged);
+        if(failure.error==lvm::RecordingError::ResourceLimit)
+            throw lvm::FrfSourceFailure(lvm::FrfError::ResourceLimit);
+        throw;
     }
+}
+bool current_frf_source_window(double& a,double& b,bool& selected) {
     return current_fft_source_window(a,b,selected);
 }
 }
@@ -547,7 +559,9 @@ void compute_frf_from_current_source() {
            std::filesystem::last_write_time(path,ec)!=g.loaded_source_modified || ec)
             failure.error=lvm::FrfError::SourceChanged;
     }
-    if(failure.error!=lvm::FrfError::None) {apply_frf_result(std::move(failure));return;}
+    if(failure.error!=lvm::FrfError::None) {
+        g_frf_worker.clear_cache();apply_frf_result(std::move(failure));return;
+    }
     if (g.ds.frequency_axis) failure.error = lvm::FrfError::FrequencyData;
     else if (!valid_selection(g.frf.inputs,g.frf.outputs)) failure.error=lvm::FrfError::InvalidChannels;
     else if (!current_frf_source_window(a, b, selected)) failure.error = lvm::FrfError::TooShort;
@@ -555,6 +569,7 @@ void compute_frf_from_current_source() {
     g.frf.source_start = a; g.frf.source_end = b; g.frf.from_selection = selected;
     refresh_frf_channel_names();
     try {
+        const auto resources=current_analysis_resources();
         std::vector<std::size_t> channels(g.frf.inputs.begin(),g.frf.inputs.end());
         channels.insert(channels.end(),g.frf.outputs.begin(),g.frf.outputs.end());
         ensure_channel_formula_vectors();
@@ -584,19 +599,27 @@ void compute_frf_from_current_source() {
             key << ':' << g.frf.processing_description.size();
             for(auto c:g.frf.processing_description)key << ':' << static_cast<unsigned>(c);
             const auto input_key=key.str();
-            if(!g_frf_worker.submit_cached(g.frf.options,g.frf.generation,input_key)) {
+            if(!g_frf_worker.submit_cached(g.frf.options,g.frf.generation,input_key,resources)) {
+                // The previous key cannot serve this request. Free its cache
+                // before admitting a new input; active cancelled work still owns it.
+                g_frf_worker.clear_cache();
                 const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),a);
                 const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),b);
-                const bool stream=g.light_mode || (g.current_file_partial && g.source_scan_index) ||
+                const bool stream=g.overview.render_enabled || (g.current_file_partial && g.source_scan_index) ||
                     static_cast<long double>(hi-lo)*(channels.size()+1)*8>64ULL*1024*1024;
                 if(stream && (ec || g.ds.source_columns.size()!=g.ds.channel_count()))
                     throw std::runtime_error("Streaming FRF requires an unchanged source file and physical column mapping.");
                 if(stream && !ec && g.ds.source_columns.size()==g.ds.channel_count()) {
-                    lvm::LoadOptions load;
-                    load.use_time_window=true;load.time_start=a;load.time_end=b;
-                    load.scan_index=g.source_scan_index;
-                    load.block_rows=std::max<std::size_t>(1,std::min<std::size_t>(65536,16ULL*1024*1024/((channels.size()+2)*8)));
-                    for(auto c:channels)load.stream_columns.push_back(g.ds.source_columns[c]);
+                    const auto recording=current_recording_source();
+                    lvm::RecordingReadRequest read;
+                    read.range=lvm::AnalysisRange::selected(a,b);
+                    read.channels=channels;
+                    constexpr std::uint64_t preparation_base=32ULL*1024*1024;
+                    const auto available=resources.budget->available();
+                    if(available<=preparation_base+1024*1024)throw lvm::FrfSourceFailure(lvm::FrfError::ResourceLimit);
+                    read.block_bytes=static_cast<std::size_t>(std::min<std::uint64_t>(16ULL*1024*1024,(available-preparation_base)/2));
+                    auto reservation=resources.budget->reserve(preparation_base+read.block_bytes);
+                    if(!reservation)throw lvm::FrfSourceFailure(lvm::FrfError::ResourceLimit);
                     const bool processing=g.frf.apply_processing, filtering=processing && g.noise_threshold_enabled;
                     const auto global=g.global_formula_rpn;
                     const bool global_identity=g.global_formula_identity, global_affine=g.global_formula_affine;
@@ -615,28 +638,24 @@ void compute_frf_from_current_source() {
                     const bool full_filter=filtering && (a<g.ds.time.front() || b>g.ds.time.back());
                     // Filters warm up from the loaded recording's first sample,
                     // rather than resetting at the selected window or a block.
-                    if(filtering)load.time_start=full_filter && g.source_scan_index
+                    if(filtering)read.range.interval.start=full_filter && g.source_scan_index
                         ? g.source_scan_index->range_start : std::min(a,g.ds.time.front());
                     lvm::FrfSource source;source.references=g.frf.inputs.size();source.responses=g.frf.outputs.size();
-                    source.replay=[path,load,a,processing,filtering,filter,full_filter,global,formulas,kinds,mul,add,file_size,modified,
+                    const auto shared_processed=g.overview.render_enabled ? processed_recording_source(processing) : nullptr;
+                    source.replay=[shared_processed,recording,read,a,processing,filtering,filter,full_filter,global,formulas,kinds,mul,add,
                                    global_identity,global_affine,global_mul,global_add,formula_identity]
-                        (const lvm::FrfBlockConsumer& consume,const std::atomic<bool>* cancel) mutable {
-                        const auto check_source=[&] {
-                            std::error_code error;
-                            if(std::filesystem::file_size(path,error)!=file_size || error ||
-                               std::filesystem::last_write_time(path,error)!=modified || error)
-                                throw lvm::FrfSourceFailure(lvm::FrfError::SourceChanged);
-                        };
-                        check_source();
+                        (const lvm::FrfBlockConsumer& consume,const std::atomic<bool>* cancel) {
+                        if(shared_processed) {
+                            auto exact=read;exact.range=lvm::AnalysisRange::selected(a,read.range.interval.end);
+                            replay_frf_recording(*shared_processed,exact,consume,cancel);return;
+                        }
                         auto effective_filter=filter;
                         if(full_filter) {
                             lvm::FrfSource timeline;
-                            auto time_load=load;time_load.stream_columns.clear();
-                            if(time_load.scan_index)time_load.time_end=time_load.scan_index->range_end;
-                            timeline.replay=[path,time_load](const auto& visitor,const auto* flag) mutable {
-                                time_load.consume_block=visitor;time_load.cancel_flag=flag;
-                                const auto result=lvm::read_lvm_file(path,time_load);
-                                if(!result.ok)throw std::runtime_error(result.error);
+                            auto time_read=read;time_read.channels.clear();
+                            time_read.range.interval.end=recording->bounds().end;
+                            timeline.replay=[recording,time_read](const auto& visitor,const auto* flag) {
+                                replay_frf_recording(*recording,time_read,visitor,flag);
                             };
                             const auto inspected=lvm::inspect_frf_timeline(timeline,cancel);
                             if(inspected.error!=lvm::FrfError::None)throw lvm::FrfSourceFailure(inspected.error);
@@ -644,8 +663,7 @@ void compute_frf_from_current_source() {
                         }
                         std::vector<FilterStream> filters;
                         for(std::size_t c=0;c<formulas.size();++c)filters.emplace_back(effective_filter);
-                        load.cancel_flag=cancel;
-                        load.consume_block=[&](const auto& time,const auto& raw) {
+                        const auto process_block=[&](const auto& time,const auto& raw) {
                             auto values=raw; // One bounded block, never the recording.
                             if(processing)for(std::size_t c=0;c<values.size();++c) {
                                 for(std::size_t i=0;i<values[c].size();++i) {
@@ -670,29 +688,41 @@ void compute_frf_from_current_source() {
                                 consume(selected_time,values);
                             }
                         };
-                        const auto parsed=lvm::read_lvm_file(path,load);
-                        if(!parsed.ok)throw std::runtime_error(parsed.error);
-                        check_source();
+                        replay_frf_recording(*recording,read,process_block,cancel);
                     };
-                    g_frf_worker.submit(std::move(source),g.frf.options,g.frf.generation,input_key);
+                    g_frf_worker.submit(std::move(source),g.frf.options,g.frf.generation,input_key,resources,std::move(reservation));
                 } else {
+                    auto reservation=reserve_analysis_input(resources,static_cast<std::size_t>(hi-lo),channels.size(),true);
                     lvm::Dataset pair;
                     build_time_window_dataset(g.ds,a,b,pair,&channels,g.frf.apply_processing);
                     lvm::FrfBatchInput input;input.time=std::move(pair.time);
                     for(std::size_t i=0;i<pair.channels.size();++i)
                         (i<g.frf.inputs.size() ? input.references : input.responses).push_back(std::move(pair.channels[i]));
-                    g_frf_worker.submit(std::move(input),g.frf.options,g.frf.generation,input_key);
+                    g_frf_worker.submit(std::move(input),g.frf.options,g.frf.generation,input_key,resources,std::move(reservation));
                 }
             }
             refresh_frf_controls(); set_status(); invalidate_plot();
         } else {
+            const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),a);
+            const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),b);
+            auto reservation=reserve_analysis_input(resources,static_cast<std::size_t>(hi-lo),channels.size(),true);
             lvm::Dataset pair;
             build_time_window_dataset(g.ds,a,b,pair,&channels,g.frf.apply_processing);
             lvm::FrfBatchInput input;input.time=std::move(pair.time);
             for(std::size_t i=0;i<pair.channels.size();++i)
                 (i<g.frf.inputs.size() ? input.references : input.responses).push_back(std::move(pair.channels[i]));
-            apply_frf_result(lvm::analyze_frf_batch(std::move(input), g.frf.options));
+            auto prepared=lvm::prepare_frf_batch(std::move(input),nullptr,reservation);
+            if(!reservation->shrink_to(prepared->resident_bytes))throw lvm::FrfSourceFailure(lvm::FrfError::ResourceLimit);
+            apply_frf_result(lvm::compute_prepared_frf(*prepared,g.frf.options,nullptr,resources));
         }
+    } catch (const lvm::FrfSourceFailure& error) {
+        failure.error=error.error;apply_frf_result(std::move(failure));
+    } catch (const std::bad_alloc&) {
+        failure.error=lvm::FrfError::ResourceLimit;apply_frf_result(std::move(failure));
+    } catch (const lvm::RecordingFailure& error) {
+        failure.error = error.error==lvm::RecordingError::SourceChanged ? lvm::FrfError::SourceChanged :
+            (error.error==lvm::RecordingError::ResourceLimit ? lvm::FrfError::ResourceLimit : lvm::FrfError::Overflow);
+        apply_frf_result(std::move(failure));
     } catch (...) {
         failure.error = lvm::FrfError::Overflow;
         apply_frf_result(std::move(failure));
@@ -721,6 +751,7 @@ bool ensure_current_frf() {
 }
 
 void apply_frf_result(lvm::FrfBatchResult result) {
+    auto reservation=std::move(result.memory_reservation);
     if(g.loaded_source_stamp_valid) {
         std::error_code error;const auto path=std::filesystem::path(g.source_path);
         if(std::filesystem::file_size(path,error)!=g.loaded_source_size || error ||
@@ -729,6 +760,7 @@ void apply_frf_result(lvm::FrfBatchResult result) {
         }
     }
     g.frf.result = std::move(result); g.frf.pending = false;
+    reservation.reset(); // Arrays now enter document resident accounting.
     if (g.frf.result.ok) {
         const auto& f = g.frf.result.common().frequencies;
         const double lo = std::log10(f[1]), hi = std::log10(f.back());
@@ -863,8 +895,7 @@ void refresh_frf_controls(bool repopulate) {
     }
     wchar_t source[192]{};
     swprintf(source, 192, tr(L"%ls: %.5g–%.5g s", L"%ls: %.5g–%.5g с"),
-        g.frf.entire_recording ? tr(L"Entire recording",L"Вся запись") :
-            (g.frf.from_selection ? tr(L"Selection", L"Выделение") : tr(L"View", L"Вид")),
+        g.frf.from_selection ? tr(L"Interval", L"Участок") : tr(L"Entire recording",L"Вся запись"),
         g.frf.source_start, g.frf.source_end);
     label(Source, source);
     const bool ready = g.frf.result.ok && !g.frf.pending;

@@ -6,6 +6,8 @@ namespace gui {
 
 // ---- undo / redo system ------------------------------------------------
 struct SettingsSnapshot {
+    bool analysis_interval=false;
+    double analysis_start=0,analysis_end=0;
     std::vector<char> visible;
     std::vector<std::wstring> channel_labels;
     std::vector<COLORREF> channel_colors;

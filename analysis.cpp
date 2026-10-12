@@ -21,30 +21,41 @@ namespace {
 // One admitted batch at a time. Contending callers use their sequential path.
 // Jobs never recursively submit work; the caller also processes channels.
 
-std::size_t spectrum_participants(std::size_t n,std::size_t channels) {
-    if (n<65536 || channels<2) return 1;
+std::size_t admit_spectrum(std::size_t n,std::size_t channels,bool imported,
+                          const AnalysisResources& resources,Spectrum& result,const std::atomic<bool>* cancel) {
     const auto hardware=std::thread::hardware_concurrency();
-    std::size_t participants=std::min({channels,std::size_t(4),std::size_t(hardware ? hardware : 1)});
-    // Scheduling allowance, not a process memory limit: include retained plans
-    // from all threads (including idle participants), plus prospective plans,
-    // active signal, DFT workspace, output and amplitudes. Input ownership and
-    // the common axis are outside this 384 MiB allowance.
-    long double scratch=36.0L*n;
-    long double plan=0;
-    if ((n & (n-1))!=0) {
+    std::size_t participants=n>=65536 && channels>1 && !imported
+        ? std::min({channels,std::size_t(4),std::size_t(hardware ? hardware : 1),
+                    std::max<std::size_t>(1,resources.max_participants)}) : 1;
+    // Includes every output channel, common axes, retained and prospective
+    // plans. Input snapshot ownership is reserved separately by the caller.
+    long double scratch=imported ? 0 : 16.0L*n;
+    if (!imported && (n & (n-1))!=0) {
         std::size_t m=1; while (m<2*n-1) m*=2;
-        scratch=36.0L*n+16.0L*m;
-        plan=16.0L*(n+m);
+        scratch=48.0L*n+32.0L*m;
     }
-    const long double retained=fft_cached_plan_bytes();
-    while (participants>1 && retained+participants*(scratch+plan)>384.0L*1024*1024) --participants;
-    return participants;
+    const long double fixed=fft_cached_plan_bytes()+1024.0L*1024+channels*256.0L+
+        (imported ? 0 : n*(8.0L+sizeof(long double)))+
+        (imported ? n : n/2+1)*(static_cast<long double>(channels)+1)*8;
+    const auto cap=std::min(analysis_memory_budget,resources.memory_bytes);
+    for(;;) {
+        if(cancel && cancel->load())throw std::runtime_error("Operation cancelled.");
+        const auto available=resources.budget ? std::min<std::uint64_t>(cap,resources.budget->available()) : cap;
+        while(participants>1 && fixed+participants*scratch>available)--participants;
+        const auto required=fixed+participants*scratch;
+        if(required>available) {result.error="FFT resources are insufficient. Increase the data budget or select a smaller range.";return 0;}
+        if(!resources.budget)return participants;
+        result.memory_reservation=resources.budget->reserve(static_cast<std::uint64_t>(std::ceil(required)));
+        if(result.memory_reservation)return participants;
+        // Another operation won admission. Retry with the current availability.
+    }
 }
 
 }
 
 
-Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<bool>* cancel) {
+Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<bool>* cancel,
+                          const AnalysisResources& resources) {
     const auto check_cancel = [&] { if (cancel && cancel->load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled."); };
     check_cancel();
     Spectrum spec;
@@ -56,6 +67,7 @@ Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<
     }
     if (ds.frequency_axis) {
         if (rows < 2) { spec.error = "A stored spectrum needs at least two frequency bins."; return spec; }
+        if(!admit_spectrum(rows,ds.channels.size(),true,resources,spec,cancel))return spec;
         for (std::size_t i = 0; i < rows; ++i) {
             if ((i & 0xFFFF) == 0) check_cancel();
             if (!std::isfinite(ds.time[i]) || ds.time[i] < 0 || (i && ds.time[i] <= ds.time[i - 1])) {
@@ -113,6 +125,8 @@ Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<
         spec.error = "FFT is too large; select a smaller time window.";
         return spec;
     }
+    const auto participants=admit_spectrum(end,ds.channels.size(),false,resources,spec,cancel);
+    if(!participants)return spec;
 
     // Validate the axis and estimate its typical spacing. Small clock jitter and
     // rounded timestamps are common in real measurements, not a reason to fail.
@@ -215,13 +229,14 @@ Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<
         const double mean = total / static_cast<double>(n);
         for (auto& s : sig) s -= mean;  // remove DC
 
-        const std::vector<std::complex<double>> spectrum = dft(sig, cancel);
+        if((sig.size() & (sig.size()-1))==0)fft_radix2(sig,false,cancel);
+        else sig=dft(sig,cancel);
         std::vector<double> amp(half + 1);
         const double interior_scale = 2.0 / static_cast<double>(n);
         const double edge_scale = 1.0 / static_cast<double>(n);
         for (int k = 0; k <= half; ++k) {
             const bool is_edge_bin = (k == 0) || (n % 2 == 0 && k == half);
-            amp[k] = (is_edge_bin ? edge_scale : interior_scale) * std::abs(spectrum[k]);
+            amp[k] = (is_edge_bin ? edge_scale : interior_scale) * std::abs(sig[k]);
             if (!std::isfinite(amp[k])) { result.error = "FFT overflow; reduce signal magnitude."; return result; }
         }
 
@@ -233,7 +248,6 @@ Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<
         spec.names.push_back(ds.names[c]); spec.source_channels.push_back(c);
         spec.amp.push_back(std::move(result.amplitude));
     };
-    const std::size_t participants=spectrum_participants(end,ds.channels.size());
     bool parallel=false;
     if (participants>1) {
         std::vector<ChannelResult> results(ds.channels.size());

@@ -3,29 +3,52 @@
 #include "gui_processing.hpp"
 #include "gui_state.hpp"
 #include "gui_frf.hpp"
+#include "gui_spectrum.hpp"
+#include "gui_state_history.hpp"
 
 namespace gui {
+
+std::shared_ptr<const lvm::RecordingSource> current_recording_source() {
+    if(!g.recording_source) {
+        if(g.ds.time.empty() || g.source_path.empty() || !g.loaded_source_stamp_valid ||
+           g.ds.source_columns.size()!=g.ds.channel_count())
+            throw lvm::RecordingFailure(lvm::RecordingError::InvalidRequest,"Document has no replayable recording source.");
+        g.recording_source=lvm::RecordingSource::from_file(std::filesystem::path(g.source_path),
+            {g.ds.time.front(),g.ds.time.back()},g.ds.source_columns,g.source_scan_index,
+            lvm::RecordingStamp{g.loaded_source_size,g.loaded_source_modified});
+    }
+    g.recording_source->check_current();
+    return g.recording_source;
+}
 
 bool has_fft_window() {
     return g.fft_window_active && g.fft_window_end > g.fft_window_start;
 }
 
+lvm::TimeRange analysis_recording_bounds() {
+    if(!g.ds.frequency_axis) {
+        if(g.recording_source)return g.recording_source->bounds();
+        if(g.source_scan_index)return {g.source_scan_index->range_start,g.source_scan_index->range_end};
+    }
+    return {g.data_t0,g.data_t1};
+}
+
 void clear_fft_window() {
-    g.frf.entire_recording=false;
     invalidate_frf();
     g.fft_window_active = false;
     g.fft_window_start = 0.0;
     g.fft_window_end = 0.0;
+    clear_spectrum_cache_state();
 }
 
 void clamp_time_window(double& start, double& end) {
     if (start > end) std::swap(start, end);
-    start = std::max(start, g.data_t0);
-    end = std::min(end, g.data_t1);
+    const auto bounds=analysis_recording_bounds();
+    start = std::max(start, bounds.start);
+    end = std::min(end, bounds.end);
 }
 
 void set_fft_window(double start, double end) {
-    g.frf.entire_recording=false;
     clamp_time_window(start, end);
     if (end <= start) {
         clear_fft_window();
@@ -35,6 +58,7 @@ void set_fft_window(double start, double end) {
     g.fft_window_active = true;
     g.fft_window_start = start;
     g.fft_window_end = end;
+    clear_spectrum_cache_state();
 }
 
 bool current_fft_source_window(double& start, double& end, bool& from_selection) {
@@ -45,11 +69,22 @@ bool current_fft_source_window(double& start, double& end, bool& from_selection)
         from_selection = true;
         return true;
     }
-    start = g.win_start;
-    end = g.win_end;
+    const auto bounds=analysis_recording_bounds();
+    start = bounds.start;
+    end = bounds.end;
     clamp_time_window(start, end);
     from_selection = false;
     return end > start;
+}
+
+bool change_analysis_range(lvm::AnalysisRange range) {
+    lvm::TimeRange resolved;
+    if(!has_data() || !range.resolve(analysis_recording_bounds(),resolved) || resolved.end<=resolved.start)return false;
+    const auto before=capture_settings_snapshot();
+    if(range.kind==lvm::AnalysisRange::Kind::EntireRecording)clear_fft_window();
+    else set_fft_window(resolved.start,resolved.end);
+    record_settings_change(before);
+    return true;
 }
 
 bool fft_window_contains_time(double t) {

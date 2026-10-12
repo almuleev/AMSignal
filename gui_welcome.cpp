@@ -159,7 +159,6 @@ void layout_welcome_controls(HWND hwnd) {
     sy += segment_button_h + (layout.compact ? 8 : 12);
     place(IDW_THEME_DARK, sx, sy, sw, segment_button_h);
     sy += segment_button_h + (layout.compact ? 10 : 14);
-    place(IDW_LIGHT_MODE, sx, sy, sw, segment_button_h);
 }
 
 RecentFilesPanelState g_recent_files_panel;
@@ -506,15 +505,6 @@ LRESULT CALLBACK WelcomeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 SendMessageW(ctl, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
                 return ctl;
             };
-            auto mkcheck = [&](const wchar_t* text, int id) {
-                HWND ctl = CreateWindowExW(
-                    0, L"BUTTON", text,
-                    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | BS_OWNERDRAW,
-                    0, 0, 10, 10, hwnd,
-                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), inst, nullptr);
-                SendMessageW(ctl, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-                return ctl;
-            };
 
             mkstatic(g_str->welcome_title, IDW_TITLE, g.title_font ? g.title_font : font);
             mkstatic(welcome_version_text().c_str(), IDW_VERSION, g.axis_font ? g.axis_font : font);
@@ -528,8 +518,6 @@ LRESULT CALLBACK WelcomeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mkstatic(welcome_actions_hint_text(), IDW_ACTIONS_HINT, font);
             mkbtn(welcome_open_button_text(), IDC_OPEN);
             mkbtn(g_str->welcome_btn_recent, IDW_RECENT_FILES);
-            HWND light_mode = mkcheck(g_str->light_mode, IDW_LIGHT_MODE);
-            set_toggle_checked(light_mode, g.light_mode);
             mkbtn(settings_button_text(), IDC_PTSETTINGS);
             mkbtn(g_str->welcome_btn_hotkeys, IDM_HOTKEYS);
             mkbtn(g_str->welcome_btn_start, IDW_START);
@@ -611,13 +599,6 @@ LRESULT CALLBACK WelcomeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_PTSETTINGS: open_settings(); return 0;
                 case IDM_HOTKEYS: show_hotkeys(); return 0;
                 case IDW_START: ShowWindow(hwnd, SW_HIDE); show_ui_controls(); return 0;
-                case IDW_LIGHT_MODE:
-                    if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED) {
-                        HWND light = GetDlgItem(hwnd, IDW_LIGHT_MODE);
-                        toggle_checked_state(light);
-                        apply_light_mode(is_toggle_checked(light));
-                    }
-                    return 0;
                 case IDW_THEME_LIGHT: apply_theme_choice(&kLightTheme); return 0;
                 case IDW_THEME_DARK: apply_theme_choice(&kDarkTheme); return 0;
                 case IDM_LANG_RU: if (g_str != &kRu) { g_str = &kRu; save_runtime_settings(); rebuild_ui(); } return 0;
@@ -677,14 +658,6 @@ LRESULT CALLBACK WelcomeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (ctl_id == IDC_PTSETTINGS || ctl_id == IDM_HOTKEYS) {
                 draw_welcome_action_button(dc, r, txt, pressed, false, false);
-                return TRUE;
-            }
-            if (ctl_id == IDW_LIGHT_MODE) {
-                draw_themed_check_control(
-                    dc, r, txt,
-                    is_toggle_checked(dis->hwndItem), pressed,
-                    IsWindowEnabled(dis->hwndItem) != FALSE,
-                    false, false, g_theme->btn_bg);
                 return TRUE;
             }
             draw_themed_button(dc, r, txt, pressed, active, false);

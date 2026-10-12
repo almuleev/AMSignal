@@ -11,6 +11,11 @@ class MinMaxIndex {
 public:
     using Range = std::pair<double, double>;
     static constexpr std::size_t block_size = 64;
+    std::size_t memory_bytes() const {
+        std::size_t bytes=levels_.capacity()*sizeof(std::vector<Range>);
+        for (const auto& level:levels_) bytes+=level.capacity()*sizeof(Range);
+        return bytes;
+    }
     template<class Sample> void build(std::size_t count, Sample sample) {
         count_ = count;
         levels_.clear();

@@ -8,6 +8,8 @@
 #include "gui_layout.hpp"
 #include "gui_documents.hpp"
 #include "gui_loading.hpp"
+#include "gui_source_export.hpp"
+#include "gui_overview.hpp"
 #include "gui_loading_drop.hpp"
 #include "gui_playback.hpp"
 #include "gui_render.hpp"
@@ -412,7 +414,10 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_settings_dirty) { save_runtime_settings_now(); g_settings_dirty = false; }
             g_frf_worker.cancel();
             g_spectrum_worker.cancel();
+            g_overview_worker.cancel();
+            cancel_overview_snap();
             request_async_load_cancel();
+            cancel_source_export();
             if (g_load_worker.joinable()) g_load_worker.join();
             {
                 MSG pending{};
