@@ -25,7 +25,7 @@ std::size_t admit_spectrum(std::size_t n,std::size_t channels,bool imported,
                           const AnalysisResources& resources,Spectrum& result,const std::atomic<bool>* cancel) {
     const auto hardware=std::thread::hardware_concurrency();
     std::size_t participants=n>=65536 && channels>1 && !imported
-        ? std::min({channels,std::size_t(4),std::size_t(hardware ? hardware : 1),
+        ? std::min({channels,std::size_t(32),std::size_t(hardware ? hardware : 1),
                     std::max<std::size_t>(1,resources.max_participants)}) : 1;
     // Includes every output channel, common axes, retained and prospective
     // plans. Input snapshot ownership is reserved separately by the caller.
@@ -34,10 +34,10 @@ std::size_t admit_spectrum(std::size_t n,std::size_t channels,bool imported,
         std::size_t m=1; while (m<2*n-1) m*=2;
         scratch=48.0L*n+32.0L*m;
     }
-    const long double fixed=fft_cached_plan_bytes()+1024.0L*1024+channels*256.0L+
+    const long double fixed=(resources.cached_plans_accounted ? 0 : fft_cached_plan_bytes())+1024.0L*1024+channels*256.0L+
         (imported ? 0 : n*(8.0L+sizeof(long double)))+
         (imported ? n : n/2+1)*(static_cast<long double>(channels)+1)*8;
-    const auto cap=std::min(analysis_memory_budget,resources.memory_bytes);
+    const auto cap=resources.memory_bytes;
     for(;;) {
         if(cancel && cancel->load())throw std::runtime_error("Operation cancelled.");
         const auto available=resources.budget ? std::min<std::uint64_t>(cap,resources.budget->available()) : cap;

@@ -19,7 +19,8 @@ public:
     ~SpectrumWorker();
     void submit(Dataset data, std::vector<std::size_t> source_channels, std::uint64_t generation,
                 std::vector<AffineTransform> transforms = {},AnalysisResources resources = {},
-                std::shared_ptr<MemoryBudget::Reservation> reservation = {});
+                std::shared_ptr<MemoryBudget::Reservation> reservation = {},Compute fallback = {},
+                std::shared_ptr<const RecordingSource> source = {});
     void submit_source(Prepare prepare,std::vector<std::size_t> source_channels,
                        std::uint64_t generation,AnalysisResources resources);
     void submit_computation(Compute compute,std::vector<std::size_t> source_channels,std::uint64_t generation);
@@ -39,6 +40,8 @@ private:
         AnalysisResources resources;
         Prepare prepare;
         Compute compute;
+        Compute fallback;
+        std::shared_ptr<const RecordingSource> source;
     };
     void run();
     std::mutex mutex_;

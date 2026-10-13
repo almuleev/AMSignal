@@ -16,6 +16,7 @@
 #include "gui_render_data.hpp"
 #include "gui_window.hpp"
 #include "gui_resources.hpp"
+#include <psapi.h>
 
 namespace gui {
 
@@ -240,9 +241,13 @@ void refresh_settings_controls() {
     EnableWindow(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_APPLY),!g.resource_policy.automatic);
     const auto memory=resource_snapshot();
     const auto limit=lvm::resource_limit(g.resource_policy,memory)/(1024*1024);
-    const auto occupied=memory.resident/(1024*1024);
-    const auto status=(g_str==&kEn ? L"Data budget: " : L"Бюджет данных: ")+std::to_wstring(limit)+
-        (g_str==&kEn ? L" MiB; document data: " : L" MiB; данные документов: ")+std::to_wstring(occupied)+L" MiB";
+    const auto occupied=(memory.resident+refresh_load_memory_budget()->reserved())/(1024*1024);
+    PROCESS_MEMORY_COUNTERS_EX process{};process.cb=sizeof(process);
+    GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&process),sizeof(process));
+    const auto status=(g_str==&kEn ? L"Data + analysis: " : L"Данные + расчёты: ")+std::to_wstring(limit)+
+        (g_str==&kEn ? L" MiB; accounted: " : L" MiB; учтено: ")+std::to_wstring(occupied)+L" MiB\n"+
+        (g_str==&kEn ? L"Process RAM: " : L"RAM процесса: ")+std::to_wstring(process.WorkingSetSize/(1024*1024))+L" MiB; "+
+        (g_str==&kEn ? L"commit: " : L"выделено: ")+std::to_wstring(process.PrivateUsage/(1024*1024))+L" MiB";
     SetDlgItemTextW(g.settings_wnd,IDC_SET_MEMORY_STATUS,status.c_str());
     CheckRadioButton(g.settings_wnd, IDC_SET_LANG_RU, IDC_SET_LANG_EN, g_str == &kEn ? IDC_SET_LANG_EN : IDC_SET_LANG_RU);
     if (HWND theme = GetDlgItem(g.settings_wnd, IDW_THEME_LIGHT)) InvalidateRect(theme, nullptr, FALSE);
@@ -300,7 +305,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mk(L"STATIC", en ? L"FRF" : L"АЧХ", SS_LEFT, 28, 236, 120, 20, 0);
             install_axis_label_edit(mk(L"EDIT", g.frf_axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 232, 120, 24, IDC_SET_FRF_AXIS_X_EDIT));
             install_axis_label_edit(mk(L"EDIT", g.frf_axis_y_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 276, 232, 120, 24, IDC_SET_FRF_AXIS_Y_EDIT));
-            mkcheck(en ? L"Data: Auto" : L"Данные: Auto",28,266,190,26,IDC_SET_MEMORY_AUTO);
+            mkcheck(en ? L"Auto memory budget" : L"Автолимит памяти",28,266,190,26,IDC_SET_MEMORY_AUTO);
             set_toggle_checked(GetDlgItem(hwnd,IDC_SET_MEMORY_AUTO),g.resource_policy.automatic);
             // Keep the budget separate from coordinate-name controls above.
             mk(L"STATIC",L"MiB",SS_LEFT,234,270,42,20,0);
@@ -308,7 +313,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP,276,266,80,24,IDC_SET_MEMORY_EDIT));
             SendDlgItemMessageW(hwnd,IDC_SET_MEMORY_EDIT,EM_SETLIMITTEXT,5,0);
             mk(L"BUTTON",en ? L"Apply" : L"Применить",BS_OWNERDRAW | WS_TABSTOP,366,264,144,28,IDC_SET_MEMORY_APPLY);
-            mk(L"STATIC",L"",SS_LEFT,28,300,482,32,IDC_SET_MEMORY_STATUS);
+            mk(L"STATIC",L"",SS_LEFT,28,296,482,40,IDC_SET_MEMORY_STATUS);
             EnableWindow(GetDlgItem(hwnd,IDC_SET_MEMORY_EDIT),!g.resource_policy.automatic);
             EnableWindow(GetDlgItem(hwnd,IDC_SET_MEMORY_APPLY),!g.resource_policy.automatic);
             mk(L"BUTTON", en ? L"Hotkeys" : L"Горячие клавиши", BS_OWNERDRAW, 12, 342, 510, 188, IDC_SET_GROUP_HOTKEYS);

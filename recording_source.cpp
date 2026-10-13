@@ -1,6 +1,7 @@
 #include "recording_source.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <new>
 #include <numeric>
@@ -37,8 +38,11 @@ std::size_t bounded_rows(const RecordingReadRequest& request) {
 std::shared_ptr<const RecordingSource> RecordingSource::from_file(
     const std::filesystem::path& path, TimeRange bounds,
     std::vector<std::size_t> physical_columns, std::shared_ptr<const ScanIndex> index,
-    std::optional<RecordingStamp> expected) {
+    std::optional<RecordingStamp> expected,double filter_sample_step) {
     auto source = std::shared_ptr<RecordingSource>(new RecordingSource);
+    if(!std::isfinite(filter_sample_step) || filter_sample_step<0)
+        throw RecordingFailure(RecordingError::InvalidRequest,"Invalid source filter cadence.");
+    source->filter_sample_step_=filter_sample_step;
     std::error_code ec;
     source->path_ = std::filesystem::absolute(path, ec);
     if (ec) throw RecordingFailure(RecordingError::ReadFailure, "Cannot resolve the recording path.");

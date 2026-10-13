@@ -6,6 +6,8 @@
 #include "data_io.hpp"
 #include "version.hpp"
 #include "lvm_parser.hpp"
+#include "fft.hpp"
+#include <thread>
 
 #include <cmath>
 #include <cstdio>
@@ -25,11 +27,29 @@
 #include <shellapi.h>
 #endif
 
+#include "processor_resources.hpp"
 namespace {
 
 const char* kVersion = APP_VERSION;
 const int kDefaultFftSamples = 0;  // 0 = use all samples (correct frequency axis)
 const int kDefaultPeaks = 5;
+
+lvm::AnalysisResources automatic_fft_resources(const lvm::Dataset& data) {
+    lvm::AnalysisResources resources;
+#ifdef _WIN32
+    MEMORYSTATUSEX status{};status.dwLength=sizeof(status);
+    if(GlobalMemoryStatusEx(&status)) {
+        std::uint64_t resident=(data.time.capacity()+data.raw_time.capacity())*8+lvm::fft_cached_plan_bytes();
+        for(const auto& c:data.channels)resident+=c.capacity()*8;
+        const lvm::ResourceSnapshot memory{status.ullAvailPhys,status.ullAvailPageFile,resident};
+        resources.budget=std::make_shared<lvm::MemoryBudget>();
+        resources.budget->configure(lvm::resource_limit({},memory),resident,lvm::resource_headroom(memory));
+        resources.memory_bytes=resources.budget->available();resources.cached_plans_accounted=true;
+        resources.max_participants=lvm::processor_participants();
+    }
+#endif
+    return resources;
+}
 
 void print_usage(const char* prog) {
     std::cout <<
@@ -405,10 +425,13 @@ int main(int argc, char** argv) {
     }
     lvm::Dataset view;
     std::string sel_error;
-    if (!apply_selection(ds, start, end, channel_pos, view, sel_error)) {
+    const bool whole=channel_pos.empty() && (ds.time.empty() || (start<=ds.time.front() && end>=ds.time.back()));
+    if(whole) {view=std::move(ds);std::vector<double>().swap(view.raw_time);}
+    else if (!apply_selection(ds, start, end, channel_pos, view, sel_error)) {
         std::cerr << "Error: " << sel_error << "\n";
         return 2;
     }
+    ds={}; // Selection owns its values; never retain a second complete input.
     if (view.rows() == 0) {
         std::cerr << "Error: selection is empty (no rows in the given time range).\n";
         return 1;
@@ -429,7 +452,7 @@ int main(int argc, char** argv) {
     }
 
     if (want_fft_any) {
-        const lvm::Spectrum spec = lvm::compute_spectrum(view, fft_samples);
+        const lvm::Spectrum spec = lvm::compute_spectrum(view, fft_samples,nullptr,automatic_fft_resources(view));
         if (!spec.ok) {
             std::cerr << "FFT error: " << spec.error << "\n";
             return 1;

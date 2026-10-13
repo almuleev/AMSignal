@@ -2,6 +2,8 @@
 #include "scan_index_cache.hpp"
 #include <algorithm>
 #include <cmath>
+#include <sstream>
+#include <iomanip>
 
 namespace lvm {
 OverviewWorker::~OverviewWorker() { shutdown(); }
@@ -9,6 +11,10 @@ void OverviewWorker::submit(Request request) {
     auto flag=std::make_shared<std::atomic<bool>>(false);
     std::lock_guard<std::mutex> lock(mutex_);
     if(stopping_)return;
+    cache_limit_=request.cache_bytes;
+    while(!cached_views_.empty() && cached_bytes_>request.cache_bytes) {
+        cached_bytes_-=cached_views_.front().bytes;cached_views_.erase(cached_views_.begin());
+    }
     if(!thread_.joinable())thread_=std::thread(&OverviewWorker::run,this);
     if(active_cancel_)active_cancel_->store(true);
     pending_.reset();result_.reset();
@@ -46,6 +52,7 @@ void OverviewWorker::shutdown() {
         if(active_cancel_)active_cancel_->store(true);
         if(snap_cancel_)snap_cancel_->store(true);
         pending_.reset();result_.reset();progress_={};
+        cached_views_.clear();cached_bytes_=0;
         pending_snap_.reset();snap_result_.reset();
     }
     ready_.notify_one();
@@ -57,6 +64,13 @@ std::optional<OverviewWorker::Result> OverviewWorker::take_result() {
 }
 OverviewWorker::Progress OverviewWorker::progress() const {
     std::lock_guard<std::mutex> lock(mutex_);return progress_;
+}
+void OverviewWorker::trim_cache(std::size_t bytes) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cache_limit_=bytes;
+    while(!cached_views_.empty() && cached_bytes_>bytes) {
+        cached_bytes_-=cached_views_.front().bytes;cached_views_.erase(cached_views_.begin());
+    }
 }
 void OverviewWorker::run() {
     for(;;) {
@@ -88,6 +102,7 @@ void OverviewWorker::run() {
         }
         auto& request=job->request;
         Result result;result.generation=request.generation;result.source=request.source;
+        std::string view_key;
         try {
             if(!request.source)throw RecordingFailure(RecordingError::InvalidRequest,"Missing overview source.");
             request.source->check_current();
@@ -96,6 +111,19 @@ void OverviewWorker::run() {
                 throw RecordingFailure(RecordingError::InvalidRequest,"Invalid overview range or width.");
             for(auto channel:request.view.channels)if(channel>=request.source->channel_count())
                 throw RecordingFailure(RecordingError::InvalidRequest,"Invalid overview channel.");
+            if(request.cache_bytes) {
+                std::ostringstream key;key<<request.source.get()<<':'<<std::hexfloat<<range.start<<':'<<range.end<<':'
+                    <<request.view.pixel_columns<<':'<<request.view.display_density<<':'<<request.view.memory_bytes<<':'
+                    <<request.gap_details<<':'<<request.gap_step<<':'<<request.build.max_disk_bytes;
+                for(auto c:request.view.channels)key<<':'<<c;
+                view_key=key.str();
+                std::lock_guard<std::mutex> lock(mutex_);
+                for(std::size_t i=0;i<cached_views_.size();++i)if(cached_views_[i].key==view_key) {
+                    auto hit=std::move(cached_views_[i]);cached_views_.erase(cached_views_.begin());
+                    cached_bytes_-=hit.bytes;result=std::move(hit.result);result.generation=request.generation;break;
+                }
+            }
+            if(!result.view) {
             auto index=request.index;
             if(index && index->source().get()!=request.source.get())
                 throw RecordingFailure(RecordingError::InvalidRequest,"Overview source mismatch.");
@@ -124,23 +152,7 @@ void OverviewWorker::run() {
                 }
                 result.gap_step=request.gap_step;
                 if(result.gap_step<0) {
-                    // Preserve the existing GUI rule: first 4096 sampled
-                    // intervals at stride (N-1)/4096, over the whole source.
-                    const auto stride=std::max<std::uint64_t>(1,(index->sample_count()-1)/4096);
-                    std::vector<double> diffs;diffs.reserve(4096);
-                    std::uint64_t row=0;double previous=0;
-                    RecordingReadRequest timeline;timeline.block_bytes=1024*1024;timeline.block_rows=4096;
-                    request.source->replay(timeline,[&](const auto& time,const auto&) {
-                        for(auto t:time) {
-                            if(row && (row-1)%stride==0 && diffs.size()<4096) {
-                                const auto d=t-previous;if(std::isfinite(d) && d>0)diffs.push_back(d);
-                            }
-                            previous=t;++row;
-                        }
-                    },job->cancelled.get());
-                    std::sort(diffs.begin(),diffs.end());
-                    const auto mid=diffs.size()/2;
-                    result.gap_step=diffs.empty() ? 0 : diffs.size()%2 ? diffs[mid] : .5*(diffs[mid-1]+diffs[mid]);
+                    result.gap_step=index->gap_step();
                 }
                 if(result.gap_step>0 && range.end>range.start) {
                     const auto pixels=std::min<std::size_t>(8192,request.view.pixel_columns);
@@ -153,25 +165,14 @@ void OverviewWorker::run() {
                         // gap for its card; never fabricate a merged duration.
                         if(gap.right-gap.left>slots[bin].right-slots[bin].left)slots[bin]=gap;
                     };
-                    const auto bounds=request.source->bounds();
-                    if(range.start==bounds.start && range.end==bounds.end) {
-                        // A complete overview must not repeatedly replay leaf
-                        // prefixes. One time-only pass preserves every boundary.
-                        bool have_previous=false;double previous=0;
-                        RecordingReadRequest timeline;timeline.block_bytes=1024*1024;timeline.block_rows=4096;
-                        request.source->replay(timeline,[&](const auto& time,const auto&) {
-                            for(auto t:time) {
-                                if(have_previous && t-previous>result.gap_step*64)collect({previous,t});
-                                previous=t;have_previous=true;
-                            }
-                        },job->cancelled.get());
-                    } else index->visit_gaps(range,result.gap_step*64,collect,job->cancelled.get(),options);
+                    index->visit_gaps(range,result.gap_step*64,collect,job->cancelled.get(),options);
                     for(auto gap:slots)if(gap.right>gap.left)result.gaps.push_back(gap);
                 }
             }
             result.view=std::make_shared<const OverviewView>(std::move(view));
             result.index=std::move(index);
             result.channels=std::move(request.view.channels);
+            }
             request.source->check_current();
         } catch(const RecordingFailure& e) { result.error=e.error; }
           catch(const std::bad_alloc&) { result.error=RecordingError::ResourceLimit; }
@@ -180,6 +181,20 @@ void OverviewWorker::run() {
         if(result.error) {result.view.reset();result.index.reset();}
         std::lock_guard<std::mutex> lock(mutex_);
         if(!stopping_ && active_cancel_==job->cancelled && !job->cancelled->load()) {
+            if(!result.error && result.view && !view_key.empty()) {
+                const auto bytes=result.view->resident_bytes()+(result.details_reservation ? result.details_reservation->bytes() : result.gaps.capacity()*sizeof(OverviewGap));
+                for(std::size_t i=0;i<cached_views_.size();++i)if(cached_views_[i].key==view_key) {
+                    cached_bytes_-=cached_views_[i].bytes;cached_views_.erase(cached_views_.begin()+i);break;
+                }
+                const auto allowance=std::min(cache_limit_,request.cache_bytes);
+                if(bytes<=allowance) {
+                    while(!cached_views_.empty() && (cached_views_.size()>=4 || cached_bytes_+bytes>allowance)) {
+                        cached_bytes_-=cached_views_.front().bytes;cached_views_.erase(cached_views_.begin());
+                    }
+                    try{cached_views_.push_back({view_key,result,bytes});cached_bytes_+=bytes;}
+                    catch(const std::bad_alloc&){} // Optional retention cannot reject a completed view.
+                }
+            } else if(result.error==RecordingError::SourceChanged) {cached_views_.clear();cached_bytes_=0;}
             progress_.phase=Phase::Idle;
             result_.reset();result_.emplace(std::move(result));
         }

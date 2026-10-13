@@ -61,6 +61,7 @@ struct TimeStepEstimate {
 TimeStepEstimate estimate_time_step(const std::vector<double>& time, std::size_t lo, std::size_t hi, std::size_t max_diffs);
 
 double effective_time_gap_step(const std::vector<double>& time, std::size_t lo, std::size_t hi);
+double effective_time_gap_step(const std::vector<double>& time, std::size_t lo, std::size_t hi, double global_step);
 
 void draw_time(HDC dc, const RECT& p);
 

@@ -1,6 +1,6 @@
 # Build separately compiled GUI modules; -Test links the same objects into the
 # headless regression executable. Only changed sources/headers are recompiled.
-param([switch]$Test)
+param([switch]$Test,[string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
@@ -49,6 +49,10 @@ if ($Test) {
     & g++ -static -o $outName @objects @libraries
 } else {
     $outName = "AMSignal-$releaseVersion-x64.exe"
+    if ($OutputDirectory) {
+        New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+        $outName = Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) $outName
+    }
     $resourceObject = Join-Path $objectDir 'AM_logo_res.o'
     & windres -O coff -i AM_logo.rc -o $resourceObject
     if ($LASTEXITCODE -ne 0) { throw 'Resource compilation failed.' }

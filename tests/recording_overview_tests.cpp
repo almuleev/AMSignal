@@ -1,5 +1,6 @@
 #include "recording_overview.hpp"
 #include "overview_worker.hpp"
+#include "disk_spectrum.hpp"
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -185,6 +186,50 @@ void test_recording_overview(void (*check)(bool,const std::string&)) {
         index.reset();options.base_rows=base;index=lvm::RecordingOverview::build(source,cache,options);
         check(index->sample_count()==n && index->level_count()>1 && index->disk_bytes()<=options.max_disk_bytes && budget->reserved()==0,
               "disk hierarchy is complete, bounded and releases build admission");
+        bool mapping=true;
+        for(auto i:{std::size_t(0),std::size_t(1023),std::size_t(1024),std::size_t(2049),n-1}) {
+            const auto display=index->stitched_time(time[i]);
+            mapping=mapping && display==static_cast<double>(i) && index->stitched_time(display,true)==time[i] &&
+                index->stitched_sample_time(i)==display;
+        }
+        check(mapping,"cached stitching matches the original cadence and is reversible across leaf boundaries");
+        const auto selected=lvm::AnalysisRange::selected(time[1023]+.25,time[2050]);
+        const auto rows=index->sample_range(selected);
+        std::vector<double> timeline;index->replay_timeline(selected,[&](const auto& ts){timeline.insert(timeline.end(),ts.begin(),ts.end());});
+        check(rows==std::make_pair(std::uint64_t(1024),std::uint64_t(2051)) &&
+              timeline==std::vector<double>(time.begin()+1024,time.begin()+2051),
+              "binary timeline keeps exact timestamps and inclusive selection edges across disk pages");
+        const auto empty=index->sample_range(lvm::AnalysisRange::selected(time[1023]+.25,time[1024]-.25));
+        check(empty.first==empty.second,"an interval wholly inside an outage contains no invented samples");
+        lvm::RecordingSnapRequest stitched;stitched.stitched=true;stitched.channels={{1,false,1,0}};
+        stitched.target_time=1024;stitched.target_value=values[1][1024];stitched.time_scale=1000000;
+        const auto exact_stitched=index->nearest_sample(stitched);
+        check(exact_stitched.found && exact_stitched.sample==1024 && exact_stitched.time==time[1024] &&
+              exact_stitched.value==values[1][1024],"stitched Snap measures screen distance and returns the original raw sample");
+        if(base==1024) {
+            lvm::Dataset data;data.ok=true;data.time=time;data.names={"A"};data.channels={values[0]};
+            const auto expected=lvm::compute_spectrum(data,0);
+            lvm::RecordingReadRequest fft_read;fft_read.channels={0};
+            lvm::DiskSpectrumOptions disk;disk.timeline=index;
+            lvm::AnalysisResources resources;resources.budget=budget;
+            auto actual=lvm::compute_disk_spectrum(source,fft_read,data.names,resources,nullptr,disk);
+            bool same=actual.ok==expected.ok && actual.n==expected.n && actual.sample_dt==expected.sample_dt &&
+                actual.source_start==expected.source_start && actual.source_end==expected.source_end &&
+                actual.resampled==expected.resampled && actual.gaps_ignored==expected.gaps_ignored;
+            double difference=0;std::vector<double> amplitudes;actual.read_amplitudes(0,0,actual.bin_count(),amplitudes);
+            for(std::size_t i=0;i<amplitudes.size();++i){same=same && actual.frequency(i)==expected.freqs[i];
+                difference=std::max(difference,std::fabs(amplitudes[i]-expected.amp[0][i]));}
+            check(same && difference<=1e-12,"cached-timeline disk FFT preserves N, full metadata, every frequency and amplitude with NaN/outages");
+            std::printf("cached timeline FFT N=%zu: max abs error %.17g\n",time.size(),difference);
+            actual={};
+            fft_read.range=lvm::AnalysisRange::selected(time[1023]+.25,time[2050]);
+            data.time.assign(time.begin()+1024,time.begin()+2051);
+            data.channels[0].assign(values[0].begin()+1024,values[0].begin()+2051);
+            const auto selected_expected=lvm::compute_spectrum(data,0);
+            actual=lvm::compute_recording_spectrum(source,fft_read,data.names,resources,nullptr,index);
+            check(actual.ok && actual.n==selected_expected.n && actual.freqs==selected_expected.freqs && actual.amp==selected_expected.amp,
+                  "cached sample count also preserves the selected-interval RAM FFT exactly");
+        }
         for(int transform=0;transform<3;++transform)for(auto target:{std::size_t(0),std::size_t(10),std::size_t(1024),
                 std::size_t(2050),std::size_t(17776),n-1}) {
             lvm::RecordingSnapRequest q;q.channels={{1,false,1,0},{0,transform!=0,transform==1 ? -2.0 : 1e308,3}};

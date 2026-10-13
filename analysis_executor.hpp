@@ -46,15 +46,7 @@ class AnalysisExecutor {
         }
     }
 public:
-    AnalysisExecutor() {
-        try { for (std::size_t i=0;i<3;++i) threads_.emplace_back([this,i]{worker(i);}); }
-        catch (...) {
-            { std::lock_guard<std::mutex> lock(mutex_); stopping_=true; }
-            ready_.notify_all();
-            for (auto& thread:threads_) thread.join();
-            throw;
-        }
-    }
+    AnalysisExecutor()=default;
     ~AnalysisExecutor() {
         std::lock_guard<std::mutex> admission(admission_);
         { std::lock_guard<std::mutex> lock(mutex_); stopping_=true; }
@@ -65,9 +57,17 @@ public:
         if(!count)return true;
         std::unique_lock<std::mutex> admission(admission_,std::try_to_lock);
         if (!admission.owns_lock()) return false;
-        participants=std::clamp<std::size_t>(participants,1,std::min<std::size_t>(4,count));
+        participants=std::clamp<std::size_t>(participants,1,std::min<std::size_t>(32,count));
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            // Grow only after admission. Failure leaves already started helpers
+            // usable and reduces the participants; it never creates another pool.
+            try {
+                while(threads_.size()+1<participants) {
+                    const auto id=threads_.size();
+                    threads_.emplace_back([this,id]{worker(id);});
+                }
+            } catch(const std::system_error&) {participants=std::min(participants,threads_.size()+1);}
             job_=&job; count_=count; next_=0; error_=nullptr;
             participants_=participants; pending_=participants-1; ++generation_;
         }

@@ -15,7 +15,7 @@
 namespace gui {
 void visit_overview_curve(std::size_t channel,double threshold,
                           const std::function<void(OverviewCurvePoint)>& consume) {
-    if(!consume || !overview_processing_supported() || !overview_view_matches_viewport() ||
+    if(!consume || !overview_processing_supported() || !overview_view_can_render() ||
        channel>=g.visible.size() || !g.visible[channel])return;
     const auto at=std::find(g.overview.channels.begin(),g.overview.channels.end(),channel);
     if(at==g.overview.channels.end())return;
@@ -36,7 +36,7 @@ void visit_overview_curve(std::size_t channel,double threshold,
         for(std::size_t k=0;k<points.second;++k) {
             const auto& point=points.first[k];const double value=affine ? point.value*mul+add : point.value;
             if(!std::isfinite(value)){first=true;previous_safe=false;continue;}
-            consume({point.time,value,safe && (first ? join : true)});first=false;
+            consume({point.time,value,safe && (first ? join : true),point.sample});first=false;
         }
         previous_safe=safe && !first;
         previous_time=bucket.last_time;previous_end=bucket.first_sample+bucket.sample_count;
@@ -56,7 +56,8 @@ void draw_overview_time(HDC dc,const RECT& p) {
         low=g.y_lock_min;high=g.y_lock_max;
     }
     const int saved=SaveDC(dc);
-    draw_axes(dc,p,g.win_start,g.win_end,low,high);
+    const auto displayed_start=stitched_time_from_raw(g.win_start),displayed_end=stitched_time_from_raw(g.win_end);
+    draw_axes(dc,p,displayed_start,displayed_end,low,high);
     if(!ready) {
         std::wstring message;
         if(!supported)message=g_str==&kEn ? L"Gap stitching is unavailable for this recording."
@@ -74,8 +75,12 @@ void draw_overview_time(HDC dc,const RECT& p) {
         RestoreDC(dc,saved);return;
     }
     const auto mapx=[&](double t) {
-        const double fraction=(t-g.win_start)/(g.win_end-g.win_start);
+        const double fraction=(stitched_time_from_raw(t)-displayed_start)/(displayed_end-displayed_start);
         return p.left+static_cast<int>(std::clamp(fraction*pw,-16384.0,16384.0));
+    };
+    const auto sample_x=[&](std::uint64_t sample,double raw) {
+        const auto time=g.stitch_time_gaps ? g.overview.index->stitched_sample_time(sample) : raw;
+        return p.left+static_cast<int>(std::clamp((time-displayed_start)/(displayed_end-displayed_start)*pw,-16384.0,16384.0));
     };
     const auto mapy=[&](double v) {
         const long double fraction=(static_cast<long double>(v)-low)/(static_cast<long double>(high)-low);
@@ -83,7 +88,7 @@ void draw_overview_time(HDC dc,const RECT& p) {
     };
     IntersectClipRect(dc,p.left+1,p.top+1,p.right,p.bottom);
     ensure_global_gap_step_ready();
-    const double threshold=g.cached_global_gap_step>0 ? g.cached_global_gap_step*64 : std::numeric_limits<double>::infinity();
+    const double threshold=!g.stitch_time_gaps && g.cached_global_gap_step>0 ? g.cached_global_gap_step*64 : std::numeric_limits<double>::infinity();
     if(has_fft_window() || g.fft_selecting) {
         const auto a=g.fft_selecting ? std::min(g.fft_select_anchor_t,g.fft_select_current_t) : g.fft_window_start;
         const auto b=g.fft_selecting ? std::max(g.fft_select_anchor_t,g.fft_select_current_t) : g.fft_window_end;
@@ -92,9 +97,10 @@ void draw_overview_time(HDC dc,const RECT& p) {
             auto brush=CreateSolidBrush(mix_color(g_theme->bg_plot,g_theme->accent,24));FillRect(dc,&selected,brush);DeleteObject(brush);
         }
     }
-    if(g.show_gap_markers)for(auto gap:g.overview.gaps) {
+    if(g.show_gap_markers && !g.stitch_time_gaps)for(auto gap:g.overview.gaps) {
         RECT rect={std::clamp(mapx(gap.left),p.left+1,p.right-1),p.top+1,
                    std::clamp(mapx(gap.right),p.left+1,p.right-1),p.bottom-1};
+        if(rect.right-rect.left<3)rect.top=p.bottom-8;
         if(rect.right<=rect.left)rect.right=std::min(p.right-1,rect.left+1);
         if(rect.right<=rect.left)continue;
         const auto brush=CreateSolidBrush(mix_color(g_theme->bg_plot,RGB(245,140,32),32));FillRect(dc,&rect,brush);DeleteObject(brush);
@@ -108,13 +114,29 @@ void draw_overview_time(HDC dc,const RECT& p) {
     for(std::size_t c=0;c<g.visible.size();++c) {
         if(!g.visible[c])continue;
         const COLORREF color=channel_color(c);
-        HPEN pen=CreatePen(g.distinguish_curves ? curve_pen_style(c) : PS_SOLID,1,color);
+        HPEN pen=CreatePen(original && g.distinguish_curves ? curve_pen_style(c) : PS_SOLID,1,color);
         const auto old=SelectObject(dc,pen);int last_symbol=-100000;POINT previous{};
         std::vector<POINT> run;
         if(smooth)run.reserve(view.buckets.size());
         const auto flush=[&]{if(!run.empty()){draw_catmull_rom(dc,run);run.clear();}};
+        // A dense bucket is an amplitude envelope, not four isolated samples.
+        // Subpixel gaps/NaNs forbid joining neighbouring curves, but must not
+        // erase the range of the finite original samples from an overview.
+        const auto channel=std::find(g.overview.channels.begin(),g.overview.channels.end(),c);
+        if(channel!=g.overview.channels.end())for(const auto& bucket:view.buckets) {
+            if(!bucket.aggregated() || bucket.last_time<g.win_start || bucket.first_time>g.win_end)continue;
+            const auto& trace=bucket.channels[channel-g.overview.channels.begin()];if(!trace.finite_count)continue;
+            const auto x0=sample_x(bucket.first_sample,bucket.first_time),x1=sample_x(bucket.first_sample+bucket.sample_count-1,bucket.last_time);
+            if(x1-x0>2)continue; // Never bridge a resolved, visible outage.
+            const bool affine=g.overview.source->processing_identity().empty() && g.channel_transform_kind[c]==TransformRuntimeKind::Affine;
+            const auto a=affine ? trace.minimum.value*g.channel_transform_mul[c]+g.channel_transform_add[c] : trace.minimum.value;
+            const auto b=affine ? trace.maximum.value*g.channel_transform_mul[c]+g.channel_transform_add[c] : trace.maximum.value;
+            if(!std::isfinite(a) || !std::isfinite(b))continue;
+            const auto x=x0+(x1-x0)/2,y0=mapy(a),y1=mapy(b);
+            MoveToEx(dc,x,y0,nullptr);LineTo(dc,x,y1);SetPixelV(dc,x,y1,color);
+        }
         visit_overview_curve(c,threshold,[&](OverviewCurvePoint point) {
-            const int x=mapx(point.time),y=mapy(point.value);
+            const int x=sample_x(point.sample,point.time),y=mapy(point.value);
             if(smooth) {if(!point.connect)flush();run.push_back({x,y});SetPixelV(dc,x,y,color);}
             else {if(point.connect){MoveToEx(dc,previous.x,previous.y,nullptr);LineTo(dc,x,y);}else SetPixelV(dc,x,y,color);}
             previous={x,y};
@@ -130,8 +152,10 @@ void draw_overview_time(HDC dc,const RECT& p) {
         MoveToEx(dc,mapx(g.playhead),p.top,nullptr);LineTo(dc,mapx(g.playhead),p.bottom);SelectObject(dc,old);DeleteObject(pen);
     }
     RestoreDC(dc,saved);draw_legend(dc,p);
-    if(g.overview.snap_pending || g.overview.snap_error) {
-        const auto message=g.overview.snap_pending ?
+    if(g.overview.snap_pending || g.overview.snap_error || g.overview.pending || g.overview.error) {
+        const auto message=g.overview.error ?
+            (g_str==&kEn ? L"Could not refine this view. Showing the previous projection." : L"Не удалось уточнить график. Показан предыдущий обзор.") : g.overview.pending ?
+            (g_str==&kEn ? L"Refining signal view…" : L"Уточнение графика сигнала…") : g.overview.snap_pending ?
             (g_str==&kEn ? L"Reading original sample…" : L"Чтение исходного отсчёта…") :
             (g_str==&kEn ? L"Original sample could not be read. Annotation unchanged." : L"Не удалось прочитать исходный отсчёт. Разметка не изменена.");
         const int notice=SaveDC(dc);RECT label=p;label.left+=8;label.top+=8;label.right-=8;label.bottom=label.top+22;
@@ -139,6 +163,6 @@ void draw_overview_time(HDC dc,const RECT& p) {
         SetTextAlign(dc,TA_LEFT|TA_TOP);DrawTextW(dc,message,-1,&label,DT_RIGHT|DT_SINGLELINE|DT_NOPREFIX);
         RestoreDC(dc,notice);
     }
-    g.vx0=g.win_start;g.vx1=g.win_end;g.vy0=low;g.vy1=high;g.vrect=p;g.vvalid=true;
+    g.vx0=displayed_start;g.vx1=displayed_end;g.vy0=low;g.vy1=high;g.vrect=p;g.vvalid=true;
 }
 } // namespace gui

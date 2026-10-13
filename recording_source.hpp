@@ -40,7 +40,7 @@ public:
         const std::filesystem::path& path, TimeRange bounds,
         std::vector<std::size_t> physical_columns,
         std::shared_ptr<const ScanIndex> index = {},
-        std::optional<RecordingStamp> expected = {});
+        std::optional<RecordingStamp> expected = {},double filter_sample_step=0);
     // Takes ownership without copying sample arrays. Input must already be prepared.
     static std::shared_ptr<const RecordingSource> from_memory(Dataset&& data);
     using Replay = std::function<void(const RecordingReadRequest&,const RecordingBlockConsumer&,const std::atomic<bool>*)>;
@@ -50,6 +50,7 @@ public:
                                                           std::string identity,Replay replay);
     std::string cache_identity() const { return path_.lexically_normal().u8string()+processing_identity_; }
     const std::string& processing_identity() const { return processing_identity_; }
+    double filter_sample_step() const {return raw_ ? raw_->filter_sample_step() : filter_sample_step_;}
 
     const TimeRange& bounds() const { return bounds_; }
     std::size_t channel_count() const { return physical_columns_.size(); }
@@ -75,6 +76,7 @@ private:
     std::shared_ptr<const RecordingSource> raw_;
     std::string processing_identity_;
     Replay replay_;
+    double filter_sample_step_=0;
 };
 
 } // namespace lvm

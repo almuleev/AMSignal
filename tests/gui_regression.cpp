@@ -32,6 +32,7 @@
 #include "../gui_resources.hpp"
 #include "../gui_overview.hpp"
 #include "../gui_overview_render.hpp"
+#include "../gui_controls.hpp"
 #include "../gui_recording_cache.hpp"
 #include "../gui_recording_processing.hpp"
 #include "../gui_source_export.hpp"
@@ -60,6 +61,7 @@ const std::filesystem::path test_dir = "tests/_tmp_gui_regression";
 void reset_document(const std::vector<std::string>& names, const std::vector<double>& time,
                     const std::vector<std::vector<double>>& channels) {
     cancel_recording_overview();
+    g_overview_worker.trim_cache(0);
     g_frf_worker.cancel();
     g = App{};
     g_undo.clear(); g_redo.clear(); g_filter_slider_before.reset();
@@ -671,11 +673,11 @@ void routed_window_messages() {
 
 void display_load_budget() {
     constexpr std::uint64_t gib=1024ULL*1024*1024;
-    require(display_load_memory_budget(24*gib,24*gib)==2*gib,
-            "large display loads stay bounded even on a machine with ample memory");
-    require(display_load_memory_budget(4*gib,8*gib)==gib/2,
+    require(display_load_memory_budget(24*gib,24*gib)==(24*gib-24*gib/5)/3,
+            "large resident loads scale above the former two-GiB ceiling");
+    require(display_load_memory_budget(4*gib,8*gib)==(4*gib-4*gib/5)/3,
             "display loading reserves physical memory for processing and other documents");
-    require(display_load_memory_budget(24*gib,gib)==gib/8,
+    require(display_load_memory_budget(24*gib,gib)==gib/6,
             "low available commit restricts loading despite ample physical memory");
     require(display_load_memory_budget(0,24*gib)==1 && display_load_memory_budget(24*gib,0)==1,
             "memory pressure never turns the display limit into an unbounded load");
@@ -1620,6 +1622,7 @@ void background_document_overview() {
         }
     };
     require(request_recording_overview(cache,lvm::AnalysisRange::entire(),{1,0},4),"GUI starts a background overview independently of its small Dataset");wait();
+    if(g.overview.error)std::cerr<<"Background overview error="<<static_cast<int>(*g.overview.error)<<std::endl;
     require(!g.overview.pending && !g.overview.error && g.overview.view && g.overview.view->sample_count==12000,
             "complete source overview is published in the owning document");
     require(g.overview.channels==std::vector<std::size_t>({1,0}) && g.overview.index->source()==source,
@@ -1734,7 +1737,9 @@ void overview_renderer() {
     g.channel_formulas[0]=L"x";rebuild_formula_cache_from_state();
     g.win_start=time[7000];g.win_end=time[7030];
     require(synchronize_overview_viewport(880),"navigation queues a projection of the new viewport");
-    require(!overview_view_matches_viewport(),"the old projection cannot impersonate a different viewport");wait();
+    require(!overview_view_matches_viewport(),"the old projection cannot impersonate a different viewport");
+    draw_chart(dc,plot);
+    require(g.vvalid && g.vx0==time[7000] && g.vx1==time[7030],"zoom retains a clipped previous projection while exact samples load");wait();
     require(g.overview.view->sample_count==31 && std::all_of(g.overview.view->buckets.begin(),g.overview.view->buckets.end(),
             [](const auto& b){return b.sample_count==1;}),"deep zoom shows original samples");
     g.visual_smooth=true;draw_chart(dc,plot);
@@ -1852,7 +1857,10 @@ void overview_renderer() {
     require(request_overview_snap(x,y,accept),"nonlinear overview Snap reads the processed source");wait_snap();
     require(accepted==4 && picked.channel==0 && picked.value==values[0][picked.sample]*values[0][picked.sample],"nonlinear Snap publishes an exact transformed original sample");
     g.channel_formulas[0]=L"x";rebuild_formula_cache_from_state();g.stitch_time_gaps=true;
-    require(!overview_processing_supported(),"stitched full-source display waits for a full-source gap mapping");
+    require(overview_processing_supported(),"full-source display stitching uses exact cached timestamps");
+    require(std::fabs(stitched_time_from_raw(time.back())-20)<1e-8 &&
+            std::fabs(raw_time_from_stitched(stitched_time_from_raw(time[12000]))-time[12000])<1e-8,
+            "file-backed stitching removes the outage and reversibly maps original coordinates");
     require(g.ds.time.data()==resident && g.ds.rows()==3 && g.recording_source==source && g.numerical_revision>revision,
             "resident samples survive rendering while formula changes invalidate the numerical input");
     g.stitch_time_gaps=false;draw_chart(dc,plot);wait();draw_chart(dc,plot);
@@ -1876,9 +1884,11 @@ void resource_settings_and_load_ownership() {
         require(g.settings_wnd!=nullptr,"resource settings can be created in both languages without visible windows");
         require(!GetDlgItem(g.settings_wnd,1800),"obsolete Light Mode control is absent in both languages");
         refresh_settings_controls();
+        require(is_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_AUTO)),"Auto checkbox is visibly checked when policy is automatic");
         require(!IsWindowEnabled(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_EDIT)),"Auto disables manual input");
         SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_MEMORY_AUTO,BN_CLICKED),0);
         require(IsWindowEnabled(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_EDIT)) && !g.resource_policy.automatic,"manual budget is available from settings");
+        require(!is_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_AUTO)),"Auto checkbox clears in manual mode");
         SetDlgItemTextW(g.settings_wnd,IDC_SET_MEMORY_EDIT,L"1536");
         SendDlgItemMessageW(g.settings_wnd,IDC_SET_MEMORY_EDIT,WM_KEYDOWN,VK_RETURN,0);
         require(g.resource_policy.manual_mib==1536,"Enter applies the manual memory limit");
@@ -1889,6 +1899,7 @@ void resource_settings_and_load_ownership() {
         require(memory_rect.top>axis_rect.bottom && memory_rect.bottom<hotkeys_rect.top,"memory controls do not overlap axes or hotkeys");
         SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_MEMORY_AUTO,BN_CLICKED),0);
         require(g.resource_policy.automatic && g.resource_policy.manual_mib==1536,"Auto restores automatic admission and retains manual preference");
+        require(is_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_AUTO)),"Auto checkbox returns after switching back");
         DestroyWindow(g.settings_wnd);
     }
     g_str=&kEn;
@@ -1983,8 +1994,8 @@ void persistent_recording_cache() {
     require(request_recording_overview({},lvm::AnalysisRange::selected(20,29),{0},64),"managed hierarchy can be requested again after discarding a view");wait();
     require(!g.overview.error && g.overview.view && g.overview.view->sample_count==10 && recording_disk_cache()->used_bytes()==used,"repeated GUI overview reuses the persisted hierarchy");
     require(g.numerical_revision==revision && g.ds.channels[0][0]==2,"cache and view requests preserve numerical revision and original active samples");
-    cancel_recording_overview();g.overview={};g.recording_source.reset();g.source_scan_index.reset();
-    require(budget->reserved()==0,"discarding managed GUI views and sources releases index and viewport reservations");
+    cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};g.recording_source.reset();g.source_scan_index.reset();
+    require(budget->reserved()==0,"discarding managed GUI views, sources and idle cache releases all shared reservations");
     const auto bad_root=test_dir/"cache-as-file";{std::ofstream out(bad_root);out<<"not a directory";}
     configure_recording_disk_cache(bad_root,1024ULL*1024*1024);bool resource_error=false;
     try{recording_disk_cache();}catch(const lvm::RecordingFailure& e){resource_error=e.error==lvm::RecordingError::ResourceLimit;}
@@ -1998,12 +2009,71 @@ void persistent_recording_cache() {
     require(!g.overview.error && g.overview.view && g.overview.view->sample_count==10,"private fallback publishes original samples");
     const auto private_root=recording_overview_cache()->directory();
     require(recording_disk_cache()==recording_overview_cache(),"fallback scan indexes and overviews share one process disk quota");
-    auto pinned=g.overview.index;cancel_recording_overview();g.overview={};
+    auto pinned=g.overview.index;cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};
     configure_recording_disk_cache({},2ULL*1024*1024*1024);
     require(std::filesystem::exists(private_root),"temporary cache survives until the final index lease is released");
     pinned.reset();
     require(!std::filesystem::exists(private_root),"temporary cache removes owned files after the final lease without persistent accumulation");
     DestroyWindow(g.main);g.main=nullptr;configure_recording_disk_cache({},2ULL*1024*1024*1024);
+}
+
+void adaptive_opening_and_cache() {
+    reset_document({"previous"},{0,1},{{7,8}});
+    const auto path=std::filesystem::absolute(test_dir/"adaptive-open.txt");
+    {std::ofstream out(path);out<<std::setprecision(17)<<"Time\tCopy\tA\tB\n";
+        for(int i=0;i<131072;++i){const auto t=i/2048.;const double a=std::sin(i*.07);out<<t<<'\t'<<t<<'\t'<<a<<'\t'<<2*a<<'\n';}}
+    g.main=CreateWindowExW(0,L"STATIC",L"Adaptive opening",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    const auto receive=[&]{g_load_worker.join();MSG message{};
+        require(PeekMessageW(&message,g.main,WM_APP_ASYNC_SCAN_DONE,WM_APP_ASYNC_SCAN_DONE,PM_REMOVE),"adaptive metadata result arrives");
+        handle_loading_message(g.main,message.message,message.wParam,message.lParam);};
+    require(set_resource_policy(false,512) && start_async_scan_task(path.wstring(),true),"adaptive discovery can retain original samples under sufficient budget");receive();
+    require(g.ds.rows()==131072 && g.ds.channel_count()==2 && !g.overview.render_enabled && g.recording_source,
+        "adaptive discovery publishes a complete resident document and drops the full-record time duplicate");
+    const auto control=g.ds.time;const auto channel=g.ds.channels[0];
+    auto resources=current_analysis_resources();
+    require(resources.memory_bytes>384ULL*1024*1024 && resources.cache_memory_bytes>64ULL*1024*1024,
+        "manual resources expand numerical admission and input retention above historical caps");
+    g_frf_worker.clear_cache();
+    const auto numerical_before=g.numerical_revision;
+    const auto cadence_before=current_filter_sample_step();
+    g.ds.time.reserve(9000000);
+    require(set_resource_policy(false,64) && g.overview.render_enabled && g.ds.rows()==2 && g.recording_rows==131072,
+        "lowering budget demotes a valid full resident recording instead of blocking subsequent disk analysis");
+    require(g.numerical_revision==numerical_before && current_filter_sample_step()==cadence_before,
+        "storage demotion preserves numerical revision and the original filter cadence");
+    require(set_resource_policy(false,64) && start_async_scan_task(path.wstring(),true),"same adaptive discovery accepts a constrained policy");receive();
+    // This small recording still fits. Explicit source discovery exercises the
+    // complementary storage path without manufacturing huge test data.
+    require(g.ds.time==control && g.ds.channels[0]==channel,"adaptive opening leaves every source value unchanged");
+    require(start_async_scan_task(path.wstring(),false),"bounded source discovery remains available internally");receive();
+    require(g.ds.rows()==2 && g.overview.render_enabled && g.recording_rows==131072,"source opening retains exact N independently of its seed");
+    const auto wait=[&]{const auto begin=std::chrono::steady_clock::now();while(g.overview.pending && std::chrono::steady_clock::now()-begin<std::chrono::seconds(20)){poll_recording_overview();Sleep(1);}require(!g.overview.pending && !g.overview.error,"cached source projection finishes");};
+    wait();g.win_start=10;g.win_end=12;synchronize_overview_viewport(300);wait();const auto first=g.overview.view;
+    g.win_start=20;g.win_end=22;synchronize_overview_viewport(300);wait();
+    g.win_start=10;g.win_end=12;synchronize_overview_viewport(300);wait();
+    require(g.overview.view==first,"revisited viewport reuses the immutable cached view without reading original leaves again");
+    const auto revision=g.numerical_revision;set_resource_policy(false,64);
+    require(g.numerical_revision==revision,"resource changes do not become numerical input revisions");
+    lvm::Spectrum stale;stale.ok=true;stale.recording_source=g.recording_source;
+    {std::ofstream out(path,std::ios::app);out<<"# source changed after RAM calculation\n";}
+    apply_spectrum_result(std::move(stale));
+    require(!g.spec_valid && !g.spec.error.empty() && g.ds.rows()==2,
+        "RAM result source stamp is checked again at UI publication without replacing the recording");
+    cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};DestroyWindow(g.main);g.main=nullptr;
+}
+
+void demotion_edge_cases() {
+    reset_document({"previous"},{0,1},{{7,8}});
+    const auto path=std::filesystem::absolute(test_dir/"demotion-step.txt");
+    {std::ofstream out(path);out<<"Time\tA\n0\t0\n";for(int i=1;i<17;++i)out<<i+9<<'\t'<<i<<'\n';}
+    g.main=CreateWindowExW(0,L"STATIC",L"Demotion edge",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    auto data=lvm::read_lvm_file(path);const auto expected=precompute_global_gap_step(data.time);
+    require(apply_loaded_dataset(std::move(data),path.wstring(),false,false,0,false),"ordinary resident fixture opens before lazy cadence is computed");
+    g.cached_global_gap_step=0;g.cached_global_gap_step_ready=false;
+    require(move_resident_recordings_to_disk() && g.ds.rows()==2,"uncached resident fixture can be demoted under memory pressure");
+    require(expected==1 && current_filter_sample_step()==expected,
+        "demotion before first filter freezes cadence from the full recording rather than its two-sample seed");
+    cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};DestroyWindow(g.main);g.main=nullptr;
 }
 
 void unified_source_opening(const std::filesystem::path& external={}) {
@@ -2305,7 +2375,7 @@ int main(int argc,char** argv) {
         }
         document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); multiple_open_documents(); processing(); fft_recording_recovery();
         display_load_budget(); loading_window_ownership(); bounded_load_recovery(); document_source_and_resources(); background_document_overview(); overview_renderer(); resource_settings_and_load_ownership(); analysis_admission_and_publication(); persistent_recording_cache(); resident_envelope_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
-        unified_source_opening();spectrum_visibility_cache();
+        adaptive_opening_and_cache();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
         user_axis_names_outside_plot();
         channel_legend_visibility();
         routed_window_messages();

@@ -133,24 +133,49 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
     }
     try {
         if(g.main) {g_spectrum_worker.cancel();++g.spec_generation;}
-        const auto resources=current_analysis_resources();
-        if(g.overview.render_enabled || (g.current_file_partial && g.source_scan_index)) {
+        const auto selected_rows=static_cast<std::size_t>(std::upper_bound(g.ds.time.begin(),g.ds.time.end(),end)-
+            std::lower_bound(g.ds.time.begin(),g.ds.time.end(),start));
+        const auto required=lvm::spectrum_workspace_bytes(selected_rows,visible_channels.size())+
+            1024.0L*1024+selected_rows*(visible_channels.size()+1.0L)*8;
+        const auto resources=current_analysis_resources(static_cast<std::uint64_t>(required));
+        g.spec_source_start=start;g.spec_source_end=end;g.spec_source_from_selection=from_selection;g.spec_source_valid=end>start;
+        const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),start);
+        const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),end);
+        const auto rows=static_cast<std::size_t>(hi-lo);
+        const auto ram_required=lvm::spectrum_workspace_bytes(rows,visible_channels.size())+
+            1024.0L*1024+rows*(visible_channels.size()+1.0L)*8;
+        const bool disk_needed=g.overview.render_enabled || (g.current_file_partial && g.source_scan_index) ||
+            (g.recording_source && ram_required>resources.budget->available());
+        lvm::SpectrumWorker::Compute disk_retry;
+        if(g.recording_source) {
+            const auto source=processed_recording_source();
+            lvm::RecordingReadRequest read;read.range=lvm::AnalysisRange::selected(start,end);
+            read.channels=visible_channels;read.block_bytes=1024*1024;read.block_rows=4096;
+            std::vector<std::string> names;for(auto c:visible_channels)names.push_back(g.ds.names[c]);
+            const auto timeline=g.overview.index;
+            disk_retry=[source,read,resources,names,timeline](const std::atomic<bool>* cancel) {
+                auto io=resources.budget->reserve(2ULL*1024*1024);
+                if(!io)throw std::runtime_error("Insufficient memory for FFT source reading.");
+                lvm::DiskSpectrumOptions options;options.timeline=timeline;
+                return lvm::compute_disk_spectrum(source,read,names,resources,cancel,options);
+            };
+        }
+        if(disk_needed) {
             const auto source=processed_recording_source();
             lvm::RecordingReadRequest read;read.range=lvm::AnalysisRange::selected(start,end);
             read.channels=visible_channels;read.block_bytes=1024*1024;read.block_rows=4096;
             std::vector<std::string> names;
             for(auto c:visible_channels)names.push_back(g.ds.names[c]);
-            auto compute=[source,read,resources,names](const std::atomic<bool>* cancel) {
+            const auto timeline=g.overview.index;
+            auto compute=[source,read,resources,names,timeline](const std::atomic<bool>* cancel) {
                 auto io=resources.budget->reserve(2ULL*1024*1024);
                 if(!io)throw std::runtime_error("Insufficient memory for FFT source reading.");
-                return lvm::compute_recording_spectrum(source,read,names,resources,cancel);
+                return lvm::compute_recording_spectrum(source,read,names,resources,cancel,timeline);
             };
             g.spec_attempted=true;g.spec_pending=true;g.spec_valid=false;
             g_spectrum_worker.submit_computation(std::move(compute),visible_channels,g.spec_generation);
             g.spec_visible_state=g.visible;return;
         }
-        const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),start);
-        const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),end);
         // Admit the snapshot before build_time_window_dataset allocates it.
         auto reservation=reserve_analysis_input(resources,static_cast<std::size_t>(hi-lo),visible_channels.size(),false);
         ensure_channel_formula_vectors();
@@ -182,9 +207,12 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
             }
             g.spec_pending = true;
             g.spec_valid = false;
-            g_spectrum_worker.submit(std::move(view),visible_channels,g.spec_generation,std::move(transforms),resources,std::move(reservation));
+            g_spectrum_worker.submit(std::move(view),visible_channels,g.spec_generation,std::move(transforms),resources,std::move(reservation),std::move(disk_retry),g.recording_source);
         } else {
             auto spectrum = lvm::compute_spectrum(view,0,nullptr,resources);
+            if(!spectrum.ok && disk_retry && spectrum.error.rfind("FFT resources are insufficient",0)==0) {
+                view={};reservation.reset();spectrum={};spectrum=disk_retry(nullptr);
+            }
             for (auto& c : spectrum.source_channels) c = visible_channels[c];
             apply_spectrum_result(std::move(spectrum));
         }

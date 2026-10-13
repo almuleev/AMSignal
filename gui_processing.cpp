@@ -11,6 +11,7 @@
 #include "gui_state_history.hpp"
 #include "gui_status.hpp"
 #include "gui_text.hpp"
+#include "recording_source.hpp"
 
 namespace gui {
 namespace {
@@ -244,6 +245,7 @@ bool parse_wide_double_text(const wchar_t* text, double& out) {
 
 double current_filter_sample_step() {
     if (!has_data() || g.ds.time.size() < 2) return 0.0;
+    if(g.recording_source && g.recording_source->filter_sample_step()>0)return g.recording_source->filter_sample_step();
     if (g.cached_global_gap_step_ready && g.cached_global_gap_step > 0.0 && std::isfinite(g.cached_global_gap_step)) {
         return g.cached_global_gap_step;
     }

@@ -8,6 +8,7 @@ namespace gui {
 extern std::thread g_load_worker;
 
 struct AsyncScanResult {
+    std::shared_ptr<lvm::MemoryBudget::Reservation> resident_reservation;
     unsigned long long token = 0;
     std::wstring path;
     bool ok = false;
@@ -19,6 +20,9 @@ struct AsyncScanResult {
     bool index_from_disk_cache=false;
     lvm::Dataset source_metadata;
     std::uint64_t source_rows=0;
+    lvm::Dataset resident_data;
+    double resident_gap_step=0;
+    double resident_filter_step=0;
 };
 
 struct AsyncLoadResult {
@@ -47,9 +51,11 @@ void register_project_file_association();
 bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_channels,
                           bool requested_time_window, double cached_global_gap_step,
                           bool cached_global_gap_step_ready,
-                          std::optional<lvm::RecordingStamp> expected_stamp = {});
+                          std::optional<lvm::RecordingStamp> expected_stamp = {},double source_filter_step=0);
+// Releases full resident samples without changing the numerical input/settings.
+bool move_resident_recordings_to_disk();
 
-bool start_async_scan_task(const std::wstring& wpath);
+bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident=false);
 
 // Publishes a bounded metadata snapshot and opens the full source overview.
 bool apply_scanned_recording(AsyncScanResult& result);

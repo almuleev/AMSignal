@@ -2,9 +2,11 @@
 #include "analysis.hpp"
 #include "recording_source.hpp"
 namespace lvm {
+class RecordingOverview;
 struct DiskSpectrumOptions {
     std::uint64_t disk_bytes=64ULL*1024*1024*1024;
     std::filesystem::path temporary_directory;
+    std::shared_ptr<const RecordingOverview> timeline;
 };
 class DiskSpectrum {
 public:
@@ -24,5 +26,6 @@ Spectrum compute_disk_spectrum(std::shared_ptr<const RecordingSource> source,Rec
     std::vector<std::string> names,const AnalysisResources& resources={},const std::atomic<bool>* cancel=nullptr,
     const DiskSpectrumOptions& options={});
 Spectrum compute_recording_spectrum(std::shared_ptr<const RecordingSource> source,RecordingReadRequest read,
-    std::vector<std::string> names,const AnalysisResources& resources={},const std::atomic<bool>* cancel=nullptr);
+    std::vector<std::string> names,const AnalysisResources& resources={},const std::atomic<bool>* cancel=nullptr,
+    std::shared_ptr<const RecordingOverview> timeline={});
 }

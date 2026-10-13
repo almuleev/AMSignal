@@ -793,9 +793,12 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const int pw = p.right - p.left;
             const double span = g.drag_hi - g.drag_lo;
             const double d = static_cast<double>(GET_X_LPARAM(lp) - g.drag_x) / pw * span;
-            *lo = g.drag_lo - d;
-            *hi = g.drag_hi - d;
-            clamp_range(*lo, *hi, minb, maxb, minw);
+            const bool stitched=g.mode==AnalysisMode::Time && g.stitch_time_gaps;
+            double a=g.drag_lo-d,b=g.drag_hi-d;
+            if(stitched){minb=stitched_time_from_raw(minb);maxb=stitched_time_from_raw(maxb);}
+            clamp_range(a,b,minb,maxb,minw);
+            *lo=stitched ? raw_time_from_stitched(a) : a;
+            *hi=stitched ? raw_time_from_stitched(b) : b;
             // Vertical panning
             if (g.vertical_pan) {
                 const int ph = p.bottom - p.top;

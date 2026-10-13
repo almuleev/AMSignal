@@ -181,7 +181,7 @@ std::shared_ptr<const RecordingOverview> managed_recording_overview(std::shared_
     std::shared_ptr<DiskCache> cache,const OverviewOptions& options,const std::atomic<bool>* cancel) {
     try {
     if(!source || !cache || !source->stamp())fail(RecordingError::InvalidRequest,"Missing managed overview source or cache.");
-    check(cancel);source->check_current();std::string variant="overview-amsoidx1-b"+std::to_string(options.base_rows)+
+    check(cancel);source->check_current();std::string variant="overview-amsoidx2-b"+std::to_string(options.base_rows)+
         "-range"+std::to_string(bits(source->bounds().start))+":"+std::to_string(bits(source->bounds().end));
     for(auto column:source->physical_columns())variant+=":"+std::to_string(column);
     variant+=source->processing_identity();

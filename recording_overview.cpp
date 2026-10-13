@@ -1,4 +1,6 @@
 #include "recording_overview.hpp"
+#include "frf_stream.hpp"
+#include "sampling.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -152,6 +154,10 @@ void publish(const std::filesystem::path& from,const std::filesystem::path& to) 
 struct RecordingOverview::Storage {
     std::ifstream in;
     std::mutex mutex;
+    std::mutex map_mutex;
+    std::array<double,1025> raw{},shown{};
+    std::size_t mapped=0;
+    std::uint64_t mapped_first=0;
     explicit Storage(const std::filesystem::path& path):in(path,std::ios::binary) {
         if(!in)fail(RecordingError::ReadFailure,"Cannot open overview cache.");
     }
@@ -196,6 +202,8 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
             fail(RecordingError::InvalidRequest,"Overview cache must not overwrite a recording or a symlink.");
         const auto channels=source->channel_count(),size=record_bytes(channels);
         const auto block_bytes=work_bytes(options.memory_bytes,channels);
+        const auto timeline_size=options.base_rows*8+24;
+        if(timeline_size*2>block_bytes)fail(RecordingError::ResourceLimit,"Timeline buffers exceed the overview allowance.");
         if(options.max_disk_bytes<header_bytes+3*size ||
            options.max_disk_bytes>static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max()))
             fail(RecordingError::ResourceLimit,"Invalid overview disk allowance.");
@@ -215,6 +223,18 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
             written+=size;
         };
         OverviewBucket node;node.channels.resize(channels);double previous=0;
+        Bytes timeline(timeline_size);Codec times{timeline};
+        const auto append_leaf=[&] {
+            append(node);
+            Bytes payload(node.sample_count*8+24);
+            std::copy_n(timeline.begin(),node.sample_count*8,payload.begin());
+            seal(payload);
+            if(payload.size()>options.max_disk_bytes-written)fail(RecordingError::ResourceLimit,"Timeline exceeds the disk allowance.");
+            out.write(reinterpret_cast<const char*>(payload.data()),payload.size());
+            if(!out)fail(RecordingError::ResourceLimit,"Cannot write overview timeline.");
+            written+=payload.size();++levels[0].count;times.at=0;
+            node=OverviewBucket{};node.channels.resize(channels);
+        };
         RecordingReadRequest read;read.block_bytes=block_bytes;
         read.channels.resize(channels);std::iota(read.channels.begin(),read.channels.end(),std::size_t{0});
         source->replay(read,[&](const auto& time,const auto& values) {
@@ -226,24 +246,78 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
                 if(!node.sample_count) {node.first_sample=total;node.first_time=time[i];}
                 else node.maximum_spacing=std::max(node.maximum_spacing,time[i]-previous);
                 node.last_time=time[i];++node.sample_count;
+                times.put_double(time[i]);
                 for(std::size_t c=0;c<channels;++c)add(node.channels[c],{total,time[i],values[c][i]});
                 previous=time[i];++total;
                 if(node.sample_count==options.base_rows) {
-                    append(node);++levels[0].count;node=OverviewBucket{};node.channels.resize(channels);
+                    append_leaf();
                 }
             }
             if(options.progress)options.progress(total,written);
         },cancel);
-        if(node.sample_count) {append(node);++levels[0].count;}
+        if(node.sample_count)append_leaf();
+        // Compute both established cadence rules from the binary timeline,
+        // never by parsing the text recording again. One bounded external sort.
+        out.flush();if(!out)fail(RecordingError::ResourceLimit,"Cannot flush overview timeline.");
+        std::ifstream timeline_in(scratch.file,std::ios::binary);
+        const auto leaf_stride=size+timeline_size;
+        std::vector<double> sampled;sampled.reserve(4096);
+        const auto stride=std::max<std::uint64_t>(1,(total-1)/4096);
+        std::vector<double> time_block;time_block.reserve(options.base_rows);
+        const auto replay_times=[&](const FrfBlockConsumer& consume,const std::atomic<bool>* flag) {
+            std::uint64_t row=0;double previous_time=0;
+            for(std::uint64_t leaf=0;leaf<levels[0].count;++leaf) {
+                check(flag);const auto count=std::min<std::uint64_t>(options.base_rows,total-row);
+                Bytes payload(count*8+24);read_at(timeline_in,header_bytes+leaf*leaf_stride+size,payload);
+                Codec codec{payload};time_block.clear();
+                for(std::uint64_t i=0;i<count;++i,++row) {
+                    const auto t=codec.get_double();time_block.push_back(t);
+                    if(row && (row-1)%stride==0 && sampled.size()<4096)sampled.push_back(t-previous_time);
+                    previous_time=t;
+                }
+                consume(time_block,{});
+            }
+        };
+        if(8*std::min<std::uint64_t>(total,1048576)+timeline_size*2+header_bytes>options.memory_bytes)
+            fail(RecordingError::ResourceLimit,"Cadence exceeds the overview memory allowance.");
+        FrfSource cadence_source;cadence_source.replay=replay_times;
+        double sample_step=0;
+        if(total>=4)sample_step=inspect_frf_timeline(cadence_source,cancel,static_cast<std::size_t>(total)).sample_dt;
+        else {std::vector<double> intervals;double prev=0;bool have=false;
+            replay_times([&](const auto& ts,const auto&){for(auto t:ts){if(have)intervals.push_back(t-prev);prev=t;have=true;}},cancel);
+            sample_step=typical_sample_spacing(intervals);}
+        std::sort(sampled.begin(),sampled.end());const auto mid=sampled.size()/2;
+        const double gap_step=sampled.empty() ? 0 : sampled.size()%2 ? sampled[mid] : .5*(sampled[mid-1]+sampled[mid]);
+        // Store one prefix per leaf. Raw timestamps remain exact; no full RAM map.
+        double previous_raw=0,anchor_raw=0,anchor_display=0;bool have=false;
+        for(std::uint64_t leaf=0,row=0;leaf<levels[0].count;++leaf) {
+            check(cancel);const auto count=std::min<std::uint64_t>(options.base_rows,total-row);row+=count;
+            Bytes payload(count*8+24);const auto offset=header_bytes+leaf*leaf_stride+size;
+            read_at(timeline_in,offset,payload);Codec codec{payload};double first_anchor=0,first_display=0;
+            for(std::uint64_t i=0;i<count;++i) {
+                const auto t=codec.get_double();
+                if(!have){anchor_raw=t;anchor_display=t;}
+                else if(sample_step>0 && t-previous_raw>sample_step*sampling_gap_factor) {
+                    anchor_display+=(previous_raw-anchor_raw)+sample_step;anchor_raw=t;
+                }
+                previous_raw=t;have=true;if(!i){first_anchor=anchor_raw;first_display=anchor_display;}
+            }
+            Codec prefix{payload,static_cast<std::size_t>(count*8)};
+            prefix.put_double(first_anchor);prefix.put_double(first_display);seal(payload);
+            out.seekp(static_cast<std::streamoff>(offset));out.write(reinterpret_cast<const char*>(payload.data()),payload.size());
+            if(!out)fail(RecordingError::ResourceLimit,"Cannot write stitched timeline.");
+        }
+        timeline_in.close();out.seekp(static_cast<std::streamoff>(written));
         while(levels.back().count>1) {
             out.flush();if(!out)fail(RecordingError::ResourceLimit,"Cannot flush overview cache.");
             std::ifstream in(scratch.file,std::ios::binary);
             const auto previous_level=levels.back();Level next{written,0};
             for(std::uint64_t i=0;i<previous_level.count;i+=2) {
-                check(cancel);read_at(in,previous_level.offset+i*size,buffer);
+                const auto stride_bytes=levels.size()==1 ? leaf_stride : size;
+                check(cancel);read_at(in,previous_level.offset+i*stride_bytes,buffer);
                 auto combined=decode(buffer,channels,total);
                 if(i+1<previous_level.count) {
-                    read_at(in,previous_level.offset+(i+1)*size,buffer);
+                    read_at(in,previous_level.offset+(i+1)*stride_bytes,buffer);
                     combined=merge(std::move(combined),decode(buffer,channels,total));
                 }
                 append(combined);++next.count;
@@ -253,7 +327,7 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
             check(cancel);source->check_current();
         }
         Codec h{header};
-        h.put(0x315844494F534D41ULL); // AMSOIDX1, little endian; IEEE double payload.
+        h.put(0x325844494F534D41ULL); // AMSOIDX2: exact timeline and stitched prefixes.
         h.put(options.base_rows);h.put(channels);h.put(total);
         h.put_double(source->bounds().start);h.put_double(source->bounds().end);
         h.put(source->stamp()->bytes);h.put(static_cast<std::uint64_t>(source->stamp()->modified.time_since_epoch().count()));
@@ -263,13 +337,17 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
         for(unsigned char ch:path)header.at(h.at++)=ch;
         for(auto col:source->physical_columns())h.put(col);
         h.put(levels.size());for(const auto& level:levels) {h.put(level.offset);h.put(level.count);}
+        h.put_double(gap_step);h.put_double(sample_step);
         if(h.at>header.size()-8)fail(RecordingError::ResourceLimit,"Overview header is too large.");
         seal(header);out.seekp(0);out.write(reinterpret_cast<const char*>(header.data()),header.size());out.close();
         if(!out)fail(RecordingError::ResourceLimit,"Cannot close overview cache.");
         check(cancel);source->check_current();publish(scratch.file,target);
         source->check_current();auto result=open(std::move(source),target);check(cancel);return result;
-    }catch(const std::bad_alloc&) {fail(RecordingError::ResourceLimit,"Not enough memory for overview.");}
+    }catch(const FrfSourceFailure&) {check(cancel);fail(RecordingError::ResourceLimit,"Cannot prepare cached timeline cadence. Check temporary disk space.");}
+    catch(const RecordingFailure&) {throw;}
+    catch(const std::bad_alloc&) {fail(RecordingError::ResourceLimit,"Not enough memory for overview.");}
     catch(const std::filesystem::filesystem_error&) {fail(RecordingError::ResourceLimit,"Cannot access overview scratch disk.");}
+    catch(const std::runtime_error&) {check(cancel);throw;}
 }
 
 std::shared_ptr<const RecordingOverview> RecordingOverview::open(
@@ -279,7 +357,7 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::open(
     auto result=std::shared_ptr<RecordingOverview>(new RecordingOverview);
     result->source_=std::move(source);result->storage_=std::make_shared<Storage>(cache);
     Bytes header(header_bytes);read_at(result->storage_->in,0,header);Codec h{header};
-    if(h.get()!=0x315844494F534D41ULL)fail(RecordingError::ReadFailure,"Unknown overview format.");
+    if(h.get()!=0x325844494F534D41ULL)fail(RecordingError::ReadFailure,"Unknown overview format.");
     result->base_rows_=static_cast<std::size_t>(h.get());const auto channels=h.get();result->sample_count_=h.get();
     const auto first=h.get_double(),last=h.get_double();const auto bytes=h.get(),modified=h.get(),num=h.get(),den=h.get();
     const auto& s=*result->source_;
@@ -301,8 +379,17 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::open(
         const auto position=h.get(),nodes=h.get();
         if(position!=offset || nodes!=expected || nodes>(std::uint64_t(std::numeric_limits<std::streamoff>::max())-offset)/size ||
            (i+1<count && nodes==1))fail(RecordingError::ReadFailure,"Invalid overview layout.");
-        result->levels_.push_back({position,nodes});offset+=nodes*size;expected=(nodes-1)/2+1;
+        result->levels_.push_back({position,nodes});offset+=nodes*size;
+        if(!i) {
+            if(result->sample_count_>(std::uint64_t(std::numeric_limits<std::streamoff>::max())-offset-nodes*24)/8)
+                fail(RecordingError::ReadFailure,"Invalid timeline size.");
+            offset+=result->sample_count_*8+nodes*24;
+        }
+        expected=(nodes-1)/2+1;
     }
+    result->gap_step_=h.get_double();result->sample_step_=h.get_double();
+    if(!std::isfinite(result->gap_step_) || result->gap_step_<0 || !std::isfinite(result->sample_step_) || result->sample_step_<0)
+        fail(RecordingError::ReadFailure,"Invalid cached cadence.");
     result->storage_->in.seekg(0,std::ios::end);
     const auto length=result->storage_->in.tellg();
     if(length<0 || static_cast<std::uint64_t>(length)!=offset || result->levels_.back().count!=1)
@@ -328,8 +415,124 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::open_or_build(
 OverviewBucket RecordingOverview::read_bucket(std::size_t level,std::uint64_t index) const {
     if(level>=levels_.size() || index>=levels_[level].count)fail(RecordingError::ReadFailure,"Invalid overview node address.");
     Bytes buffer(record_bytes(source_->channel_count()));
-    {std::lock_guard<std::mutex> lock(storage_->mutex);read_at(storage_->in,levels_[level].offset+index*buffer.size(),buffer);}
+    const auto stride=buffer.size()+(level==0 ? base_rows_*8+24 : 0);
+    {std::lock_guard<std::mutex> lock(storage_->mutex);read_at(storage_->in,levels_[level].offset+index*stride,buffer);}
     return decode(buffer,source_->channel_count(),sample_count_);
+}
+
+std::vector<double> RecordingOverview::read_times(std::uint64_t leaf,double* display_first,double* anchor_raw,double* anchor_display) const {
+    if(leaf>=levels_[0].count)fail(RecordingError::ReadFailure,"Invalid timeline leaf.");
+    const auto count=std::min<std::uint64_t>(base_rows_,sample_count_-leaf*base_rows_);
+    Bytes buffer(count*8+24);const auto size=record_bytes(source_->channel_count());
+    {std::lock_guard<std::mutex> lock(storage_->mutex);
+        read_at(storage_->in,levels_[0].offset+leaf*(size+base_rows_*8+24)+size,buffer);}
+    Codec codec{buffer};std::vector<double> time;time.reserve(count);
+    for(std::uint64_t i=0;i<count;++i)time.push_back(codec.get_double());
+    const auto raw=codec.get_double(),shown=codec.get_double();
+    const auto display=raw==shown ? time.front() : shown+(time.front()-raw);
+    if(display_first)*display_first=display;
+    if(anchor_raw)*anchor_raw=raw;
+    if(anchor_display)*anchor_display=shown;
+    if(!std::isfinite(display) || std::any_of(time.begin(),time.end(),[](double t){return !std::isfinite(t);}) ||
+       std::adjacent_find(time.begin(),time.end(),std::greater_equal<double>())!=time.end())
+        fail(RecordingError::ReadFailure,"Invalid cached timeline.");
+    return time;
+}
+
+void RecordingOverview::cache_stitched_leaf(std::uint64_t leaf) const {
+    double display=0,a=0,d=0;const auto times=read_times(leaf,&display,&a,&d);
+    storage_->mapped=times.size();storage_->mapped_first=leaf*base_rows_;
+    for(std::size_t i=0;i<times.size();++i) {
+        if(i && sample_step_>0 && times[i]-times[i-1]>sample_step_*sampling_gap_factor){d+=(times[i-1]-a)+sample_step_;a=times[i];}
+        storage_->raw[i]=times[i];storage_->shown[i]=a==d ? times[i] : d+(times[i]-a);
+    }
+    if(leaf+1<levels_[0].count){double next=0;const auto t=read_times(leaf+1,&next);
+        storage_->raw[storage_->mapped]=t.front();storage_->shown[storage_->mapped++]=next;}
+}
+double RecordingOverview::stitched_sample_time(std::uint64_t sample) const {
+    if(sample>=sample_count_)fail(RecordingError::InvalidRequest,"Invalid stitched sample address.");
+    if(base_rows_>1024){const auto times=read_times(sample/base_rows_);return stitched_time(times[sample%base_rows_]);}
+    std::lock_guard<std::mutex> lock(storage_->map_mutex);
+    if(!storage_->mapped || sample<storage_->mapped_first || sample-storage_->mapped_first>=storage_->mapped)
+        cache_stitched_leaf(sample/base_rows_);
+    return storage_->shown[sample-storage_->mapped_first];
+}
+double RecordingOverview::stitched_time(double time,bool inverse) const {
+    std::lock_guard<std::mutex> map_lock(storage_->map_mutex);
+    const auto cached=[&](double& result) {
+        const auto& from=inverse ? storage_->shown : storage_->raw;
+        const auto& to=inverse ? storage_->raw : storage_->shown;
+        if(!storage_->mapped || time<from[0] || time>from[storage_->mapped-1])return false;
+        const auto right=std::lower_bound(from.begin(),from.begin()+storage_->mapped,time)-from.begin();
+        if(!right || time==from[right])result=to[right];
+        else result=to[right-1]+(time-from[right-1])/(from[right]-from[right-1])*(to[right]-to[right-1]);
+        return true;
+    };
+    double cached_result=0;if(cached(cached_result))return cached_result;
+    // Binary search leaves, then at most base_rows original timestamps.
+    // No text parsing, timestamp array or gap list proportional to N in RAM.
+    const auto display_leaf=[&](std::uint64_t leaf) {double first=0;read_times(leaf,&first);return first;};
+    std::uint64_t lo=0,hi=levels_[0].count;
+    while(lo<hi) {
+        const auto mid=lo+(hi-lo)/2;
+        const auto first=inverse ? display_leaf(mid) : read_bucket(0,mid).first_time;
+        if(first<=time)lo=mid+1;else hi=mid;
+    }
+    const auto leaf=lo ? lo-1 : 0;double display=0;
+    if(base_rows_<=1024){cache_stitched_leaf(leaf);if(cached(cached_result))return cached_result;}
+    double anchor_raw=0,anchor_display=0;
+    const auto times=read_times(leaf,&display,&anchor_raw,&anchor_display);double previous_raw=times.front(),previous_display=display;
+    if(time<=(inverse ? display : previous_raw))return inverse ? previous_raw : display;
+    const auto convert=[&](double raw,double shown) {
+        const auto left=inverse ? previous_display : previous_raw,right=inverse ? shown : raw;
+        const auto fraction=right>left ? std::clamp((time-left)/(right-left),0.0,1.0) : 0;
+        return inverse ? previous_raw+fraction*(raw-previous_raw) : previous_display+fraction*(shown-previous_display);
+    };
+    for(std::size_t i=1;i<times.size();++i) {
+        const auto dt=times[i]-previous_raw;
+        if(sample_step_>0 && dt>sample_step_*sampling_gap_factor){anchor_display+=(previous_raw-anchor_raw)+sample_step_;anchor_raw=times[i];}
+        display=anchor_raw==anchor_display ? times[i] : anchor_display+(times[i]-anchor_raw);
+        if(time<=(inverse ? display : times[i]))return convert(times[i],display);
+        previous_raw=times[i];previous_display=display;
+    }
+    if(leaf+1<levels_[0].count) {
+        double next_display=0;const auto next=read_times(leaf+1,&next_display);
+        return convert(next.front(),next_display);
+    }
+    return inverse ? previous_raw : previous_display;
+}
+std::size_t RecordingOverview::resident_bytes() const {
+    return sizeof(*this)+sizeof(Storage)+8192+levels_.capacity()*sizeof(Level);
+}
+
+std::pair<std::uint64_t,std::uint64_t> RecordingOverview::sample_range(AnalysisRange requested) const {
+    source_->check_current();TimeRange range;
+    if(!requested.resolve(source_->bounds(),range))fail(RecordingError::InvalidRequest,"Invalid timeline range.");
+    const auto bound=[&](double t,bool upper) {
+        std::uint64_t lo=0,hi=levels_[0].count;
+        while(lo<hi){const auto mid=lo+(hi-lo)/2;const auto last=read_bucket(0,mid).last_time;
+            if(last<t || (upper && last==t))lo=mid+1;else hi=mid;}
+        if(lo==levels_[0].count)return sample_count_;
+        const auto times=read_times(lo);
+        const auto at=upper ? std::upper_bound(times.begin(),times.end(),t) : std::lower_bound(times.begin(),times.end(),t);
+        return lo*base_rows_+static_cast<std::uint64_t>(at-times.begin());
+    };
+    const auto result=std::make_pair(bound(range.start,false),bound(range.end,true));
+    source_->check_current();return result;
+}
+void RecordingOverview::replay_timeline(AnalysisRange range,const std::function<void(const std::vector<double>&)>& consume,
+                                       const std::atomic<bool>* cancel) const {
+    check(cancel);if(!consume)fail(RecordingError::InvalidRequest,"Missing timeline consumer.");
+    const auto rows=sample_range(range);
+    for(auto row=rows.first;row<rows.second;) {
+        check(cancel);auto times=read_times(row/base_rows_);
+        const auto offset=static_cast<std::size_t>(row%base_rows_);
+        const auto count=std::min<std::uint64_t>(times.size()-offset,rows.second-row);
+        if(offset)times.erase(times.begin(),times.begin()+offset);
+        times.resize(count);
+        consume(times);row+=count;
+    }
+    check(cancel);source_->check_current();
 }
 
 OverviewView RecordingOverview::read_view(const OverviewRequest& request,const std::atomic<bool>* cancel) const {
@@ -375,7 +578,7 @@ OverviewView RecordingOverview::read_view(const OverviewRequest& request,const s
             for(auto c:request.channels)traces.push_back(node.channels[c]);
             node.channels=std::move(traces);return node;
         };
-        const auto raw=[&](const OverviewBucket& node) {
+        const auto read_raw=[&](const OverviewBucket& node) {
             RecordingReadRequest read;read.range=AnalysisRange::selected(node.first_time,node.last_time);
             read.channels=request.channels;read.block_bytes=block_bytes;
             std::uint64_t seen=0;
@@ -406,11 +609,30 @@ OverviewView RecordingOverview::read_view(const OverviewRequest& request,const s
             if(group.sample_count)append(std::move(group));
             if(seen!=node.sample_count)fail(RecordingError::ReadFailure,"Overview sample layout changed.");
         };
+        // Adjacent detailed leaves share one reader. Restarting at a ScanIndex
+        // checkpoint for every 1024 rows repeatedly parses the same prefix.
+        // Only the span is retained; sample buffers still obey block_bytes.
+        OverviewBucket pending_raw;
+        const auto flush_raw=[&] {
+            if(pending_raw.sample_count){read_raw(pending_raw);pending_raw=OverviewBucket{};}
+        };
+        const auto raw=[&](const OverviewBucket& node) {
+            if(pending_raw.sample_count && (pending_raw.first_sample+pending_raw.sample_count!=node.first_sample ||
+               pending_raw.sample_count+node.sample_count>65536))flush_raw();
+            if(!pending_raw.sample_count){pending_raw.first_sample=node.first_sample;pending_raw.first_time=node.first_time;}
+            pending_raw.sample_count+=node.sample_count;pending_raw.last_time=node.last_time;
+        };
         const auto visit=[&](auto&& self,std::size_t level,std::uint64_t index)->void {
             check(cancel);auto node=read_bucket(level,index);
             if(node.last_time<view.range.start || node.first_time>view.range.end)return;
             const bool contained=node.first_time>=view.range.start && node.last_time<=view.range.end;
-            if(contained && (node.last_time-node.first_time<=width || node.sample_count==1))append(select(std::move(node)));
+            if(contained && (node.last_time-node.first_time<=width || node.sample_count==1)) {
+                // Small cached leaves interspersed with detailed leaves join
+                // the same bounded read, avoiding repeated checkpoint prefixes.
+                if(pending_raw.sample_count && pending_raw.first_sample+pending_raw.sample_count==node.first_sample &&
+                   node.sample_count<=base_rows_*4 && pending_raw.sample_count+node.sample_count<=65536)raw(node);
+                else {flush_raw();append(select(std::move(node)));}
+            }
             else if(!level)raw(node);
             else {
                 self(self,level-1,index*2);
@@ -418,6 +640,7 @@ OverviewView RecordingOverview::read_view(const OverviewRequest& request,const s
             }
         };
         visit(visit,levels_.size()-1,0);
+        flush_raw();
         check(cancel);source_->check_current();
     }catch(const std::bad_alloc&) {fail(RecordingError::ResourceLimit,"Not enough memory for overview viewport.");}
     if(view.memory_reservation && !view.memory_reservation->shrink_to(view.resident_bytes()))
@@ -462,8 +685,9 @@ RecordingSnapResult RecordingOverview::nearest_sample(const RecordingSnapRequest
         for(const auto& c:request.channels)channels.push_back(c.channel);
         const auto bound=[&](const OverviewBucket& node) {
             if(node.last_time<range.start || node.first_time>range.end)return std::numeric_limits<long double>::infinity();
-            const auto x=axis_distance(request.target_time,std::max(node.first_time,range.start),
-                                        std::min(node.last_time,range.end),request.time_scale);
+            const auto map=[&](double t){return request.stitched ? stitched_time(t) : t;};
+            const auto x=axis_distance(request.target_time,map(std::max(node.first_time,range.start)),
+                                        map(std::min(node.last_time,range.end)),request.time_scale);
             long double lower=std::numeric_limits<long double>::infinity();
             for(const auto& c:request.channels) {
                 const auto& trace=node.channels[c.channel];if(!trace.finite_count)continue;
@@ -485,7 +709,7 @@ RecordingSnapResult RecordingOverview::nearest_sample(const RecordingSnapRequest
                 // Visit the half near the cursor first, without changing tie rules.
                 const auto left=read_bucket(level-1,index*2);
                 const bool right_exists=index*2+1<levels_[level-1].count;
-                const bool right_first=right_exists && request.target_time>left.last_time;
+                const bool right_first=right_exists && request.target_time>(request.stitched ? stitched_time(left.last_time) : left.last_time);
                 if(right_first)self(self,level-1,index*2+1);
                 self(self,level-1,index*2);
                 if(right_exists && !right_first)self(self,level-1,index*2+1);
@@ -502,7 +726,7 @@ RecordingSnapResult RecordingOverview::nearest_sample(const RecordingSnapRequest
                         if(!std::isfinite(raw))continue;
                         const auto value=c.affine ? raw*c.multiplier+c.offset : raw;
                         if(!std::isfinite(value))continue;
-                        const auto d=distance(time[i],value);const auto sample=node.first_sample+seen;
+                        const auto d=distance(request.stitched ? stitched_time(time[i]) : time[i],value);const auto sample=node.first_sample+seen;
                         if(!result.found || d<best || (d==best &&
                            (rank<best_rank || (rank==best_rank && sample<result.sample)))) {
                             best=d;best_rank=rank;result.found=true;result.time=time[i];result.value=value;
@@ -527,7 +751,8 @@ std::uint64_t RecordingOverview::visit_gaps(TimeRange range,double threshold,
     if(!AnalysisRange::selected(range.start,range.end).resolve(source_->bounds(),resolved) ||
        !std::isfinite(threshold) || threshold<=0 || !consume)
         fail(RecordingError::InvalidRequest,"Invalid overview gap query.");
-    const auto block_bytes=std::min<std::size_t>(65536,work_bytes(resources.memory_bytes,source_->channel_count()));
+    const auto block_bytes=work_bytes(resources.memory_bytes,source_->channel_count());
+    if(base_rows_*16+32>block_bytes)fail(RecordingError::ResourceLimit,"Gap timeline exceeds its memory allowance.");
     auto reservation=admit(resources.memory_bytes,resources.budget);
     std::uint64_t found=0;
     const auto emit=[&](double left,double right) {
@@ -537,11 +762,8 @@ std::uint64_t RecordingOverview::visit_gaps(TimeRange range,double threshold,
         check(cancel);const auto node=read_bucket(level,index);
         if(node.last_time<range.start || node.first_time>range.end || node.maximum_spacing<=threshold)return;
         if(!level) {
-            RecordingReadRequest read;read.range=AnalysisRange::selected(node.first_time,node.last_time);
-            read.block_bytes=block_bytes;double previous=0;bool have_previous=false;
-            source_->replay(read,[&](const auto& time,const auto&) {
-                for(double t:time) {if(have_previous)emit(previous,t);previous=t;have_previous=true;}
-            },cancel);
+            const auto time=read_times(index);
+            for(std::size_t i=1;i<time.size();++i)emit(time[i-1],time[i]);
         }else {
             self(self,level-1,index*2);
             if(index*2+1<levels_[level-1].count) {

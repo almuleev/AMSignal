@@ -25,6 +25,7 @@ public:
         OverviewRequest view;
         bool gap_details=false;
         double gap_step=-1;
+        std::size_t cache_bytes=0;
     };
     struct Result {
         std::shared_ptr<MemoryBudget::Reservation> details_reservation;
@@ -63,6 +64,7 @@ public:
     void cancel_snap();
     std::optional<SnapResult> take_snap_result();
     Progress progress() const;
+    void trim_cache(std::size_t bytes);
 private:
     struct Job { Request request; std::shared_ptr<std::atomic<bool>> cancelled; };
     struct SnapJob { SnapRequest request; std::shared_ptr<std::atomic<bool>> cancelled; };
@@ -78,5 +80,9 @@ private:
     std::shared_ptr<std::atomic<bool>> snap_cancel_;
     Progress progress_;
     bool stopping_=false;
+    struct CachedView {std::string key;Result result;std::size_t bytes=0;};
+    std::vector<CachedView> cached_views_;
+    std::size_t cached_bytes_=0;
+    std::size_t cache_limit_=0;
 };
 } // namespace lvm

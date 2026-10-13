@@ -129,8 +129,8 @@ struct PreparedFrf::Storage {
     std::filesystem::path path=scratch.directory/"samples.bin";
     std::size_t channels=0;
 };
-FrfSamples inspect_frf_timeline(const FrfSource& source,const std::atomic<bool>* cancel) {
-    FrfSamples m;Cadence cadence(cancel);double previous=0;
+FrfSamples inspect_frf_timeline(const FrfSource& source,const std::atomic<bool>* cancel,std::size_t expected_samples) {
+    FrfSamples m;Cadence cadence(cancel,expected_samples ? expected_samples-1 : 0);double previous=0;
     source.replay([&](const auto& time,const auto&) {
         for(std::size_t i=0;i<time.size();++i) {
             if((i & 4095)==0)check(cancel);
@@ -242,20 +242,37 @@ std::shared_ptr<const PreparedFrf> prepare_frf_batch(FrfBatchInput input,const s
 }
 
 std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,const std::atomic<bool>* cancel,
-    std::shared_ptr<MemoryBudget::Reservation> reservation) {
+    std::shared_ptr<MemoryBudget::Reservation> reservation,const AnalysisResources& resources) {
     auto p=std::make_shared<PreparedFrf>();auto& m=p->metadata;
-    p->memory_reservation=std::move(reservation);
+    p->memory_reservation=reservation;
     if(!source.references || !source.responses || !source.replay) {m.error=FrfError::InvalidChannels;return p;}
     p->response_errors.resize(source.responses,FrfError::None);
-    p->storage=std::make_shared<PreparedFrf::Storage>();p->storage->channels=1+source.responses;
-    std::ofstream out(p->storage->path,std::ios::binary);
+    std::shared_ptr<FrfBatchInput> memory;
+    const long double required=1024.0L*1024+source.expected_samples*(source.responses+1.0L)*8;
+    if(source.expected_samples && required<=resources.cache_memory_bytes && resources.budget) {
+        auto admission=resources.budget->reserve(static_cast<std::uint64_t>(required));
+        if(admission)try {
+            memory=std::make_shared<FrfBatchInput>();memory->references.resize(1);memory->responses.resize(source.responses);
+            memory->references[0].reserve(source.expected_samples);
+            for(auto& c:memory->responses)c.reserve(source.expected_samples);
+            p->memory=memory;p->memory_reservation=std::move(admission);
+            p->resident_bytes=static_cast<std::size_t>(required);
+        }catch(const std::bad_alloc&) {memory.reset();p->memory.reset();p->memory_reservation=reservation;p->resident_bytes=0;}
+    }
+    std::ofstream out;
+    if(!memory) {
+        p->storage=std::make_shared<PreparedFrf::Storage>();p->storage->channels=1+source.responses;
+        out.open(p->storage->path,std::ios::binary);
+        if(!out)throw FrfSourceFailure(FrfError::ResourceLimit);
+    }
     Cadence cadence(cancel);double previous=0;
     FrfError reference_error=FrfError::None;
     source.replay([&](const auto& time,const auto& channels) {
         check(cancel);
         if(channels.size()!=source.references+source.responses)throw std::invalid_argument("Unaligned FRF block.");
         for(const auto& c:channels)if(c.size()!=time.size())throw std::invalid_argument("Unaligned FRF block.");
-        std::vector<double> rows;rows.reserve(time.size()*p->storage->channels);
+        if(memory && time.size()>source.expected_samples-m.source_count)throw FrfSourceFailure(FrfError::SourceChanged);
+        std::vector<double> rows;if(!memory)rows.reserve(time.size()*(1+source.responses));
         for(std::size_t i=0;i<time.size();++i) {
             if((i & 4095)==0)check(cancel);
             const double t=time[i];
@@ -274,21 +291,27 @@ std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,co
             // A single reference must preserve its original bit pattern.
             const double ref=source.references==1 ? channels[0][i] : static_cast<double>(average);
             if(!std::isfinite(ref) && reference_error==FrfError::None)reference_error=FrfError::Overflow;
-            rows.push_back(ref);
+            if(memory)memory->references[0].push_back(ref);else rows.push_back(ref);
             for(std::size_t c=0;c<source.responses;++c) {
                 const auto value=channels[c+source.references][i];
                 if(!std::isfinite(value))p->response_errors[c]=FrfError::MissingValues;
-                rows.push_back(value);
+                if(memory)memory->responses[c].push_back(value);else rows.push_back(value);
             }
         }
+        if(!memory) {
         if(std::filesystem::space(p->storage->scratch.directory).available<rows.size()*8+64ULL*1024*1024)
             throw FrfSourceFailure(FrfError::ResourceLimit);
         out.write(reinterpret_cast<const char*>(rows.data()),rows.size()*8);
         if(!out)throw FrfSourceFailure(FrfError::ResourceLimit);
         p->disk_bytes+=rows.size()*8;
+        }
     },cancel);
-    out.close();
-    if(!out)throw FrfSourceFailure(FrfError::ResourceLimit);
+    if(source.expected_samples && m.source_count!=source.expected_samples)throw FrfSourceFailure(FrfError::SourceChanged);
+    if(memory) {
+        p->resident_bytes=memory->references[0].capacity()*8;
+        for(const auto& c:memory->responses)p->resident_bytes+=c.capacity()*8;
+        p->memory_reservation->shrink_to(p->resident_bytes);
+    } else {out.close();if(!out)throw FrfSourceFailure(FrfError::ResourceLimit);}
     if(reference_error!=FrfError::None) {m.error=reference_error;return p;}
     if(m.source_count<4) {m.error=FrfError::TooShort;return p;}
     if(m.source_count>static_cast<std::size_t>(std::numeric_limits<int>::max()/2)) {m.error=FrfError::Overflow;return p;}

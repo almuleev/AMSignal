@@ -825,9 +825,12 @@ TimeStepEstimate estimate_time_step(const std::vector<double>& time, std::size_t
 }
 
 double effective_time_gap_step(const std::vector<double>& time, std::size_t lo, std::size_t hi) {
-    const TimeStepEstimate local = estimate_time_step(time, lo, hi, 512);
     ensure_global_gap_step_ready();
-    const double global_step = g.cached_global_gap_step;
+    return effective_time_gap_step(time,lo,hi,g.cached_global_gap_step);
+}
+
+double effective_time_gap_step(const std::vector<double>& time, std::size_t lo, std::size_t hi, double global_step) {
+    const TimeStepEstimate local = estimate_time_step(time, lo, hi, 512);
 
     if (local.step > 0.0 && global_step > 0.0) {
         if (local.count < 8) return global_step;

@@ -11,6 +11,7 @@ bool poll_recording_overview();
 bool synchronize_overview_viewport(std::size_t pixels);
 bool overview_processing_supported();
 bool overview_view_matches_viewport();
+bool overview_view_can_render();
 bool overview_time_yrange(double& minimum,double& maximum);
 // UI-only callback. Source, viewport, processing, visibility and annotation
 // revision are checked again before it can publish an original sample.

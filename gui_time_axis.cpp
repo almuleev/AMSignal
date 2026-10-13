@@ -75,6 +75,8 @@ double stitched_time_at_index(std::size_t index) {
 }
 
 double stitched_time_from_raw(double time) {
+    if(g.stitch_time_gaps && g.overview.render_enabled && g.overview.index)
+        return g.overview.index->stitched_time(time);
     if (!g.stitch_time_gaps || g.ds.time.empty()) return time;
     ensure_stitched_time_cache();
     const auto& source = g.ds.time;
@@ -88,6 +90,8 @@ double stitched_time_from_raw(double time) {
 }
 
 double raw_time_from_stitched(double time) {
+    if(g.stitch_time_gaps && g.overview.render_enabled && g.overview.index)
+        return g.overview.index->stitched_time(time,true);
     if (!g.stitch_time_gaps || g.ds.time.empty()) return time;
     const double first = stitched_time_at_index(0);
     const double last = stitched_time_at_index(g.ds.time.size() - 1);

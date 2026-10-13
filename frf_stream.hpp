@@ -16,6 +16,7 @@ struct FrfSource {
     // Selected references first, responses next. Replay owns its file/config.
     std::size_t references=0, responses=0;
     std::function<void(const FrfBlockConsumer&,const std::atomic<bool>*)> replay;
+    std::size_t expected_samples=0; // Exact selected N, when known; never a cap.
 };
 struct PreparedFrf {
     std::shared_ptr<MemoryBudget::Reservation> memory_reservation;
@@ -32,8 +33,9 @@ struct PreparedFrf {
 std::shared_ptr<const PreparedFrf> prepare_frf_batch(FrfBatchInput input,const std::atomic<bool>* cancel=nullptr,
     std::shared_ptr<MemoryBudget::Reservation> reservation={});
 std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,const std::atomic<bool>* cancel=nullptr,
-    std::shared_ptr<MemoryBudget::Reservation> reservation={});
-FrfSamples inspect_frf_timeline(const FrfSource& source,const std::atomic<bool>* cancel=nullptr);
+    std::shared_ptr<MemoryBudget::Reservation> reservation={},const AnalysisResources& resources={});
+FrfSamples inspect_frf_timeline(const FrfSource& source,const std::atomic<bool>* cancel=nullptr,
+                              std::size_t expected_samples=1048577);
 FrfBatchResult compute_prepared_frf(const PreparedFrf& input,const FrfOptions& options={},
                                    const std::atomic<bool>* cancel=nullptr,const AnalysisResources& resources={});
 }

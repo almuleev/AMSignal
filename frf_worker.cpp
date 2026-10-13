@@ -36,7 +36,7 @@ void FrfWorker::submit(FrfBatchInput data,FrfOptions options,std::uint64_t gener
     if (pending_) pending_->cancelled->store(true);
     pending_.reset();
     active_cancel_ = flag;
-    pending_ = Request{std::move(reservation),std::move(data),{},std::move(key),options,generation,flag,std::move(resources)};
+    pending_ = Request{std::move(reservation),std::move(data),{},std::move(key),options,generation,flag,std::move(resources),cache_epoch_,{}};
     result_.reset(); ready_.notify_one();
 }
 void FrfWorker::submit(FrfSource source,FrfOptions options,std::uint64_t generation,std::string key,
@@ -49,7 +49,7 @@ void FrfWorker::submit(FrfSource source,FrfOptions options,std::uint64_t generat
     if(pending_)pending_->cancelled->store(true);
     pending_.reset();
     active_cancel_=flag;
-    pending_=Request{std::move(reservation),{},std::move(source),std::move(key),options,generation,flag,std::move(resources)};
+    pending_=Request{std::move(reservation),{},std::move(source),std::move(key),options,generation,flag,std::move(resources),cache_epoch_,{}};
     result_.reset();ready_.notify_one();
 }
 bool FrfWorker::submit_cached(FrfOptions options,std::uint64_t generation,const std::string& key,AnalysisResources resources) {
@@ -60,7 +60,9 @@ bool FrfWorker::submit_cached(FrfOptions options,std::uint64_t generation,const 
     if(pending_)pending_->cancelled->store(true);
     pending_.reset();
     active_cancel_=flag;
-    pending_=Request{{},{},{},key,options,generation,flag,std::move(resources)};
+    // The queued job owns its input even if idle retention is evicted before
+    // this worker finishes the preceding cancelled job.
+    pending_=Request{{},{},{},key,options,generation,flag,std::move(resources),cache_epoch_,cached_input_};
     result_.reset();ready_.notify_one();return true;
 }
 void FrfWorker::cancel() {
@@ -70,7 +72,16 @@ void FrfWorker::cancel() {
 }
 void FrfWorker::clear_cache() {
     std::lock_guard<std::mutex> lock(mutex_);
+    ++cache_epoch_;
     cached_input_.reset();cached_key_.clear();
+}
+void FrfWorker::trim_cache(std::size_t memory_bytes,std::size_t disk_bytes) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if(memory_bytes<cache_memory_limit_ || disk_bytes<cache_disk_limit_)++cache_epoch_;
+    cache_memory_limit_=memory_bytes;cache_disk_limit_=disk_bytes;
+    if(cached_input_ && (cached_input_->resident_bytes>memory_bytes || cached_input_->disk_bytes>disk_bytes)) {
+        cached_input_.reset();cached_key_.clear();
+    }
 }
 std::optional<FrfWorker::Result> FrfWorker::take_result() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -87,25 +98,30 @@ void FrfWorker::run() {
         }
         FrfBatchResult r; r.options=request->options;
         try {
-            std::shared_ptr<const PreparedFrf> prepared;
-            {
+            auto prepared=std::move(request->prepared);
+            if(!prepared) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if(!request->input_key.empty() && request->input_key==cached_key_)prepared=cached_input_;
                 else {cached_input_.reset();cached_key_.clear();}
             }
             if(!prepared) {
                 prepared=request->source.replay
-                    ? prepare_frf_stream(request->source,request->cancelled.get(),request->memory_reservation)
+                    ? prepare_frf_stream(request->source,request->cancelled.get(),request->memory_reservation,request->resources)
                     : prepare_frf_batch(std::move(request->data),request->cancelled.get(),request->memory_reservation);
-                if(request->memory_reservation && !request->memory_reservation->shrink_to(prepared->resident_bytes))
-                    throw FrfSourceFailure(FrfError::ResourceLimit);
+                if(request->memory_reservation) {
+                    const auto retained=prepared->memory_reservation==request->memory_reservation ? prepared->resident_bytes : 0;
+                    if(!request->memory_reservation->shrink_to(retained))throw FrfSourceFailure(FrfError::ResourceLimit);
+                }
             } else {
                 request->data={};request->source={};request->memory_reservation.reset();
             }
-            if(!request->cancelled->load() && prepared->resident_bytes<=64ULL*1024*1024 &&
-               prepared->disk_bytes<=256ULL*1024*1024 && !request->input_key.empty()) {
+            if(!request->cancelled->load() && prepared->resident_bytes<=request->resources.cache_memory_bytes &&
+               prepared->disk_bytes<=request->resources.cache_disk_bytes && !request->input_key.empty()) {
                 std::lock_guard<std::mutex> lock(mutex_);
-                if(!stopping_ && !request->cancelled->load()) {cached_input_=prepared;cached_key_=request->input_key;}
+                if(!stopping_ && !request->cancelled->load() && request->cache_epoch==cache_epoch_ &&
+                   prepared->resident_bytes<=cache_memory_limit_ && prepared->disk_bytes<=cache_disk_limit_) {
+                    cached_input_=prepared;cached_key_=request->input_key;
+                }
             }
             r=compute_prepared_frf(*prepared,request->options,request->cancelled.get(),request->resources);
         }

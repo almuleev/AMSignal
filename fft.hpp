@@ -13,6 +13,8 @@ namespace lvm {
 // Actual retained Bluestein storage across all callers/helpers, including idle
 // threads. Schedulers add prospective workspace/plans separately.
 std::size_t fft_cached_plan_bytes();
+// Evicts only idle plans; active DFTs and their storage remain pinned.
+void trim_fft_cached_plans(std::size_t bytes);
 
 // In-place iterative radix-2 FFT. `a.size()` must be a power of two.
 // inverse=true computes the IFFT (normalised by 1/N).

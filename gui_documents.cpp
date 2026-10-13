@@ -31,6 +31,7 @@ DocumentState& active_document_state() {
 void cancel_document_workers() {
     cancel_source_export();
     cancel_recording_overview();
+    g_overview_worker.trim_cache(0);
     g.fft_selecting=false;
     stop_play();
     g_spectrum_worker.cancel();

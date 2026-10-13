@@ -25,6 +25,7 @@ public:
                        AnalysisResources resources={});
     void cancel();
     void clear_cache();
+    void trim_cache(std::size_t memory_bytes,std::size_t disk_bytes);
     void shutdown();
     std::optional<Result> take_result();
 private:
@@ -37,6 +38,8 @@ private:
         std::uint64_t generation;
         std::shared_ptr<std::atomic<bool>> cancelled;
         AnalysisResources resources;
+        std::uint64_t cache_epoch=0;
+        std::shared_ptr<const PreparedFrf> prepared;
     };
     void run();
     std::mutex mutex_;
@@ -48,5 +51,8 @@ private:
     bool stopping_ = false;
     std::shared_ptr<const PreparedFrf> cached_input_;
     std::string cached_key_;
+    std::uint64_t cache_epoch_=0;
+    std::size_t cache_memory_limit_=std::numeric_limits<std::size_t>::max();
+    std::size_t cache_disk_limit_=std::numeric_limits<std::size_t>::max();
 };
 } // namespace lvm

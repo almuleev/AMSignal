@@ -8,6 +8,7 @@
 #include "gui_spectrum.hpp"
 #include "gui_state.hpp"
 #include "gui_status.hpp"
+#include "gui_time_axis.hpp"
 
 namespace gui {
 
@@ -52,8 +53,12 @@ bool active_axis(double*& lo, double*& hi, double& minb, double& maxb, double& m
 void zoom_at(double center_frac, double factor) {
     double *lo, *hi, minb, maxb, minw;
     if (!active_axis(lo, hi, minb, maxb, minw)) return;
-    const double w = *hi - *lo;
-    const double c = *lo + w * center_frac;
+    const bool stitched=g.mode==AnalysisMode::Time && g.stitch_time_gaps;
+    const double initial_lo=stitched ? stitched_time_from_raw(*lo) : *lo;
+    const double initial_hi=stitched ? stitched_time_from_raw(*hi) : *hi;
+    if(stitched){minb=stitched_time_from_raw(minb);maxb=stitched_time_from_raw(maxb);}
+    const double w = initial_hi - initial_lo;
+    const double c = initial_lo + w * center_frac;
     double nw = w * factor;
     if (nw < minw) nw = minw;
     const double full = maxb - minb;
@@ -62,8 +67,8 @@ void zoom_at(double center_frac, double factor) {
     double nhi = nlo + nw;
     if (nlo < minb) { nlo = minb; nhi = nlo + nw; }
     if (nhi > maxb) { nhi = maxb; nlo = nhi - nw; if (nlo < minb) nlo = minb; }
-    *lo = nlo;
-    *hi = nhi;
+    *lo = stitched ? raw_time_from_stitched(nlo) : nlo;
+    *hi = stitched ? raw_time_from_stitched(nhi) : nhi;
     if (g.mode==AnalysisMode::FRF) sync_frf_frequency_limits();
     set_status();
     invalidate_plot();
@@ -118,10 +123,12 @@ void zoom_y_amp_at(double center_frac, double factor) {
 void pan_by(double frac) {
     double *lo, *hi, minb, maxb, minw;
     if (!active_axis(lo, hi, minb, maxb, minw)) return;
-    const double w = *hi - *lo;
-    *lo += w * frac;
-    *hi += w * frac;
-    clamp_range(*lo, *hi, minb, maxb, minw);
+    const bool stitched=g.mode==AnalysisMode::Time && g.stitch_time_gaps;
+    double a=stitched ? stitched_time_from_raw(*lo) : *lo,b=stitched ? stitched_time_from_raw(*hi) : *hi;
+    if(stitched){minb=stitched_time_from_raw(minb);maxb=stitched_time_from_raw(maxb);}
+    const double w=b-a;a+=w*frac;b+=w*frac;clamp_range(a,b,minb,maxb,minw);
+    *lo=stitched ? raw_time_from_stitched(a) : a;
+    *hi=stitched ? raw_time_from_stitched(b) : b;
     if (g.mode==AnalysisMode::FRF) sync_frf_frequency_limits();
     set_status();
     invalidate_plot();
@@ -134,6 +141,7 @@ bool prepare_plot_drag(int mx, int my) {
     g.drag_y = my;
     g.drag_lo = *lo;
     g.drag_hi = *hi;
+    if(g.mode==AnalysisMode::Time && g.stitch_time_gaps){g.drag_lo=stitched_time_from_raw(g.drag_lo);g.drag_hi=stitched_time_from_raw(g.drag_hi);}
     if (g.mode == AnalysisMode::FRF) { frf_y_range(g.drag_y_lo, g.drag_y_hi); return true; }
     if ((g.mode == AnalysisMode::FFT)) {
         if (g.auto_y_amp) {

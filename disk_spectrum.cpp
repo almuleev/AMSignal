@@ -1,4 +1,5 @@
 #include "disk_spectrum.hpp"
+#include "recording_overview.hpp"
 #include "frf_stream.hpp"
 #include "sampling.hpp"
 #include "fft.hpp"
@@ -210,14 +211,21 @@ Spectrum compute_disk_spectrum(std::shared_ptr<const RecordingSource> source,Rec
     // Explicit fixed resident allowance, including cadence sorting (8 MiB), I/O,
     // transpose/FFT tiles and interpolation cursors. Outputs remain on disk.
     constexpr std::uint64_t working=24ULL*1024*1024;
-    if(working+fft_cached_plan_bytes()>std::min(resources.memory_bytes,analysis_memory_budget) ||
+    if(working+(resources.cached_plans_accounted ? 0 : fft_cached_plan_bytes())>resources.memory_bytes ||
        (resources.budget && !(spec.memory_reservation=resources.budget->reserve(working)))) {
         spec.error="FFT resources are insufficient for the bounded disk path.";return spec;
     }
     read.block_rows=4096;read.block_bytes=1024*1024;
     auto timeline=read;timeline.channels.clear();lvm::FrfSource time_source;
-    time_source.replay=[&](const auto& visitor,const auto* flag){source->replay(timeline,visitor,flag);};
-    const auto n=source->replay(timeline,[](const auto&,const auto&){},cancel);
+    const auto cached=options.timeline;
+    if(cached && (cached->source()->path()!=source->path() || cached->source()->bounds().start!=source->bounds().start ||
+       cached->source()->bounds().end!=source->bounds().end || !source->stamp() ||
+       cached->source()->stamp()->bytes!=source->stamp()->bytes || cached->source()->stamp()->modified!=source->stamp()->modified))
+        throw RecordingFailure(RecordingError::InvalidRequest,"FFT timeline does not match its source.");
+    time_source.replay=[&](const auto& visitor,const auto* flag){if(cached)cached->replay_timeline(read.range,[&](const auto& t){visitor(t,{});},flag);
+        else source->replay(timeline,visitor,flag);};
+    const auto rows=cached ? cached->sample_range(read.range) : std::pair<std::uint64_t,std::uint64_t>{0,0};
+    const auto n=cached ? rows.second-rows.first : source->replay(timeline,[](const auto&,const auto&){},cancel);
     if(n<4){spec.error="Not enough samples for FFT (need at least 4).";return spec;}
     if(n>static_cast<std::size_t>(std::numeric_limits<int>::max())){spec.error="FFT exceeds the supported sample count.";return spec;}
     std::size_t m=1;while(m<2*n-1)m*=2;
@@ -229,7 +237,7 @@ Spectrum compute_disk_spectrum(std::shared_ptr<const RecordingSource> source,Rec
         if(ec || available.available<required+64ULL*1024*1024)parent=source->path().parent_path();
     }
     auto workspace=std::make_shared<Workspace>(parent,static_cast<std::uint64_t>(required),options.disk_bytes);
-    const auto meta=inspect_frf_timeline(time_source,cancel);
+    const auto meta=inspect_frf_timeline(time_source,cancel,static_cast<std::size_t>(n));
     if(meta.error!=FrfError::None){spec.error=meta.error==FrfError::TooShort ? "Not enough samples for FFT (need at least 4)." : "FFT requires a finite, strictly increasing time axis.";return spec;}
     if(meta.source_count!=n)throw RecordingFailure(RecordingError::SourceChanged,"Recording changed during FFT preparation.");
     spec.n=static_cast<int>(n);spec.source_start=meta.source_start;spec.source_end=meta.source_end;
@@ -239,7 +247,7 @@ Spectrum compute_disk_spectrum(std::shared_ptr<const RecordingSource> source,Rec
     if(summaries_bytes>working/2)throw RecordingFailure(RecordingError::ResourceLimit,"Too many channels for the disk spectrum overview allowance.");
     {
         Array<long double> offsets(*workspace,n);std::size_t row=0;double previous=0;long double offset=0;
-        source->replay(timeline,[&](const auto& time,const auto&) {std::vector<long double> values(time.size());
+        time_source.replay([&](const auto& time,const auto&) {std::vector<long double> values(time.size());
             for(std::size_t i=0;i<time.size();++i){if(row+i){double step=time[i]-previous;if(step>meta.sample_dt*sampling_gap_factor){step=meta.sample_dt;spec.gaps_ignored=true;}offset+=step;}
                 values[i]=offset;previous=time[i];}offsets.write(row,values.data(),values.size());row+=values.size();},cancel);
         if(row!=n)throw RecordingFailure(RecordingError::SourceChanged,"Recording changed during FFT preparation.");
@@ -295,20 +303,29 @@ Spectrum compute_disk_spectrum(std::shared_ptr<const RecordingSource> source,Rec
 }
 
 Spectrum compute_recording_spectrum(std::shared_ptr<const RecordingSource> source,RecordingReadRequest read,
-    std::vector<std::string> names,const AnalysisResources& resources,const std::atomic<bool>* cancel) {
+    std::vector<std::string> names,const AnalysisResources& resources,const std::atomic<bool>* cancel,
+    std::shared_ptr<const RecordingOverview> timeline) {
     check(cancel);auto time=read;time.channels.clear();
-    const auto n=source->replay(time,[](const auto&,const auto&){},cancel);
+    source->check_current();
+    if(timeline && (timeline->source()->path()!=source->path() || timeline->source()->bounds().start!=source->bounds().start ||
+       timeline->source()->bounds().end!=source->bounds().end || !source->stamp() ||
+       timeline->source()->stamp()->bytes!=source->stamp()->bytes || timeline->source()->stamp()->modified!=source->stamp()->modified))
+        throw RecordingFailure(RecordingError::InvalidRequest,"FFT timeline does not match its source.");
+    DiskSpectrumOptions disk_options;disk_options.timeline=timeline;
+    const auto rows=timeline ? timeline->sample_range(read.range) : std::pair<std::uint64_t,std::uint64_t>{0,0};
+    const auto n=timeline ? rows.second-rows.first : source->replay(time,[](const auto&,const auto&){},cancel);
     if(n>static_cast<std::size_t>(std::numeric_limits<int>::max())){Spectrum result;result.error="FFT exceeds the supported sample count.";return result;}
     long double scratch=16.0L*n;
     if(n && (n&(n-1))){std::size_t m=1;while(m<2*n-1)m*=2;scratch=48.0L*n+32.0L*m;}
     const long double input_bytes=n*(read.channels.size()+1.0L)*8;
     const long double required=input_bytes+2*1024.0L*1024+n*(8.0L+sizeof(long double))+
         (n/2+1)*(read.channels.size()+1.0L)*8+scratch;
-    const auto numerical_cap=std::min(resources.memory_bytes,analysis_memory_budget);
+    const auto numerical_cap=resources.memory_bytes;
     const auto available=resources.budget ? std::min<std::uint64_t>(numerical_cap,resources.budget->available()) : numerical_cap;
     if(n<=static_cast<std::size_t>(std::numeric_limits<int>::max()) && required<=available) {
+        try {
         auto reservation=resources.budget ? resources.budget->reserve(static_cast<std::uint64_t>(input_bytes+1024*1024)) : nullptr;
-        if(resources.budget && !reservation)return compute_disk_spectrum(source,read,names,resources,cancel);
+        if(resources.budget && !reservation)return compute_disk_spectrum(source,read,names,resources,cancel,disk_options);
         Dataset data;data.ok=true;data.names=names;data.time.reserve(n);data.channels.resize(read.channels.size());
         for(auto& column:data.channels)column.reserve(n);
         source->replay(read,[&](const auto& timeline,const auto& values){if(timeline.size()>n-data.rows())throw RecordingFailure(RecordingError::SourceChanged,"Recording changed during FFT preparation.");
@@ -318,10 +335,14 @@ Spectrum compute_recording_spectrum(std::shared_ptr<const RecordingSource> sourc
         auto result=compute_spectrum(data,0,cancel,resources);source->check_current();
         if(!result.ok && result.error.rfind("FFT resources are insufficient",0)==0) {
             data={};reservation.reset();result={};
-            return compute_disk_spectrum(source,read,names,resources,cancel);
+            return compute_disk_spectrum(source,read,names,resources,cancel,disk_options);
         }
         result.recording_source=source;return result;
+        } catch(const std::bad_alloc&) {
+            // Stack-owned Dataset/reservation are already gone before retry.
+            return compute_disk_spectrum(source,read,names,resources,cancel,disk_options);
+        }
     }
-    return compute_disk_spectrum(std::move(source),std::move(read),std::move(names),resources,cancel);
+    return compute_disk_spectrum(std::move(source),std::move(read),std::move(names),resources,cancel,disk_options);
 }
 }

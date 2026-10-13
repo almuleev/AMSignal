@@ -17,11 +17,16 @@ struct ResourcePolicy {
 struct ResourceSnapshot {
     std::uint64_t available_physical = 0, available_commit = 0, resident = 0;
 };
+inline std::uint64_t resource_headroom(const ResourceSnapshot& memory) {
+    const auto free=std::min(memory.available_physical,memory.available_commit);
+    // Keep 20% for the OS/other applications, at least 512 MiB when possible.
+    // Under pressure keep half, rather than interpreting zero as unlimited.
+    const auto reserve=std::max(free/5,std::min<std::uint64_t>(512ULL*1024*1024,free/2));
+    return free-reserve;
+}
 inline std::uint64_t resource_limit(const ResourcePolicy& policy, const ResourceSnapshot& memory) {
-    const auto free = std::min(memory.available_physical,memory.available_commit);
-    const auto safety = saturated_add(memory.resident,free/2);
-    const auto requested = policy.automatic
-        ? std::min<std::uint64_t>(8ULL*1024*1024*1024,saturated_add(memory.resident,free)/4)
+    const auto safety=saturated_add(memory.resident,resource_headroom(memory));
+    const auto requested = policy.automatic ? safety
         : static_cast<std::uint64_t>(ResourcePolicy::valid_manual(policy.manual_mib) ? policy.manual_mib : 2048)*1024*1024;
     return std::min(requested,safety);
 }
@@ -58,6 +63,7 @@ public:
     std::uint64_t reserved() const {
         std::lock_guard<std::mutex> lock(mutex_); return reserved_;
     }
+    std::uint64_t limit() const {std::lock_guard<std::mutex> lock(mutex_);return limit_;}
     std::shared_ptr<Reservation> reserve(std::uint64_t bytes) {
         // Allocate outside the mutex: shared_ptr control-block allocation can
         // fail and destroy Reservation, whose destructor also acquires it.

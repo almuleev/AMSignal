@@ -71,6 +71,7 @@ struct RecordingSnapRequest {
     double time_scale=1,value_scale=1;
     std::size_t memory_bytes=2ULL*1024*1024;
     std::shared_ptr<MemoryBudget> budget;
+    bool stitched=false;
 };
 struct RecordingSnapResult {
     double time=0,value=0;
@@ -102,6 +103,14 @@ public:
     std::uint64_t sample_count() const { return sample_count_; }
     std::size_t level_count() const { return levels_.size(); }
     std::uint64_t disk_bytes() const { return disk_bytes_; }
+    double gap_step() const { return gap_step_; }
+    // Exact cached timestamps and reversible display-only gap compression.
+    double stitched_time(double time,bool inverse=false) const;
+    double stitched_sample_time(std::uint64_t sample) const;
+    std::size_t resident_bytes() const;
+    std::pair<std::uint64_t,std::uint64_t> sample_range(AnalysisRange range) const;
+    void replay_timeline(AnalysisRange range,const std::function<void(const std::vector<double>&)>& consume,
+                         const std::atomic<bool>* cancel=nullptr) const;
     const std::shared_ptr<const RecordingSource>& source() const { return source_; }
 private:
     struct Level { std::uint64_t offset=0,count=0; };
@@ -111,6 +120,10 @@ private:
     std::vector<Level> levels_;
     std::uint64_t sample_count_=0,disk_bytes_=0;
     std::size_t base_rows_=0;
+    double gap_step_=0,sample_step_=0;
     OverviewBucket read_bucket(std::size_t level,std::uint64_t index) const;
+    std::vector<double> read_times(std::uint64_t leaf,double* display_first=nullptr,
+                                  double* anchor_raw=nullptr,double* anchor_display=nullptr) const;
+    void cache_stitched_leaf(std::uint64_t leaf) const;
 };
 } // namespace lvm

@@ -247,6 +247,7 @@ bool is_settings_hotkey_modifier_id(int id) {
 
 bool is_settings_checkbox_id(int id) {
     return id == IDC_SET_GAP_MARKERS ||
+           id == IDC_SET_MEMORY_AUTO ||
            id == IDC_SET_STITCH_GAPS;
 }
 
@@ -256,6 +257,7 @@ bool uses_manual_toggle_state(HWND hwnd) {
     return is_channel_checkbox_id(id) ||
            is_side_toggle_id(id) ||
            id == IDC_SET_GAP_MARKERS ||
+           id == IDC_SET_MEMORY_AUTO ||
            id == IDC_SET_STITCH_GAPS ||
            id == IDC_EXPORT_APPLY_SETTINGS ||
            id == IDC_EXPORT_APPLY_DATA ||

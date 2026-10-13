@@ -26,12 +26,13 @@ std::shared_ptr<const lvm::RecordingSource> processed_recording_source(bool appl
     if(!changed)return raw;
     // Text is full precision and includes the recipe, not worker generations or styles.
     std::ostringstream key;key<<std::setprecision(17)<<"recipe2:"<<filtering<<':'<<filter.mode<<':'<<filter.topology<<':'
-        <<filter.low_cutoff<<':'<<filter.high_cutoff<<':'<<to_utf8(g.global_formula);
+        <<filter.low_cutoff<<':'<<filter.high_cutoff<<':'<<raw->filter_sample_step()<<':'<<to_utf8(g.global_formula);
     for(const auto& formula:g.channel_formulas) {const auto text=to_utf8(formula);key<<':'<<text.size()<<':'<<text;}
     if(g.processed_source_origin==raw && g.processed_source &&
        g.processed_source->processing_identity()=="\nprocessed-v1:"+key.str())return g.processed_source;
     struct Cadence {std::mutex mutex;double step=0;};
     auto cadence=std::make_shared<Cadence>();
+    cadence->step=raw->filter_sample_step();
     auto result=lvm::RecordingSource::processed(raw,key.str(),
         [raw,kinds,mul,add,formulas,global,identities,global_identity,global_affine,global_mul,global_add,filtering,filter,cadence]
         (const lvm::RecordingReadRequest& requested,const lvm::RecordingBlockConsumer& consume,const std::atomic<bool>* cancel) {

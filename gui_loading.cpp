@@ -92,7 +92,7 @@ void request_async_load_cancel() {
 bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_channels,
                           bool requested_time_window, double cached_global_gap_step,
                           bool cached_global_gap_step_ready,
-                          std::optional<lvm::RecordingStamp> expected_stamp) {
+                          std::optional<lvm::RecordingStamp> expected_stamp,double source_filter_step) {
     if (ds.time.empty()) {
         g.last_error = "No time data available.";
         return false;
@@ -110,7 +110,7 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
             throw lvm::RecordingFailure(lvm::RecordingError::SourceChanged,"The source file changed while loading. Reopen the recording.");
         if(!stamp_error && !ds.frequency_axis && ds.source_columns.size()==ds.channel_count())
             recording=lvm::RecordingSource::from_file(std::filesystem::path(wpath),
-                {ds.time.front(),ds.time.back()},ds.source_columns,index,lvm::RecordingStamp{size,modified});
+                {ds.time.front(),ds.time.back()},ds.source_columns,index,lvm::RecordingStamp{size,modified},source_filter_step);
     } catch(const std::exception& ex) {
         g.last_error=ex.what();return false;
     }
@@ -257,7 +257,39 @@ bool apply_scanned_recording(AsyncScanResult& result) {
     sync_menu();set_status();invalidate_plot();return true;
 }
 
-bool start_async_scan_task(const std::wstring& wpath) {
+bool move_resident_recordings_to_disk() {
+    bool changed=false;
+    const auto convert=[&](DocumentState& document,bool active) {
+        if(document.overview.render_enabled || document.current_file_partial || document.ds.frequency_axis ||
+           document.ds.rows()<3 || !document.recording_source)return;
+        std::shared_ptr<const lvm::RecordingSource> source;
+        try {
+            document.recording_source->check_current();
+            const auto step=document.recording_source->filter_sample_step()>0 ? document.recording_source->filter_sample_step() :
+                (document.cached_global_gap_step_ready && document.cached_global_gap_step>0 ? document.cached_global_gap_step :
+                 effective_time_gap_step(document.ds.time,0,document.ds.rows(),precompute_global_gap_step(document.ds.time)));
+            source=lvm::RecordingSource::from_file(document.recording_source->path(),document.recording_source->bounds(),
+                document.ds.source_columns,document.source_scan_index,document.recording_source->stamp(),step);
+        }catch(const std::exception&){return;}
+        lvm::Dataset seed;seed.ok=true;seed.names=document.ds.names;seed.generated_names=document.ds.generated_names;
+        seed.source_columns=document.ds.source_columns;seed.export_comments=document.ds.export_comments;seed.stats=document.ds.stats;
+        seed.time.assign(document.ds.time.begin(),document.ds.time.begin()+2);
+        if(document.ds.raw_time.size()>=2)seed.raw_time.assign(document.ds.raw_time.begin(),document.ds.raw_time.begin()+2);
+        for(const auto& column:document.ds.channels)seed.channels.emplace_back(column.begin(),column.begin()+2);
+        if(active) {g_spectrum_worker.cancel();g_frf_worker.cancel();g_frf_worker.clear_cache();
+            ++g.spec_generation;++g.frf.generation;g.spec_pending=false;g.frf.pending=false;}
+        document.recording_rows=document.ds.rows();document.ds=std::move(seed);document.recording_source=std::move(source);
+        document.overview={};document.overview.render_enabled=true;
+        document.transformed_channel_cache.clear();document.transformed_channel_cache_valid.clear();
+        document.filtered_channel_cache.clear();document.filtered_channel_cache_valid.clear();
+        document.envelopes.clear();document.envelope_serial.clear();
+        changed=true;
+    };
+    for(auto& document:g.inactive_documents)convert(document,false);
+    convert(g,true);if(changed)invalidate_plot();return changed;
+}
+
+bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
     if (g.async_load_stage != AsyncLoadStage::None) {
         g.last_error = "A file is already loading.";
         return false;
@@ -273,8 +305,9 @@ bool start_async_scan_task(const std::wstring& wpath) {
     const HWND target = g.main;
     try {
         const auto memory_budget=refresh_load_memory_budget();
+        g_frf_worker.clear_cache();g_overview_worker.trim_cache(0);
         if (g_load_worker.joinable()) g_load_worker.join();
-        g_load_worker = std::thread([token, path_copy, target, cancel_flag,memory_budget]() {
+        g_load_worker = std::thread([token, path_copy, target, cancel_flag,memory_budget,adaptive_resident]() {
           try {
             auto result = std::make_unique<AsyncScanResult>();
             result->token = token;
@@ -298,11 +331,39 @@ bool start_async_scan_task(const std::wstring& wpath) {
                     read.cancel_flag=cancel_flag.get();
                     std::vector<char> valid,duplicate;
                     lvm::Dataset seed;
+                    // Discover N/channels and optionally retain original values
+                    // in the same pass. A rejected candidate is discarded before
+                    // continuing bounded metadata discovery, without rereading.
+                    const auto resident_limit=adaptive_resident ? memory_budget->available()/3 : 0;
+                    auto resident_admission=resident_limit ? memory_budget->reserve(resident_limit) : nullptr;
+                    lvm::Dataset resident;
+                    std::size_t capacity=0;
                     read.consume_block=[&](const auto& time,const auto& values) {
                         if(values.size()*16ULL*1024>8ULL*1024*1024)
                             throw lvm::RecordingFailure(lvm::RecordingError::ResourceLimit,"Too many source columns for the metadata budget.");
                         valid.resize(values.size(),0);duplicate.resize(values.size(),1);
                         seed.channels.resize(values.size()>0 ? values.size()-1 : 0);
+                        if(resident_admission) {
+                            const auto needed=resident.rows()+time.size();
+                            auto target=needed>capacity ? std::max(needed,capacity ? capacity*2 : std::size_t(65536)) : capacity;
+                            const auto growth_overhead=capacity*8ULL+1024*1024;
+                            if(needed>capacity && resident_limit>growth_overhead)
+                                target=std::min<std::size_t>(target,(resident_limit-growth_overhead)/((values.size()+1)*8));
+                            // Includes old vector storage during one-column growth.
+                            const long double peak=target*(values.size()+1.0L)*8+capacity*8.0L+1024*1024;
+                            if(target<needed || peak>resident_limit || (!resident.channels.empty() && resident.channels.size()+1!=values.size())) {
+                                resident={};resident_admission.reset();
+                            } else {
+                                try {
+                                    resident.channels.resize(values.size()-1);
+                                    if(target>capacity) {
+                                        resident.time.reserve(target);resident.raw_time.reserve(target);
+                                        for(auto& column:resident.channels)column.reserve(target);
+                                        capacity=target;
+                                    }
+                                } catch(const std::bad_alloc&) {resident={};resident_admission.reset();}
+                            }
+                        }
                         for(std::size_t i=0;i<time.size();++i) {
                             if(!std::isfinite(time[i]))continue;
                             if(seed.time.size()<2) {
@@ -310,6 +371,10 @@ bool start_async_scan_task(const std::wstring& wpath) {
                                 for(std::size_t c=1;c<values.size();++c)seed.channels[c-1].push_back(values[c][i]);
                             }
                             ++result->source_rows;
+                            if(resident_admission) {
+                                resident.time.push_back(time[i]);resident.raw_time.push_back(values[0][i]);
+                                for(std::size_t c=1;c<values.size();++c)resident.channels[c-1].push_back(values[c][i]);
+                            }
                             for(std::size_t c=1;c<values.size();++c)if(!std::isnan(values[c][i])) {
                                 valid[c]=1;
                                 if(!std::isnan(values[0][i]) &&
@@ -332,7 +397,23 @@ bool start_async_scan_task(const std::wstring& wpath) {
                     }
                     if(kept.rows()<2 || !kept.channel_count())throw std::runtime_error("No signal channels or fewer than two samples.");
                     // Frequency-axis imports stay on the existing spectrum path.
-                    if(kept.frequency_axis)throw std::runtime_error("Large stored spectra require the spectrum import path.");
+                    if(kept.frequency_axis && !resident_admission)throw std::runtime_error("Insufficient memory for this stored spectrum.");
+                    if(resident_admission) {
+                        lvm::Dataset complete;complete.time=std::move(resident.time);complete.raw_time=std::move(resident.raw_time);
+                        for(std::size_t c=0;c<resident.channels.size();++c)if(valid[c+1] && (!duplicate[c+1] || kept.frequency_axis))complete.channels.push_back(std::move(resident.channels[c]));
+                        complete.names=kept.names;complete.generated_names=kept.generated_names;complete.source_columns=kept.source_columns;
+                        complete.export_comments=kept.export_comments;complete.stats=kept.stats;complete.ok=true;complete.frequency_axis=kept.frequency_axis;
+                        if(!complete.frequency_axis)lvm::make_monotonic(complete.time,cancel_flag.get());
+                        result->resident_gap_step=precompute_global_gap_step(complete.time);
+                        lvm::FrfSource timeline;
+                        timeline.replay=[&complete](const auto& visitor,const auto*){visitor(complete.time,{});};
+                        const auto cadence=lvm::inspect_frf_timeline(timeline,cancel_flag.get(),complete.rows());
+                        if(cadence.error==lvm::FrfError::None)result->resident_filter_step=cadence.sample_dt;
+                        std::uint64_t bytes=(complete.time.capacity()+complete.raw_time.capacity())*8+1024*1024;
+                        for(const auto& column:complete.channels)bytes+=column.capacity()*8;
+                        resident_admission->shrink_to(bytes);
+                        result->resident_reservation=std::move(resident_admission);result->resident_data=std::move(complete);
+                    }
                     result->source_metadata=std::move(kept);
                     std::error_code ec;
                     if(std::filesystem::file_size(path_copy,ec)!=result->index->file_size || ec ||
@@ -356,8 +437,7 @@ bool start_async_scan_task(const std::wstring& wpath) {
 
 std::size_t display_load_memory_budget(std::uint64_t available_physical,
                                      std::uint64_t available_commit) {
-    constexpr std::uint64_t maximum=2ULL*1024*1024*1024;
-    const auto allowance=std::min(maximum,std::min(available_physical,available_commit)/8);
+    const auto allowance=lvm::resource_headroom({available_physical,available_commit,0})/3;
     // Zero means unbounded to the parser; never return zero under memory pressure.
     return static_cast<std::size_t>(std::max<std::uint64_t>(1,allowance));
 }
@@ -373,12 +453,12 @@ bool start_async_load_task(const std::wstring& wpath, const double* fragment_sta
     try {
         if(g_load_worker.joinable())g_load_worker.join();
         g_frf_worker.clear_cache(); // A new file must not be blocked by an idle input cache.
+        g_overview_worker.trim_cache(0);
         auto budget=refresh_load_memory_budget();
         const auto memory=resource_snapshot();
-        const auto fragment_cap=g.resource_policy.automatic
-            ? display_load_memory_budget(memory.available_physical,memory.available_commit) : 2ULL*1024*1024*1024;
+        const auto fragment_cap=display_load_memory_budget(memory.available_physical,memory.available_commit);
         // Reserve the parser capacity bound and equal headroom for preparation.
-        load_options.max_resident_bytes=static_cast<std::size_t>(std::min<std::uint64_t>(fragment_cap,budget->available()/2));
+        load_options.max_resident_bytes=static_cast<std::size_t>(std::min<std::uint64_t>(fragment_cap,budget->available()/3));
         if(load_options.max_resident_bytes==0) {
             g.last_error=g_str==&kEn ? "No memory budget remains for loading. Close another recording or adjust the data budget in Settings."
                 : "Бюджет данных исчерпан. Закройте другую запись или измените бюджет данных в настройках.";
@@ -475,7 +555,8 @@ bool load_path_interactive(const std::wstring& wpath) {
     g.last_error.clear();
     std::error_code size_error;
     const bool large=std::filesystem::file_size(std::filesystem::path(wpath),size_error)>512ULL*1024*1024 && !size_error;
-    if (large) return start_source_open(wpath);
+    // The threshold selects metadata discovery, never the final storage mode.
+    if (large) return start_async_scan_task(wpath,true);
     return start_async_load_task(wpath);
 }
 
@@ -540,7 +621,14 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.cached_scan_end = result->range_end;
             g.cached_scan_valid = true;
             g.cached_scan_index = result->index;
-            if(!apply_scanned_recording(*result))MessageBoxW(hwnd,to_w(g.last_error).c_str(),g_str->msg_read_err,MB_ICONERROR | MB_OK);
+            bool accepted=false;
+            if(result->resident_data.ok) {
+                g.cached_scan_path=result->path;g.cached_scan_valid=true;g.cached_scan_index=result->index;
+                accepted=apply_loaded_dataset(std::move(result->resident_data),result->path,false,false,
+                    result->resident_gap_step,true,lvm::RecordingStamp{result->index->file_size,result->index->modified},result->resident_filter_step);
+                result->resident_data={};result->resident_reservation.reset();
+            } else accepted=apply_scanned_recording(*result);
+            if(!accepted)MessageBoxW(hwnd,to_w(g.last_error).c_str(),g_str->msg_read_err,MB_ICONERROR | MB_OK);
             continue_open_queue();return 0;
         }
         case WM_APP_ASYNC_LOAD_DONE: {

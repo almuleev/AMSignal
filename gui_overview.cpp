@@ -33,8 +33,20 @@ bool request_recording_overview(const std::filesystem::path& cache,lvm::Analysis
         g.overview.source=request.source;g.overview.numerical=g.numerical_revision;
         request.generation=g.overview.generation;request.cache=cache;
         if(cache.empty() || processed){request.cache.clear();request.managed_cache=recording_overview_cache();}
-        auto budget=refresh_load_memory_budget();
+        auto budget=current_analysis_resources(24ULL*1024*1024).budget;
+        request.cache_bytes=static_cast<std::size_t>(std::min<std::uint64_t>(128ULL*1024*1024,budget->limit()/8));
         request.build.budget=budget;request.view.budget=std::move(budget);
+        // The binary time axis costs 8N bytes. Reserve an explicit allowance
+        // from N and C, rather than retaining the old 512 MiB ceiling for all
+        // file layouts. Common text recordings up to 10 GB can need more.
+        constexpr std::uint64_t disk_cap=1024ULL*1024*1024;
+        if(g.recording_rows && request.source) {
+            const auto leaves=g.recording_rows/request.build.base_rows+(g.recording_rows%request.build.base_rows!=0);
+            const auto node_bytes=48+104ULL*request.source->channel_count();
+            const auto estimate=lvm::saturated_add(std::min(g.recording_rows,disk_cap/8)*8,
+                lvm::saturated_add(std::min(leaves,disk_cap/(node_bytes*2+24))*(node_bytes*2+24),1024*1024+64*node_bytes));
+            request.build.max_disk_bytes=std::min(disk_cap,std::max(request.build.max_disk_bytes,estimate));
+        }
         request.view.range=range;request.view.channels=std::move(channels);request.view.pixel_columns=pixels;
         request.view.display_density=display_density;
         request.gap_details=g.recording_rows>0;
@@ -81,7 +93,6 @@ bool poll_recording_overview() {
     return true;
 }
 bool overview_processing_supported() {
-    if(g.stitch_time_gaps)return false;
     ensure_channel_formula_vectors();
     return true;
 }
@@ -110,11 +121,16 @@ bool synchronize_overview_viewport(std::size_t pixels) {
                                       std::move(channels),pixels,true);
 }
 bool overview_view_matches_viewport() {
+    if(!overview_view_can_render() || g.overview.view->range.start!=g.win_start ||
+       g.overview.view->range.end!=g.win_end)return false;
+    return true;
+}
+bool overview_view_can_render() {
     if(!g.overview.view || !g.overview.index || g.overview.index->source()!=g.overview.source ||
        (g.overview.source->processing_identity().empty() ? g.overview.source!=g.recording_source : g.processed_source_origin!=g.recording_source) ||
        requires_processed()!=!g.overview.source->processing_identity().empty() ||
        (!g.overview.source->processing_identity().empty() && g.overview.numerical!=g.numerical_revision) ||
-       g.overview.view->range.start!=g.win_start || g.overview.view->range.end!=g.win_end)return false;
+       g.overview.view->range.end<g.win_start || g.overview.view->range.start>g.win_end)return false;
     // A hidden or newly shown channel changes the projection, not the numerical input.
     for(std::size_t c=0;c<g.visible.size();++c)if(g.visible[c] &&
        std::find(g.overview.channels.begin(),g.overview.channels.end(),c)==g.overview.channels.end())return false;
@@ -122,9 +138,10 @@ bool overview_view_matches_viewport() {
 }
 bool overview_time_yrange(double& minimum,double& maximum) {
     minimum=-1;maximum=1;
-    if(!overview_processing_supported() || !overview_view_matches_viewport())return false;
+    if(!overview_processing_supported() || !overview_view_can_render())return false;
     double low=std::numeric_limits<double>::infinity(),high=-low;
     for(const auto& bucket:g.overview.view->buckets)for(std::size_t k=0;k<bucket.channels.size();++k) {
+        if(bucket.last_time<g.win_start || bucket.first_time>g.win_end)continue;
         const auto c=g.overview.channels.at(k);if(c>=g.visible.size() || !g.visible[c])continue;
         const auto& trace=bucket.channels[k];if(!trace.finite_count)continue;
         const bool affine=g.overview.source->processing_identity().empty() && g.channel_transform_kind[c]==TransformRuntimeKind::Affine;

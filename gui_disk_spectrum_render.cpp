@@ -33,7 +33,8 @@ void draw_disk_spectrum(HDC dc,const RECT& p) {
     draw_axes(dc,p,left,right,0,top);
     const int saved=SaveDC(dc);IntersectClipRect(dc,p.left+1,p.top+1,p.right,p.bottom);
     for(std::size_t j=0;j<curves.size();++j){if(curves[j].empty())continue;const auto ci=g.spec_channel_indices.at(j);
-        HPEN pen=CreatePen(g.distinguish_curves ? curve_pen_style(ci) : PS_SOLID,1,channel_color(ci));auto old=SelectObject(dc,pen);bool first=true;
+        const bool dense=range.second-range.first>static_cast<std::size_t>(width)*2;
+        HPEN pen=CreatePen(g.distinguish_curves && !dense ? curve_pen_style(ci) : PS_SOLID,1,channel_color(ci));auto old=SelectObject(dc,pen);bool first=true;
         for(const auto& point:curves[j]){const int x=p.left+static_cast<int>((g.spec.frequency(point.first)-left)/(right-left)*width);
             const int y=p.bottom-static_cast<int>(point.second/top*height);
             if(first){MoveToEx(dc,x,y,nullptr);first=false;}else LineTo(dc,x,y);}

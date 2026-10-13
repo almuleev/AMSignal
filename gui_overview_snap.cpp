@@ -2,6 +2,7 @@
 #include "gui_resources.hpp"
 #include "gui_state.hpp"
 #include "gui_render.hpp"
+#include "gui_time_axis.hpp"
 #include <cmath>
 
 namespace gui {
@@ -15,6 +16,7 @@ struct PendingSnap {
     std::vector<char> visible;
     lvm::ResourcePolicy policy;
     bool measure=false,marker=false;
+    bool stitched=false;
     int line=0;
     std::function<void(const lvm::RecordingSnapResult&)> accept;
 };
@@ -27,7 +29,7 @@ bool matches(const PendingSnap& p) {
         g.win_start==p.start && g.win_end==p.end && g.vx0==p.x0 && g.vx1==p.x1 &&
         g.vy0==p.y0 && g.vy1==p.y1 && EqualRect(&g.vrect,&p.plot) && g.visible==p.visible &&
         g.resource_policy.automatic==p.policy.automatic && g.resource_policy.manual_mib==p.policy.manual_mib &&
-        g.measure_mode==p.measure && g.pending_marker==p.marker && g.pending_line==p.line;
+        g.measure_mode==p.measure && g.pending_marker==p.marker && g.pending_line==p.line && g.stitch_time_gaps==p.stitched;
 }
 }
 void cancel_overview_snap() {
@@ -42,7 +44,8 @@ bool request_overview_snap(double time,double value,std::function<void(const lvm
     try {
         lvm::OverviewWorker::SnapRequest request;request.source=g.overview.source;request.index=g.overview.index;
         request.generation=++next_snap;request.query.range=lvm::AnalysisRange::selected(g.win_start,g.win_end);
-        request.query.target_time=time;request.query.target_value=value;
+        request.query.stitched=g.stitch_time_gaps;
+        request.query.target_time=stitched_time_from_raw(time);request.query.target_value=value;
         request.query.time_scale=(g.vrect.right-g.vrect.left)/(g.vx1-g.vx0);
         request.query.value_scale=(g.vrect.bottom-g.vrect.top)/(g.vy1-g.vy0);
         request.query.budget=refresh_load_memory_budget();
@@ -56,6 +59,7 @@ bool request_overview_snap(double time,double value,std::function<void(const lvm
         p.x0=g.vx0;p.x1=g.vx1;p.y0=g.vy0;p.y1=g.vy1;p.plot=g.vrect;p.visible=g.visible;
         p.policy=g.resource_policy;p.accept=std::move(accept);
         p.measure=g.measure_mode;p.marker=g.pending_marker;p.line=g.pending_line;
+        p.stitched=g.stitch_time_gaps;
         g_overview_worker.submit_snap(std::move(request));pending=std::move(p);
         g.overview.snap_pending=true;invalidate_plot();return true;
     }catch(const std::bad_alloc&){g.overview.snap_error=lvm::RecordingError::ResourceLimit;}

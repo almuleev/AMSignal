@@ -1572,14 +1572,14 @@ void test_analysis_resources() {
 void test_resource_budget() {
     constexpr std::uint64_t mib=1024*1024,gib=1024*mib;
     lvm::ResourcePolicy policy;
-    check(lvm::resource_limit(policy,{4*gib,6*gib,0})==gib,"Auto uses free RAM on a constrained machine");
-    check(lvm::resource_limit(policy,{24*gib,26*gib,0})==6*gib,"Auto scales with machine resources");
-    check(lvm::resource_limit(policy,{40*gib,40*gib,0})==8*gib,"Auto has a bounded upper limit");
-    check(lvm::resource_limit(policy,{24*gib,2*gib,0})==gib/2,"commit can constrain Auto independently of RAM");
-    check(lvm::resource_limit(policy,{4*gib,4*gib,4*gib})==2*gib,"resident data do not become new free memory");
+    check(lvm::resource_limit(policy,{4*gib,6*gib,0})==4*gib-4*gib/5,"Auto leaves a system reserve on a constrained machine");
+    check(lvm::resource_limit(policy,{24*gib,26*gib,0})==24*gib-24*gib/5,"Auto scales with available machine resources");
+    check(lvm::resource_limit(policy,{40*gib,40*gib,0})==32*gib,"Auto has no arbitrary eight-GiB ceiling");
+    check(lvm::resource_limit(policy,{24*gib,2*gib,0})==3*gib/2,"commit constrains Auto independently of RAM");
+    check(lvm::resource_limit(policy,{4*gib,4*gib,4*gib})==8*gib-4*gib/5,"resident data are charged separately from safe headroom");
     check(lvm::resource_limit(policy,{0,0,0})==0,"zero resources do not mean unlimited memory");
     policy={false,4096};
-    check(lvm::resource_limit(policy,{4*gib,4*gib,gib})==3*gib,"manual limit preserves half the free system memory");
+    check(lvm::resource_limit(policy,{4*gib,4*gib,gib})==4*gib,"manual limit shares the same system reserve");
     check(lvm::resource_limit(policy,{24*gib,24*gib,gib})==4*gib,"manual limit is respected when safe");
     auto budget=std::make_shared<lvm::MemoryBudget>();budget->configure(100,20,100);
     auto a=budget->reserve(30);auto b=budget->reserve(50);
@@ -1681,7 +1681,167 @@ void test_disk_spectrum() {
     std::filesystem::remove(directory);
 }
 
+void test_edge_resources() {
+    constexpr std::size_t n=4096,mib=1024*1024;
+    std::vector<double> time(n),x(n),y(n);
+    for(std::size_t i=0;i<n;++i){time[i]=i/1024.;x[i]=std::sin(2*std::acos(-1.)*32*i/1024.);y[i]=2*x[i];}
+    lvm::AnalysisResources resources;resources.memory_bytes=64*mib;
+    resources.budget=std::make_shared<lvm::MemoryBudget>();resources.budget->configure(64*mib,0,64*mib);
+    const auto wait=[](auto& worker){using Result=decltype(worker.take_result());Result result;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(!(result=worker.take_result()) && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
+        return result;};
+    for(bool trim:{false,true}) {
+        std::promise<void> entered,release;auto released=release.get_future().share();auto started=entered.get_future();
+        lvm::FrfSource source;source.references=1;source.responses=1;source.expected_samples=n;
+        source.replay=[&](const auto& consume,const auto*){consume(time,{x,y});entered.set_value();released.wait();};
+        lvm::FrfWorker worker;lvm::FrfOptions options;options.segment_length=1024;
+        worker.submit(source,options,1,"edge",resources,resources.budget->reserve(8*mib));
+        check(started.wait_for(std::chrono::seconds(5))==std::future_status::ready,"FRF preparation reaches the controlled cache eviction boundary");
+        if(trim)worker.trim_cache(0,0);else worker.clear_cache();
+        release.set_value();auto result=wait(worker);
+        check(result && result->frf.ok,"evicting retention during preparation preserves the live FRF job");
+        result.reset();
+        check(!worker.submit_cached(options,2,"edge",resources),"old FRF preparation cannot repopulate a cleared or reduced cache");
+        worker.shutdown();check(resources.budget->reserved()==0,"FRF eviction and shutdown release all live reservations");
+    }
+    for(bool ram:{false,true})for(int offset:{-1,1}) {
+        lvm::FrfSource source;source.references=1;source.responses=1;source.expected_samples=n+offset;
+        source.replay=[&](const auto& consume,const auto*){consume(time,{x,y});};
+        auto policy=resources;policy.cache_memory_bytes=ram ? 64*mib : 0;
+        bool rejected=false;
+        try{lvm::prepare_frf_stream(source,nullptr,{},policy);}catch(const lvm::FrfSourceFailure& error){rejected=error.error==lvm::FrfError::SourceChanged;}
+        check(rejected,"exact source count mismatch is rejected for both RAM and disk preparation");
+        check(resources.budget->reserved()==0,"count mismatch releases prepared buffers and admission");
+    }
+    {
+        lvm::FrfSource source;source.references=1;source.responses=1;source.expected_samples=n;
+        unsigned replays=0;source.replay=[&](const auto& consume,const auto*){++replays;consume(time,{x,y});};
+        lvm::FrfWorker worker;lvm::FrfOptions options;options.segment_length=1024;
+        bool survives=true;
+        for(unsigned i=0;i<32 && survives;++i) {
+            worker.trim_cache(64*mib,256*mib);worker.submit(source,options,2*i,"owned",resources);
+            auto first=wait(worker);survives=first && first->frf.ok && worker.submit_cached(options,2*i+1,"owned",resources);
+            if(!survives)break;
+            worker.clear_cache();worker.trim_cache(0,0);auto repeated=wait(worker);
+            survives=repeated && repeated->generation==2*i+1 && repeated->frf.ok &&
+                repeated->frf.common().valid[32] && std::abs(repeated->frf.common().transfer[32]-std::complex<double>(2,0))<1e-12;
+        }
+        check(survives && replays==32,"32 queued cache repetitions own their exact input through immediate clear/trim without replay");
+        worker.shutdown();check(resources.budget->reserved()==0,"queued prepared-input owners release their reservations after shutdown");
+    }
+    {
+        std::vector<std::complex<double>> input(4093);
+        for(std::size_t i=0;i<input.size();++i)input[i]={std::sin(.017*i),std::cos(.039*i)};
+        const auto expected=lvm::dft(input);std::atomic<unsigned> live{6};std::atomic<bool> exact{true};
+        auto trimmer=std::async(std::launch::async,[&]{while(live.load()){lvm::trim_fft_cached_plans(0);std::this_thread::yield();}});
+        std::vector<std::future<void>> jobs;
+        for(unsigned i=0;i<6;++i)jobs.push_back(std::async(std::launch::async,[&]{
+            try{for(unsigned pass=0;pass<40;++pass)if(lvm::dft(input)!=expected)exact=false;}catch(...){exact=false;}
+            --live;
+        }));
+        for(auto& job:jobs)job.get();
+        trimmer.get();
+        check(exact,"240 concurrent arbitrary-length DFTs preserve every complex coefficient while other threads evict idle plans");
+        lvm::trim_fft_cached_plans(0);check(lvm::fft_cached_plan_bytes()==0,"native thread exit and trimming leave no retained FFT plans");
+    }
+    // Exercise changes in the size of the shared pool, failure and contention.
+    lvm::AnalysisExecutor executor;
+    for(auto participants:{1U,6U,2U,32U,1U,8U}) {
+        std::vector<std::atomic<unsigned>> visits(257);for(auto& v:visits)v=0;
+        check(executor.run(visits.size(),participants,[&](auto i){++visits[i];}),"idle executor admits varying participant counts");
+        bool exactly_once=true;for(const auto& v:visits)exactly_once=exactly_once && v==1;
+        check(exactly_once,"pool growth and idle helpers execute every index exactly once");
+    }
+    bool failed=false;try{executor.run(257,8,[](auto i){if(i==3)throw std::runtime_error("injected executor failure");});}
+        catch(const std::runtime_error&){failed=true;}
+    check(failed,"executor forwards a helper exception after joining the admitted job");
+    std::promise<void> entered,release;auto released=release.get_future().share();auto started=entered.get_future();
+    auto busy=std::async(std::launch::async,[&]{return executor.run(1,1,[&](auto){entered.set_value();released.wait();});});
+    check(started.wait_for(std::chrono::seconds(5))==std::future_status::ready,"executor remains usable after a failed job");
+    unsigned calls=0;check(!executor.run(1,8,[&](auto){++calls;}) && !calls,"busy executor returns immediately for caller-side sequential fallback");
+    release.set_value();check(busy.get(),"busy admitted job completes without pool deadlock");
+    // A file callback may fail with an exception outside std::exception.
+    lvm::Dataset data;data.ok=true;data.time=time;data.channels={x};data.names={"x"};
+    lvm::SpectrumWorker worker;auto denied=resources;denied.memory_bytes=1;
+    worker.submit(data,{0},1,{},denied,{},[](const auto*)->lvm::Spectrum{throw 17;});
+    auto failure=wait(worker);check(failure && !failure->spectrum.ok,"unexpected fallback exception becomes a failed result instead of terminating the process");
+    worker.submit(std::move(data),{0},2);auto result=wait(worker);
+    check(result && result->generation==2 && result->spectrum.ok,"FFT worker accepts another job after fallback failure");worker.shutdown();
+}
+
+void test_adaptive_analysis() {
+    constexpr std::size_t mib=1024*1024;
+    {
+        std::vector<std::complex<double>> x(4093,{1,0});
+        const auto first=lvm::dft(x);
+        check(lvm::fft_cached_plan_bytes()>0,"an idle arbitrary-length plan is retained before trimming");
+        lvm::trim_fft_cached_plans(0);
+        check(lvm::fft_cached_plan_bytes()==0,"idle FFT plans are evicted across callers without changing live inputs");
+        check(lvm::dft(x)==first,"rebuilding an evicted Bluestein plan preserves exact coefficients");
+    }
+    // A real array input above the old numerical ceiling, not just a policy mock.
+    {
+        const std::size_t n=8*mib;
+        lvm::Dataset data;data.ok=true;data.names={"x"};data.time.resize(n);data.channels.resize(1);
+        data.channels[0].resize(n);
+        for(std::size_t i=0;i<n;++i){data.time[i]=i/2048.;data.channels[0][i]=std::sin(2*std::acos(-1.)*16*i/2048.);}
+        lvm::AnalysisResources low;low.memory_bytes=384*mib;low.max_participants=1;
+        auto denied=lvm::compute_spectrum(data,0,nullptr,low);
+        check(!denied.ok && denied.amp.empty(),"small numerical allowance declines full N without allocating partial output");
+        lvm::AnalysisResources high;high.memory_bytes=1024*mib;high.max_participants=1;
+        high.budget=std::make_shared<lvm::MemoryBudget>();high.budget->configure(1024*mib,0,1024*mib);
+        auto result=lvm::compute_spectrum(data,0,nullptr,high);
+        check(result.ok && result.n==static_cast<int>(n) && result.memory_reservation && result.memory_reservation->bytes()>384*mib,
+              "expanded admission uses RAM above 384 MiB and retains every sample");
+        check(result.ok && std::abs(result.amp[0][n/128]-1)<1e-8,"large admitted RAM FFT preserves analytic amplitude");
+        result={};check(high.budget->reserved()==0,"expanded numerical result releases its reservation");
+    }
+    // A prepared input above 64 MiB must be cached when its budget permits.
+    {
+        const std::size_t n=4*mib+1;
+        lvm::Dataset data;data.ok=true;data.names={"x","y"};data.time.resize(n);data.channels.resize(2);
+        for(auto& c:data.channels)c.resize(n);
+        for(std::size_t i=0;i<n;++i){data.time[i]=i/2048.;const double x=std::sin(2*std::acos(-1.)*16*i/2048.);data.channels[0][i]=x;data.channels[1][i]=2*x;}
+        auto recording=lvm::RecordingSource::from_memory(std::move(data));
+        std::atomic<unsigned> replays{0};lvm::FrfSource source;source.references=1;source.responses=1;source.expected_samples=n;
+        source.replay=[recording,&replays](const auto& consume,const auto* cancel){++replays;lvm::RecordingReadRequest read;
+            read.channels={0,1};read.block_bytes=mib;read.block_rows=4096;recording->replay(read,consume,cancel);};
+        lvm::AnalysisResources resources;resources.memory_bytes=512*mib;resources.cache_memory_bytes=256*mib;
+        resources.max_participants=6;resources.budget=std::make_shared<lvm::MemoryBudget>();resources.budget->configure(512*mib,0,512*mib);
+        lvm::FrfOptions options;options.segment_length=2048;
+        lvm::FrfWorker worker;worker.submit(source,options,1,"adaptive",resources,resources.budget->reserve(24*mib));
+        const auto wait=[&] {std::optional<lvm::FrfWorker::Result> result;const auto begin=std::chrono::steady_clock::now();
+            while(!(result=worker.take_result()) && std::chrono::steady_clock::now()-begin<std::chrono::seconds(30))std::this_thread::yield();
+            return result;};
+        auto first=wait();
+        check(first && first->frf.ok && first->frf.common().sample_count==n && replays==1,
+              "source FRF prepares complete RAM input in one pass under expanded admission");
+        check(resources.budget->reserved()>64*mib,"large prepared input retains owned admission above the old cache cap");
+        const auto transfer=first ? first->frf.common().transfer : std::vector<std::complex<double>>{};
+        first.reset();check(worker.submit_cached(options,2,"adaptive",resources),"large unchanged input is reused independently of generation");
+        auto second=wait();
+        check(second && second->frf.ok && replays==1 && second->frf.common().valid[16] &&
+              std::abs(second->frf.common().transfer[16]-std::complex<double>(2,0))<1e-12,
+              "repeat FRF avoids source replay and preserves analytic H1");
+        // Invalid bins are NaN; compare their masks, not NaN equality.
+        bool same=second && second->frf.common().transfer.size()==transfer.size();
+        for(std::size_t i=0;i<transfer.size() && same;++i)if(second->frf.common().valid[i])same=transfer[i]==second->frf.common().transfer[i];
+        check(same,"multi-participant RAM preparation preserves repeat complex coefficients");
+        second.reset();worker.trim_cache(64*mib,256*mib);
+        check(!worker.submit_cached(options,3,"adaptive",resources) && resources.budget->reserved()==0,
+              "lower cache quota releases idle large input before the next admission");worker.shutdown();
+    }
+}
+
 int main(int argc, char** argv) {
+    if(argc>1 && std::string(argv[1])=="--edge") {
+        std::setbuf(stdout,nullptr);
+        test_edge_resources();std::printf("\n%d edge checks, %d failure(s)\n",g_checks,g_failures);return g_failures==0 ? 0 : 1;
+    }
+    if(argc>1 && std::string(argv[1])=="--adaptive") {
+        test_adaptive_analysis();std::printf("\n%d adaptive checks, %d failure(s)\n",g_checks,g_failures);return g_failures==0 ? 0 : 1;
+    }
     if(argc>1 && std::string(argv[1])=="--disk-fft") {
         test_disk_spectrum();std::printf("\n%d disk FFT checks, %d failure(s)\n",g_checks,g_failures);return g_failures==0 ? 0 : 1;
     }
@@ -1752,6 +1912,9 @@ int main(int argc, char** argv) {
 
     test_recording_cache(check);
     test_disk_spectrum();
+
+    test_adaptive_analysis();
+    test_edge_resources();
 
     std::printf("\n%d checks, %d failure(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

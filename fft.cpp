@@ -6,6 +6,7 @@
 #include <windows.h>
 #endif
 #include <memory>
+#include <mutex>
 
 #include <cmath>
 #include <algorithm>
@@ -23,14 +24,35 @@ struct BluesteinPlan {
     std::vector<std::complex<double>> chirp, kernel;
 };
 std::atomic<std::size_t> retained_plan_bytes{0};
+struct BluesteinCache;
+struct PlanRegistry {std::mutex mutex;BluesteinCache* first=nullptr;};
+// Process lifetime: native FLS/TLS callbacks can run during static teardown.
+PlanRegistry& plan_registry(){static auto* registry=new PlanRegistry;return *registry;}
 struct BluesteinCache {
     BluesteinPlan plan;
     std::size_t accounted=0;
+    BluesteinCache* previous=nullptr;
+    BluesteinCache* next=nullptr;
+    bool active=false;
+    BluesteinCache() {
+        auto& registry=plan_registry();std::lock_guard<std::mutex> lock(registry.mutex);
+        next=registry.first;if(next)next->previous=this;registry.first=this;
+    }
     void release() {
         retained_plan_bytes.fetch_sub(accounted,std::memory_order_relaxed);
         accounted=0;plan={};
     }
-    ~BluesteinCache() {retained_plan_bytes.fetch_sub(accounted,std::memory_order_relaxed);}
+    ~BluesteinCache() {
+        auto& registry=plan_registry();std::lock_guard<std::mutex> lock(registry.mutex);
+        if(previous)previous->next=next;else registry.first=next;
+        if(next)next->previous=previous;
+        retained_plan_bytes.fetch_sub(accounted,std::memory_order_relaxed);
+    }
+};
+struct PlanUse {
+    BluesteinCache& cache;
+    explicit PlanUse(BluesteinCache& c):cache(c){std::lock_guard<std::mutex> lock(plan_registry().mutex);cache.active=true;}
+    ~PlanUse(){std::lock_guard<std::mutex> lock(plan_registry().mutex);cache.active=false;}
 };
 BluesteinCache& thread_plan_cache() {
 #ifdef _WIN32
@@ -125,6 +147,11 @@ void fft_radix2(std::vector<std::complex<double>>& a, bool inverse, const std::a
 }
 
 std::size_t fft_cached_plan_bytes() {return retained_plan_bytes.load(std::memory_order_relaxed);}
+void trim_fft_cached_plans(std::size_t bytes) {
+    auto& registry=plan_registry();std::lock_guard<std::mutex> lock(registry.mutex);
+    for(auto* cache=registry.first;cache && retained_plan_bytes.load(std::memory_order_relaxed)>bytes;cache=cache->next)
+        if(!cache->active)cache->release();
+}
 
 std::vector<std::complex<double>> dft(const std::vector<std::complex<double>>& in, const std::atomic<bool>* cancel) {
     const std::size_t n = in.size();
@@ -149,6 +176,7 @@ std::vector<std::complex<double>> dft(const std::vector<std::complex<double>>& i
     // One bounded plan per worker/thread. Publish only a complete plan; a
     // cancelled or failed rebuild must never leave reusable partial data.
     auto& cache_owner=thread_plan_cache();
+    PlanUse use(cache_owner);
     auto& cached=cache_owner.plan;
     BluesteinPlan temporary;
     const BluesteinPlan* plan = &cached;

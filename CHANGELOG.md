@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.17.0-rc.3 (pre-release, 2026-10-14)
+
+### RU
+
+Полное описание изменений, измерений и ограничений:
+[v0.17.0-rc.3](docs/releases/v0.17.0-rc.3.md).
+
+- Исправлены плотные Signal/Spectrum, оранжевая заливка узких разрывов,
+  исчезновение графика во время уточнения и галочка автоматического бюджета.
+- AMSOIDX2 хранит исходное время на диске; разрывы и временные проходы FFT
+  читают бинарный индекс. Склейка поддерживает дисковый источник, навигацию
+  и исходный Snap с сохранением фактического времени анализа/экспорта.
+- Auto использует доступные RAM/commit с системным резервом; удалены прежние
+  потолки 8 GiB/2 GiB и дополнительный численный GUI-предел 384 MiB. Большая
+  запись может целиком остаться в RAM; нехватка допуска выбирает блоки/диск.
+  N/L, методика FFT/H1/coherence и накопление Welch сохраняются.
+- Общий исполнитель растёт по физическим ядрам/affinity и бюджету до 32
+  участников. FRF-кэш и четыре viewport адаптируются к памяти; idle планы
+  других потоков безопасно вытесняются. Полный replayable документ может
+  перейти на диск без изменения численной ревизии, обработки и разметки.
+- Исправлены повторное заполнение очищенного FRF-кэша и владение queued
+  входом, проверка точного N дисковой подготовки, аварийный fallback FFT,
+  сохранение ещё не вычисленного Fs при демоции и публикация RAM FFT.
+- Windows CLI получил адаптивный численный допуск и устранение лишней копии
+  выбранного входа; его загрузчик остаётся резидентным. GUI-сборка принимает
+  OutputDirectory, не требуя перезаписи запущенной программы.
+- 1222 core / 881 GUI; 38 новых edge-проверок, повторные реальные 1,024 ГБ
+  и полные синтетические 10 GB RAM/disk испытания с указанными условиями.
+  Парное сравнение с 0.16.7: 22 численных случая и два полных GUI-прогона,
+  побитовое совпадение. FRF ускорился, но выигрыша всех операций не заявляется.
+- Область текущих испытаний — до 10 GB; 20 GB исключены. Физический ПК
+  8 GiB не испытан, бюджеты не покрывают всю память процесса, дисковые
+  операции требуют места/времени; больших Direct/Auto L и FAMOS обещаний нет.
+
+### EN
+
+Complete changes, measurements and limitations:
+[v0.17.0-rc.3](docs/releases/v0.17.0-rc.3.md).
+
+- Fixed dense Signal/Spectrum rendering, orange shading of narrow gaps,
+  disappearing plots during refinement and the automatic-budget checkbox.
+- AMSOIDX2 stores original timestamps on disk; gaps and FFT timeline passes
+  use the binary index. Disk-source stitching supports navigation and exact
+  Snap while preserving actual analysis/export timestamps.
+- Auto uses available RAM/commit with system headroom; removed the former
+  8 GiB/2 GiB and additional 384 MiB GUI caps. Large inputs can remain fully
+  in RAM; insufficient admission selects blocks/disk. N/L, FFT/H1/coherence
+  methodology and Welch accumulation are preserved.
+- The shared executor grows within physical cores/affinity, work and memory,
+  at most 32 participants. FRF/four-viewport caches adapt to admission; idle
+  plans from other threads are safely evicted. Complete replayable documents
+  can move to disk without changing numerical revision or user settings.
+- Fixed stale FRF cache refills and queued-input ownership, exact disk-input
+  count validation, fatal FFT fallback exceptions, uncached Fs demotion and
+  RAM FFT source-version publication checks.
+- Windows CLI has adaptive numerical admission and avoids an extra selected
+  input copy; loading remains resident. GUI builds support OutputDirectory.
+- 1222 core / 881 GUI checks; 38 new edge checks, repeated real 1.024 GB
+  and complete synthetic 10 GB RAM/disk tests under documented conditions.
+  Paired 0.16.7 comparison: 22 numerical cases and two full GUI runs match
+  bitwise. FRF is faster; universal speedup is not claimed.
+- Current test priority is ≤10 GB; 20 GB excluded. Physical 8 GiB hardware
+  was not tested; budgets do not cover all process memory, disk work needs
+  space/time, and large Direct/Auto L or FAMOS claims are not made.
+
 ## v0.17.0-rc.2 (pre-release)
 
 ### RU

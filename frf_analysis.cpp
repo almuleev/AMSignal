@@ -100,24 +100,25 @@ FrfBatchResult compute_shared_frf(const PreparedFrf& input,
     // All possible caller/helper plans, accumulations, results, window, raw tile
     // and transformed frames. Auto/Direct never silently change the FFT length.
     const long double io_block=input.memory ? 0 : 4096.0L*(response_count+1)*8;
-    const long double fixed=fft_cached_plan_bytes() + 1024.0L*1024 + io_block + L*8.0L + bins*(16.0L+response_count*100.0L);
+    const long double fixed=(resources.cached_plans_accounted ? 0 : fft_cached_plan_bytes()) + 1024.0L*1024 + io_block + L*8.0L + bins*(16.0L+response_count*100.0L);
     const long double frame_bytes=static_cast<long double>(L)*(response_count+1)*24.0L;
     std::size_t fft_m=1;
     if(error==FrfError::None && (L & (L-1))!=0)while(fft_m<2*L-1)fft_m*=2;
     const long double scratch=(L & (L-1)) ? (L+fft_m)*32.0L : 0;
     std::size_t tile_capacity=1;
     std::size_t participants=1;
-    const auto cap=std::min(analysis_memory_budget,resources.memory_bytes);
+    const auto cap=resources.memory_bytes;
     while(error==FrfError::None) {
         check_cancel(cancel);
         const auto available=resources.budget ? std::min<std::uint64_t>(cap,resources.budget->available()) : cap;
         if(fixed+frame_bytes+scratch>available) {error=FrfError::ResourceLimit;break;}
-        tile_capacity=std::max<std::size_t>(1,std::min<std::size_t>(8,
-            static_cast<std::size_t>(std::min(16.0L*1024*1024,available-fixed-scratch)/frame_bytes)));
         const auto segments=(n-L)/hop+1;
-        if(segments<7)tile_capacity=1;
         const auto hardware=std::thread::hardware_concurrency();
-        participants=segments>=7 && L>=256 ? std::min({tile_capacity,std::size_t(4),
+        const auto buffer_limit=std::min(256.0L*1024*1024,static_cast<long double>(available)/8);
+        tile_capacity=std::max<std::size_t>(1,std::min({segments,2*std::min<std::size_t>(32,std::max<std::size_t>(1,resources.max_participants)),
+            static_cast<std::size_t>(std::min(buffer_limit,available-fixed-scratch)/frame_bytes)}));
+        if(segments<7)tile_capacity=1;
+        participants=segments>=7 && L>=256 ? std::min({tile_capacity,std::size_t(32),
             std::size_t(hardware ? hardware : 1),std::max<std::size_t>(1,resources.max_participants)}) : 1;
         while(participants>1 && fixed+tile_capacity*frame_bytes+participants*scratch>available)--participants;
         if(!resources.budget)break;
