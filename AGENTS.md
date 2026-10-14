@@ -27,6 +27,20 @@
 
 ## Быстрая карта
 
+- Бесплатная подпись (2026-10-14): release-signpath.yml собирает только чистый
+  tag из main на GitHub-hosted Windows, передаёт два собственных EXE в SignPath
+  и ждёт ручного одобрения. Подключение Foundation ещё не одобрено; не объявляй
+  текущие EXE подписанными. AM_version.rc/build_version_resource.ps1 добавляют
+  одинаковые ProductName/ProductVersion/FileVersion в GUI и CLI, включая Make.
+  verify_release_binaries.ps1 требует Valid Authenticode, SignPath Foundation,
+  timestamp и общий сертификат; package_release.ps1 -RequireSignature берёт
+  только проверенные EXE из InputDirectory и считает SHA-256 после подписи.
+  Старые выпуски не перезаписываются, новый создаётся только draft. Политика,
+  настройки и ограничения — docs/CODE_SIGNING.md; заявка —
+  docs/SIGNPATH_APPLICATION.md, XML — docs/signpath-artifact.xml.
+  tests/release_signing.ps1: 25 проверок метаданных, отказа unsigned, версий,
+  безопасных путей, ZIP и контрольных сумм. Численный код не менялся.
+
 - Предварительный выпуск `v0.17.0-rc.3` (2026-10-14) объединяет накопленные
   исправления просмотра, AMSOIDX2/склейку, адаптивные RAM/диск ресурсы и аудит
   крайних случаев. Полное двуязычное описание — `docs/releases/v0.17.0-rc.3.md`;

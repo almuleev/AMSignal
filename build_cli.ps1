@@ -7,6 +7,9 @@ if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
 $version = git -c core.excludesFile= describe --tags --always --dirty 2>$null
 if (-not $version) { $version = 'dev' }
 $versionDefine = '-DAPP_VERSION=\"' + $version + '\"'
-& g++ -std=c++17 -O2 -Wall -Wextra -finput-charset=UTF-8 -static $versionDefine -o lvm_reader.exe main.cpp lvm_parser.cpp recording_source.cpp recording_overview.cpp overview_worker.cpp disk_cache.cpp scan_index_cache.cpp data_io.cpp filter_engine.cpp spectrum_worker.cpp fft.cpp analysis.cpp disk_spectrum.cpp frf_stream.cpp frf_analysis.cpp -lshell32
+. (Join-Path $PSScriptRoot 'build_version_resource.ps1')
+$resourceObject = Join-Path $PSScriptRoot '.build/cli/version.o'
+Build-VersionResource -Version $version -OriginalFilename 'lvm_reader.exe' -OutputPath $resourceObject -Cli
+& g++ -std=c++17 -O2 -Wall -Wextra -finput-charset=UTF-8 -static $versionDefine -o lvm_reader.exe main.cpp lvm_parser.cpp recording_source.cpp recording_overview.cpp overview_worker.cpp disk_cache.cpp scan_index_cache.cpp data_io.cpp filter_engine.cpp spectrum_worker.cpp fft.cpp analysis.cpp disk_spectrum.cpp frf_stream.cpp frf_analysis.cpp $resourceObject -lshell32
 if ($LASTEXITCODE -ne 0) { throw "CLI build failed (exit $LASTEXITCODE)." }
 Write-Host "Built lvm_reader.exe ($version)"
