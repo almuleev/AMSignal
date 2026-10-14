@@ -30,7 +30,10 @@
 - Бесплатная подпись (2026-10-14): release-signpath.yml собирает только чистый
   tag из main на GitHub-hosted Windows, передаёт два собственных EXE в SignPath
   и ждёт ручного одобрения. Подключение Foundation ещё не одобрено; не объявляй
-  текущие EXE подписанными. AM_version.rc/build_version_resource.ps1 добавляют
+  текущие EXE подписанными. PR #1 применён после успешного Windows/Linux CI;
+  заявка отправлена 2026-10-14 18:40 MSK с разрешения владельца, сайт подтвердил
+  Form submitted. Ответ ожидается на al.muleev@gmail.com; рассылка выключена.
+  AM_version.rc/build_version_resource.ps1 добавляют
   одинаковые ProductName/ProductVersion/FileVersion в GUI и CLI, включая Make.
   verify_release_binaries.ps1 требует Valid Authenticode, SignPath Foundation,
   timestamp и общий сертификат; package_release.ps1 -RequireSignature берёт

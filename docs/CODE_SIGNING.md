@@ -4,6 +4,8 @@
 
 Integration for **free SignPath Foundation signing** is prepared. Enrollment,
 certificate access and the first signed release are **not yet approved**.
+The application was submitted on 2026-10-14 with the owner's authorization;
+the official form confirmed receipt. The Foundation's decision is pending.
 Existing GitHub downloads and local builds must not be described as signed
 unless their Windows Authenticode signature actually verifies.
 

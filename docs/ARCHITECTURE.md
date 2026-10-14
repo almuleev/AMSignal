@@ -31,7 +31,10 @@ ZIP. Подписанные EXE не изменяются. Существующ�
 считать фактической подписью: нужны принятие Foundation, подключение GitHub App,
 реальные SIGNPATH_* переменные/secret, MFA и человеческое approval. Политика и
 честный pending-статус — docs/CODE_SIGNING.md, ссылки есть в трёх README;
-docs/SIGNPATH_APPLICATION.md содержит готовую неотправленную заявку.
+docs/SIGNPATH_APPLICATION.md фиксирует отправку 2026-10-14 18:40 MSK с
+разрешения владельца и подтверждение Form submitted. PR #1 применён после
+успешного Windows/Linux CI; ответ ожидается на al.muleev@gmail.com. Принятие
+проекта фондом, GitHub App/MFA и активация подписи ещё требуются.
 docs/signpath-artifact.xml ограничивает подпись ровно двумя EXE AMSignal с
 одинаковой версией. Подробности ресурсов и настройки не влияют на FFT/FRF.
 
