@@ -81,6 +81,12 @@ The project includes two front ends built on one shared parsing and analysis cor
 The interface screenshots above show the real application UI.
 The graph previews below were generated from the bundled sample dataset in [`lvm_files_for_tests`](lvm_files_for_tests).
 
+## Code signing policy
+
+Free SignPath Foundation signing integration is prepared; enrollment and the
+first signed release are pending. Current downloads are not automatically signed.
+See the [code signing policy and activation steps](docs/CODE_SIGNING.md).
+
 ## Quick Start
 
 ### For end users

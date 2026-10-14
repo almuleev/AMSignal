@@ -6,6 +6,42 @@ LVM/TXT/CSV и анализа сигналов. Ниже имена модуле
 
 ## Поток данных и основные связи
 
+### Бесплатная подпись Windows-выпусков (2026-10-14)
+
+AM_version.rc задаёт Windows VERSIONINFO для GUI/CLI: ProductName AMSignal,
+текстовая версия из git describe, одинаковые ProductVersion/FileVersion и
+OriginalFilename. GUI включает его через AM_logo.rc; CLI получает отдельный
+resource object. build_version_resource.ps1 генерирует ASCII RC с проверенными
+значениями, избегая двойного quoting через PowerShell/windres/cpp. Windows Make
+генерирует те же ресурсы; Linux CLI не требует Win32 resource compiler.
+
+release-signpath.yml запускается вручную на main, принимает существующий
+release tag из истории main, собирает/проверяет исходники на GitHub-hosted
+Windows и передаёт ID неизменяемого upload-artifact в SignPath. Actions
+закреплены по SHA; secret доступен только подписи, contents:write — только
+созданию draft. SignPath Foundation требует ручного одобрения каждого запроса.
+После возврата файлов verify_release_binaries.ps1 проверяет версии, Valid
+Authenticode, издателя SignPath Foundation, timestamp и одинаковый сертификат
+GUI/CLI. package_release.ps1 -InputDirectory ... -RequireSignature -Zip
+копирует эти EXE, считает SHA256SUMS/asset .sha256 по итоговым байтам и создаёт
+ZIP. Подписанные EXE не изменяются. Существующие каталоги, архивы и releases
+не перезаписываются; результат GitHub — draft с EXE/ZIP/checksums.
+
+Подключение бесплатного сервиса и сертификата ещё не одобрено. Pipeline нельзя
+считать фактической подписью: нужны принятие Foundation, подключение GitHub App,
+реальные SIGNPATH_* переменные/secret, MFA и человеческое approval. Политика и
+честный pending-статус — docs/CODE_SIGNING.md, ссылки есть в трёх README;
+docs/SIGNPATH_APPLICATION.md содержит готовую неотправленную заявку.
+docs/signpath-artifact.xml ограничивает подпись ровно двумя EXE AMSignal с
+одинаковой версией. Подробности ресурсов и настройки не влияют на FFT/FRF.
+
+Новая проверка tests/release_signing.ps1 даёт 25 условий: реальные метаданные
+обоих EXE, отказ неподписанных при RequireSignature, неверной версии/пути,
+неизменность существующего ZIP, наличие policy и точность SHA-256/ZIP-копий.
+Обе штатные PowerShell-сборки прошли; локальный результат — dist/signpath-build.
+Криптографическая успешная подпись/загрузка из сервиса требует его активации и
+не имитируется самоподписанным сертификатом. Конкретные инструкции — в policy.
+
 ### Предварительный выпуск v0.17.0-rc.3 (2026-10-14)
 
 Накопленные изменения после rc.2, актуальная политика RAM/диск, AMSOIDX2,
