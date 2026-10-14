@@ -24,7 +24,7 @@ std::optional<PendingSnap> pending;
 std::uint64_t next_snap=0;
 bool matches(const PendingSnap& p) {
     return g.mode==AnalysisMode::Time && g.overview.render_enabled && g.vvalid &&
-        !g.annotations_locked && g.snap_to_data && overview_processing_supported() &&
+        !g.annotations_locked && g.snap_to_data &&
         g.recording_source==p.raw && g.overview.source==p.source && g.numerical_revision==p.numerical && g.project_revision==p.project &&
         g.win_start==p.start && g.win_end==p.end && g.vx0==p.x0 && g.vx1==p.x1 &&
         g.vy0==p.y0 && g.vy1==p.y1 && EqualRect(&g.vrect,&p.plot) && g.visible==p.visible &&
@@ -39,7 +39,7 @@ void cancel_overview_snap() {
 bool request_overview_snap(double time,double value,std::function<void(const lvm::RecordingSnapResult&)> accept) {
     cancel_overview_snap();
     if(!accept || g.mode!=AnalysisMode::Time || !g.overview.render_enabled || !g.vvalid ||
-       g.annotations_locked || !g.snap_to_data || !overview_processing_supported() ||
+       g.annotations_locked || !g.snap_to_data ||
        !overview_view_matches_viewport() || !std::isfinite(time) || !std::isfinite(value))return false;
     try {
         lvm::OverviewWorker::SnapRequest request;request.source=g.overview.source;request.index=g.overview.index;

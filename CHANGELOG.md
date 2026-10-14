@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.17.1 (2026-10-14)
+
+Подробное двуязычное описание: [v0.17.1](docs/releases/v0.17.1.md).
+Полные RAM-оригиналы доступны фильтру/FFT/FRF без копирования; состояния
+фильтра сохраняются между запусками. Исправлены точные границы test1,
+сообщения Spectrum, курсор точек, Shift-выделение, таймлайн, сочетания меню,
+локальная склейка и стиль диалога анализа. Удалён неиспользуемый код.
+Добавлена инфраструктура SignPath; заявка отправлена, сертификат ещё ожидается.
+Последние проверки: 1262 core / 1026 GUI, 25 signing checks, полные CLI/GUI.
+Старые замеры/отчёты архивированы без удаления доказательств.
+
+Full originals are shared without copies; filter continuations persist.
+Fixed test1 endpoints and Signal/Spectrum interaction; removed dead code.
+Free SignPath infrastructure is prepared, enrollment still pending.
+See the bilingual notes for validation, measured readiness and limitations.
+
 ## v0.17.0-rc.3 (pre-release, 2026-10-14)
 
 ### RU

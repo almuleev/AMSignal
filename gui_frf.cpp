@@ -567,6 +567,7 @@ void compute_frf_from_current_source() {
     else if (!current_frf_source_window(a, b, selected)) failure.error = lvm::FrfError::TooShort;
     if (failure.error != lvm::FrfError::None) { apply_frf_result(std::move(failure)); return; }
     g.frf.source_start = a; g.frf.source_end = b; g.frf.from_selection = selected;
+    if(g.frf.apply_processing && g.noise_threshold_enabled)share_resident_recording();
     refresh_frf_channel_names();
     try {
         auto resources=current_analysis_resources();
@@ -608,7 +609,8 @@ void compute_frf_from_current_source() {
                 resources=current_analysis_resources();g.frf.attempted=true;
                 const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),a);
                 const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),b);
-                const bool stream=g.overview.render_enabled || (g.current_file_partial && g.source_scan_index) ||
+                const bool stream=(g.recording_source && g.ds.rows()<3 && g.recording_rows>g.ds.rows()) ||
+                    (g.current_file_partial && g.source_scan_index) ||
                     (1024.0L*1024+static_cast<long double>(hi-lo)*(channels.size()+1)*8+
                      std::min<std::size_t>(hi-lo,1048576)*16.0L)>resources.budget->available()/2;
                 if(stream && (ec || g.ds.source_columns.size()!=g.ds.channel_count()))
@@ -650,7 +652,7 @@ void compute_frf_from_current_source() {
                         const auto rows=g.overview.index->sample_range(lvm::AnalysisRange::selected(a,b));
                         source.expected_samples=static_cast<std::size_t>(rows.second-rows.first);
                     } else if(a<=recording->bounds().start && b>=recording->bounds().end)source.expected_samples=g.recording_rows;
-                    const auto shared_processed=g.overview.render_enabled ? processed_recording_source(processing) : nullptr;
+                    const auto shared_processed=g.overview.render_enabled ? processed_recording_source(processing,0,resources.budget) : nullptr;
                     source.replay=[shared_processed,recording,read,a,processing,filtering,filter,full_filter,global,formulas,kinds,mul,add,
                                    global_identity,global_affine,global_mul,global_add,formula_identity]
                         (const lvm::FrfBlockConsumer& consume,const std::atomic<bool>* cancel) {

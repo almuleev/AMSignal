@@ -132,6 +132,7 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
         if (g.visible[i]) visible_channels.push_back(i);
     }
     try {
+        if(g.noise_threshold_enabled)share_resident_recording();
         if(g.main) {g_spectrum_worker.cancel();++g.spec_generation;}
         const auto selected_rows=static_cast<std::size_t>(std::upper_bound(g.ds.time.begin(),g.ds.time.end(),end)-
             std::lower_bound(g.ds.time.begin(),g.ds.time.end(),start));
@@ -144,11 +145,12 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
         const auto rows=static_cast<std::size_t>(hi-lo);
         const auto ram_required=lvm::spectrum_workspace_bytes(rows,visible_channels.size())+
             1024.0L*1024+rows*(visible_channels.size()+1.0L)*8;
-        const bool disk_needed=g.overview.render_enabled || (g.current_file_partial && g.source_scan_index) ||
+        const bool source_needed=(g.recording_source && g.ds.rows()<3 && g.recording_rows>g.ds.rows()) ||
+            (g.current_file_partial && g.source_scan_index) ||
             (g.recording_source && ram_required>resources.budget->available());
         lvm::SpectrumWorker::Compute disk_retry;
         if(g.recording_source) {
-            const auto source=processed_recording_source();
+            const auto source=processed_recording_source(true,0,resources.budget);
             lvm::RecordingReadRequest read;read.range=lvm::AnalysisRange::selected(start,end);
             read.channels=visible_channels;read.block_bytes=1024*1024;read.block_rows=4096;
             std::vector<std::string> names;for(auto c:visible_channels)names.push_back(g.ds.names[c]);
@@ -160,8 +162,8 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
                 return lvm::compute_disk_spectrum(source,read,names,resources,cancel,options);
             };
         }
-        if(disk_needed) {
-            const auto source=processed_recording_source();
+        if(source_needed) {
+            const auto source=processed_recording_source(true,0,resources.budget);
             lvm::RecordingReadRequest read;read.range=lvm::AnalysisRange::selected(start,end);
             read.channels=visible_channels;read.block_bytes=1024*1024;read.block_rows=4096;
             std::vector<std::string> names;

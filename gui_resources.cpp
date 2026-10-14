@@ -14,6 +14,9 @@
 
 namespace gui {
 namespace {
+std::shared_ptr<lvm::MemoryBudget> shared_memory_budget() {
+    static auto budget=std::make_shared<lvm::MemoryBudget>();return budget;
+}
 template<class T> std::uint64_t bytes(const std::vector<T>& v) { return v.capacity()*sizeof(T); }
 std::uint64_t arrays(const std::vector<std::vector<double>>& v) {
     auto total=bytes(v);
@@ -53,7 +56,8 @@ std::uint64_t document_data_memory_bytes() {
 }
 lvm::ResourceSnapshot resource_snapshot() {
     lvm::ResourceSnapshot result;
-    result.resident=document_data_memory_bytes();
+    result.shared_resident=shared_memory_budget()->shared_resident();
+    result.resident=lvm::saturated_add(document_data_memory_bytes(),result.shared_resident);
     MEMORYSTATUSEX status{};status.dwLength=sizeof(status);
     if(GlobalMemoryStatusEx(&status)) {
         result.available_physical=status.ullAvailPhys;result.available_commit=status.ullAvailPageFile;
@@ -63,9 +67,9 @@ lvm::ResourceSnapshot resource_snapshot() {
     return result;
 }
 std::shared_ptr<lvm::MemoryBudget> refresh_load_memory_budget() {
-    static auto budget=std::make_shared<lvm::MemoryBudget>();
+    auto budget=shared_memory_budget();
     const auto memory=resource_snapshot();
-    budget->configure(lvm::resource_limit(g.resource_policy,memory),memory.resident,
+    budget->configure(lvm::resource_limit(g.resource_policy,memory),memory.resident-memory.shared_resident,
                       lvm::resource_headroom(memory));
     return budget;
 }

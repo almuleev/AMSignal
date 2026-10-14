@@ -534,11 +534,8 @@ bool scan_time_bounds(const std::filesystem::path& path, double& out_start, doub
         return false;
     }
 
-    const auto normalize_bound = [](double v) {
-        return (std::isfinite(v) && std::fabs(v) < 1e-12) ? 0.0 : v;
-    };
-    first_time = normalize_bound(first_time);
-    last_time = normalize_bound(last_time);
+    // Bounds are numerical input, not display labels. Rounding tiny endpoints
+    // to zero can exclude original samples and disagree with resident time.
     if (last_time < first_time) std::swap(last_time, first_time);
 
     out_start = first_time;
@@ -761,7 +758,7 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
            static_cast<long double>(row_count+1)*(std::max<std::size_t>(columns.size(),part_count)+1)*16>
                options.max_resident_bytes) {
             ds.resident_limit_exceeded=true;
-            ds.error="Selected data exceed the memory budget. Use Light Mode and a smaller display fragment; FRF can analyze the entire recording.";
+            ds.error="Selected data exceed the resident memory budget.";
             return ds;
         }
         if (part_count > static_cast<int>(columns.size())) {

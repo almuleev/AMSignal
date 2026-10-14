@@ -11,6 +11,7 @@
 #include "gui_processing.hpp"
 #include "gui_render_data.hpp"
 #include "gui_overview_render.hpp"
+#include "gui_overview.hpp"
 #include "gui_settings.hpp"
 #include "gui_side_panel.hpp"
 #include "gui_spectrum.hpp"
@@ -130,11 +131,6 @@ void invalidate_plot() {
 }
 
 // ---- drawing -------------------------------------------------------------
-
-void draw_text(HDC dc, int x, int y, const wchar_t* s, UINT align) {
-    SetTextAlign(dc, align);
-    TextOutW(dc, x, y, s, lstrlenW(s));
-}
 
 std::wstring vertical_axis_unit() {
     const auto unit = normalize_axis_label_text(g.axis_y_label, L"ед.");
@@ -843,6 +839,7 @@ double effective_time_gap_step(const std::vector<double>& time, std::size_t lo, 
 }
 
 void draw_time(HDC dc, const RECT& p) {
+    enable_background_signal_processing();
     if(g.overview.render_enabled){draw_overview_time(dc,p);return;}
     g.visible_gap_markers.clear();
     const std::vector<double>& t = g.ds.time;
@@ -1311,9 +1308,14 @@ void draw_freq(HDC dc, const RECT& p) {
         const std::wstring message = g.spec_pending
             ? (g_str == &kEn ? L"Calculating spectrum…" : L"Вычисление спектра…")
             : (!g.spec.error.empty() ? to_w(g.spec.error) : (g_str == &kEn ? L"No spectrum available." : L"Спектр недоступен."));
+        const int saved = SaveDC(dc);
+        // The vertical axis caption leaves TA_BASELINE. DrawText requires
+        // top/left alignment, otherwise the notice glyphs are clipped.
+        SetTextAlign(dc, TA_LEFT | TA_TOP);
         SetTextColor(dc, g_theme->text_primary);
         SetBkMode(dc, TRANSPARENT);
         DrawTextW(dc, message.c_str(), -1, &message_rect, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        RestoreDC(dc, saved);
         return;
     }
     if(g.spec.disk){draw_disk_spectrum(dc,p);return;}

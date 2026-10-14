@@ -3,13 +3,14 @@
 
 namespace gui {
 extern lvm::OverviewWorker g_overview_worker;
-// Infrastructure for the upcoming disk Signal renderer. No Dataset substitution.
+// Keep expensive resident filtering out of paint/navigation callbacks.
+void enable_background_signal_processing();
+// Full-source view and exact Snap. Never substitutes display data for Dataset.
 bool request_recording_overview(const std::filesystem::path& cache,lvm::AnalysisRange range,
                                std::vector<std::size_t> channels,std::size_t pixels,bool display_density=false);
 void cancel_recording_overview();
 bool poll_recording_overview();
 bool synchronize_overview_viewport(std::size_t pixels);
-bool overview_processing_supported();
 bool overview_view_matches_viewport();
 bool overview_view_can_render();
 bool overview_time_yrange(double& minimum,double& maximum);

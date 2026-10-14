@@ -76,6 +76,21 @@ FilterStream::FilterStream(FilterSettings settings):state_(std::make_unique<Stat
 FilterStream::~FilterStream()=default;
 FilterStream::FilterStream(FilterStream&&) noexcept=default;
 FilterStream& FilterStream::operator=(FilterStream&&) noexcept=default;
+FilterStream FilterStream::clone() const {
+    FilterStream copy(settings_);*copy.state_=*state_;return copy;
+}
+std::size_t FilterStream::snapshot_bytes() {return sizeof(FilterStream)+sizeof(State)+32;}
+std::array<double,10> FilterStream::continuation() const {
+    return {state_->stage1.z1,state_->stage1.z2,state_->stage2.z1,state_->stage2.z2,
+        state_->stage3.z1,state_->stage3.z2,state_->stage4.z1,state_->stage4.z2,
+        state_->prev_time,state_->have_segment ? 1.0 : 0.0};
+}
+bool FilterStream::restore_continuation(const std::array<double,10>& values) {
+    if((values[9]!=0 && values[9]!=1) || (values[9]==1 && !std::isfinite(values[8])))return false;
+    state_->stage1={values[0],values[1]};state_->stage2={values[2],values[3]};
+    state_->stage3={values[4],values[5]};state_->stage4={values[6],values[7]};
+    state_->prev_time=values[8];state_->have_segment=values[9]==1;return true;
+}
 
 std::vector<double> FilterStream::process(const std::vector<double>& time, const std::vector<double>& src,
                                          const std::atomic<bool>* cancel) {

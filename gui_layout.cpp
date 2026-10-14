@@ -98,6 +98,8 @@ void layout() {
     };
 
     int y = 0;
+    place_scrolled(g.side_stitch_gaps, panel_x, y, content_w, 28, channels_content_top, show_channels);
+    y += 36;
     place_scrolled(g.side_global_formula_label, panel_x, y, content_w, 20, channels_content_top, show_channels);
     y += 24;
     place_scrolled(g.side_global_formula_edit, panel_x, y, content_w, 26, channels_content_top, show_channels);

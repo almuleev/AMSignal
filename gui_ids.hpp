@@ -59,6 +59,7 @@ enum {
     IDW_START = 1114,   // welcome screen: start working
     IDM_CURVE_SYMBOLS = 1115,
     IDM_CHANNEL_LEGEND = 1116,
+    IDM_STOP_PLAYBACK = 1117,
 
     // Playback speed menu items.
     IDM_SPEED_00001 = 1300,
@@ -125,6 +126,7 @@ enum {
     IDC_SIDE_FILTER_TOPOLOGY,
     IDC_SIDE_FILTER_LOW_TRACK,
     IDC_SIDE_FILTER_HIGH_TRACK,
+    IDC_SIDE_STITCH_GAPS,
 
     IDC_SET_LANG_RU = 5000,
     IDC_SET_LANG_EN,
@@ -139,8 +141,8 @@ enum {
     IDC_SET_HOTKEY_RESET_ALL,
 
     IDC_SET_GAP_MARKERS = 5125,
-    IDC_SET_STITCH_GAPS,
-    IDC_SET_TIME_AXIS_X_EDIT,
+    // 5126 retired: stitching belongs to the document's Channels panel.
+    IDC_SET_TIME_AXIS_X_EDIT = 5127,
     IDC_SET_TIME_AXIS_Y_EDIT,
     IDC_SET_FFT_AXIS_X_EDIT,
     IDC_SET_FFT_AXIS_Y_EDIT,

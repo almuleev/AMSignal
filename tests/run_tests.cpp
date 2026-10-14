@@ -433,6 +433,25 @@ void test_scan_and_window_load() {
 
 void test_recording_source() {
     std::printf("test_recording_source\n");
+    for(const auto& text:std::vector<std::string>{
+        "Time\tA\n-6.9388939039072284e-18\t1\n0.0002\t2\n0.0004\t3\n0.0006\t4\n",
+        "Time\tA\n-0.0006\t1\n-0.0004\t2\n-0.0002\t3\n6.9388939039072284e-18\t4\n",
+        "Time\tA\n1e-15\t1\n2e-15\t2\n3e-15\t3\n4e-15\t4\n"}) {
+        TempFile tiny("exact-bounds.txt",text);
+        auto original=lvm::read_lvm_file(tiny.path);lvm::make_monotonic(original.time);
+        auto index=std::make_shared<lvm::ScanIndex>();double first=0,last=0;std::string error;
+        check(lvm::scan_time_bounds(tiny.path,first,last,error,nullptr,index.get()),"tiny endpoint fixture scans");
+        check(first==original.time.front() && last==original.time.back(),"scan bounds preserve original tiny endpoints exactly");
+        auto source=lvm::RecordingSource::from_file(tiny.path,{first,last},original.source_columns,index);
+        lvm::RecordingReadRequest read;read.channels={0};read.block_rows=1;
+        std::vector<double> time,values;
+        source->replay(read,[&](const auto& t,const auto& v){time.insert(time.end(),t.begin(),t.end());values.insert(values.end(),v[0].begin(),v[0].end());});
+        check(time==original.time && values==original.channels[0],"indexed whole replay retains first/last original samples near zero");
+        const auto bytes=lvm::RecordingSource::dataset_array_bytes(original);auto budget=std::make_shared<lvm::MemoryBudget>();budget->configure(bytes,bytes,0);
+        auto resident=lvm::RecordingSource::from_resident(original,source,budget,last-first);
+        check(resident->sample_count()==4 && resident->bounds().start==first && resident->bounds().end==last,
+              "tiny scan bounds admit the shared resident source without clipping its input");
+    }
     lvm::TimeRange resolved{-1,-1};
     check(lvm::AnalysisRange::entire().resolve({0,100},resolved) && resolved.start==0 && resolved.end==100,
           "whole analysis resolves against the recording, not a display fragment");
@@ -462,6 +481,27 @@ void test_recording_source() {
     check(lvm::scan_time_bounds(file.path,low,high,error,nullptr,index.get()),"recording source index is built");
     const auto stamp=lvm::RecordingStamp{index->file_size,index->modified};
     auto disk=lvm::RecordingSource::from_file(file.path,{-1,-1},data.source_columns,index,stamp);
+    {
+        auto resident=lvm::read_lvm_file(file.path);lvm::drop_duplicate_time_channels(resident,resident.raw_time);
+        lvm::make_monotonic(resident.time);
+        const auto* time=resident.time.data();const auto* channel=resident.channels[0].data();
+        const auto bytes=lvm::RecordingSource::dataset_array_bytes(resident);
+        auto budget=std::make_shared<lvm::MemoryBudget>();budget->configure(bytes,bytes,0);
+        check(!budget->reserve(bytes),"resident transfer has no allowance for a duplicate recording");
+        auto shared=lvm::RecordingSource::from_resident(resident,disk,budget,1);
+        check(resident.rows()==0 && shared->resident_data()->time.data()==time && shared->resident_data()->channels[0].data()==channel,
+              "resident source takes original allocations without copying samples");
+        check(shared->file_backed() && shared->resident_backed() && shared->sample_count()==6 && shared->filter_sample_step()==1,
+              "resident source retains file identity, full count and filter cadence");
+        budget->configure(bytes,0,bytes);
+        check(budget->reserved()==bytes && !budget->available(),"raw arrays are accounted once by the shared owner");
+        lvm::RecordingReadRequest read;read.channels={1,0};read.block_rows=1;read.range=lvm::AnalysisRange::selected(1,4);
+        std::vector<double> values;
+        check(shared->replay(read,[&](const auto&,const auto& v){values.push_back(v[0][0]);})==4 && values==std::vector<double>{21,22,23,24},
+              "resident replay preserves sections, exact boundaries and channel permutations");
+        auto active=shared;shared.reset();check(budget->reserved()==bytes,"detached active read retains its allowance");
+        active.reset();check(!budget->reserved() && budget->available()==bytes,"final raw owner destruction releases admission");
+    }
     auto memory=lvm::RecordingSource::from_memory(std::move(data));
     index.reset(); // File source retains its index after the caller/document dies.
     check(disk->file_backed() && !disk->sample_count() && !memory->file_backed() && memory->sample_count()==6,
@@ -928,6 +968,11 @@ void test_frf_streaming() {
             const auto block=filter.process(std::vector<double>(times.begin()+at,times.begin()+end),
                                              std::vector<double>(signal.begin()+at,signal.begin()+end));
             actual.insert(actual.end(),block.begin(),block.end());
+            if(at==0) {
+                FilterStream restored(settings);
+                check(restored.restore_continuation(filter.continuation()),"all filter families accept an exact portable continuation");
+                filter=std::move(restored);
+            }
         }
         check(actual==expected,"causal filter states and resets match for every family/mode across blocks");
     }
@@ -1571,6 +1616,19 @@ void test_analysis_resources() {
 
 void test_resource_budget() {
     constexpr std::uint64_t mib=1024*1024,gib=1024*mib;
+    {
+        auto ledger=std::make_shared<lvm::MemoryBudget>();ledger->configure(120,20,100);
+        const auto before=ledger->available();auto retained=ledger->transfer_resident(20);
+        check(retained && ledger->reserved()==20 && ledger->shared_resident()==20 && ledger->available()==before,
+            "transferring allocated originals preserves safe free headroom without another admission");
+        ledger->configure(120,0,100);
+        check(ledger->available()==before,"refresh counts shared originals in the total limit without reducing OS headroom twice");
+        auto working=ledger->reserve(60);
+        check(working && ledger->available()==40 && ledger->reserved()==80,"prospective work still consumes free headroom alongside retained originals");
+        check(retained->shrink_to(10) && ledger->shared_resident()==10 && ledger->reserved()==70,"shrinking retained accounting updates both counters");
+        retained.reset();working.reset();
+        check(!ledger->reserved() && !ledger->shared_resident(),"last owners release transferred and prospective counters without underflow");
+    }
     lvm::ResourcePolicy policy;
     check(lvm::resource_limit(policy,{4*gib,6*gib,0})==4*gib-4*gib/5,"Auto leaves a system reserve on a constrained machine");
     check(lvm::resource_limit(policy,{24*gib,26*gib,0})==24*gib-24*gib/5,"Auto scales with available machine resources");

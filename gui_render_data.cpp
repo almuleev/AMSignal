@@ -95,6 +95,7 @@ bool current_time_yrange_window(std::size_t lo, std::size_t hi, double& ymin, do
 
 // Auto-fit vertical range over the currently visible time window (with 5% pad).
 bool current_time_yrange(double& ymin, double& ymax) {
+    enable_background_signal_processing();
     if(g.overview.render_enabled)return overview_time_yrange(ymin,ymax);
     if (!has_data()) return false;
     const std::vector<double>& t = g.ds.time;

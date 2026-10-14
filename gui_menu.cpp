@@ -163,12 +163,12 @@ void draw_owner_draw_menu(const DRAWITEMSTRUCT* dis) {
     check_rect.right = check_rect.left + 28;
     RECT left_rect = r;
     left_rect.left = check_rect.right + 10;
-    left_rect.right = r.right - 12;
-    if (!right.empty()) left_rect.right -= 80;
-    if (entry && entry->popup) left_rect.right -= 18;
     RECT right_rect = r;
-    right_rect.left = max(left_rect.right + 8, r.right - 92);
-    right_rect.right = r.right - ((entry && entry->popup) ? 24 : 12);
+    right_rect.right = r.right - 12 - ((entry && entry->popup) ? 18 : 0);
+    SIZE shortcut_size{};
+    GetTextExtentPoint32W(dis->hDC, right.c_str(), static_cast<int>(right.size()), &shortcut_size);
+    right_rect.left = max(left_rect.left, right_rect.right - shortcut_size.cx);
+    left_rect.right = right.empty() ? right_rect.right : right_rect.left - 24;
     if (entry && entry->recent_file) {
         RECT card = r;
         InflateRect(&card, -3, -2);
@@ -244,6 +244,8 @@ void sync_menu() {
         if (button && !frf_command_supported(GetDlgCtrlID(button))) EnableWindow(button, g.mode != AnalysisMode::FRF);
     }
     if (!g.menu) return;
+    EnableMenuItem(g.menu,IDM_STOP_PLAYBACK,MF_BYCOMMAND |
+        (g.mode==AnalysisMode::Time && g.playhead_active ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(g.menu, IDM_MODE_FRF, MF_BYCOMMAND | (frf_available ? MF_ENABLED : MF_GRAYED));
     for(auto id:{IDM_ANALYSIS_ENTIRE,IDM_ANALYSIS_INTERVAL,IDM_ANALYSIS_VISIBLE})
         EnableMenuItem(g.menu,id,MF_BYCOMMAND | (has_data() && !g.ds.frequency_axis ? MF_ENABLED : MF_GRAYED));
@@ -367,6 +369,7 @@ HMENU make_menu() {
     append_menu_item_owner_draw(view, IDM_CHANNEL_LEGEND, text(L"Channel legend", L"Легенда каналов"));
     append_menu_item_owner_draw(view, IDM_VPAN, vpan_text);
     append_menu_item_owner_draw(view, IDC_PLAY, play_text);
+    append_menu_item_owner_draw(view,IDM_STOP_PLAYBACK,text(L"Stop and hide timeline",L"Остановить и убрать таймлайн"));
     append_menu_item_owner_draw(view, IDM_SPEED_CUSTOM, speed_menu_text());
     append_menu_item_owner_draw(view, IDM_THEME, theme_text);
     append_menu_popup_owner_draw(bar, view, text(L"View", L"Вид"));

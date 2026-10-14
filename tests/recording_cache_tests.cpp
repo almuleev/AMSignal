@@ -120,7 +120,7 @@ void scan(Check check) {
     fresh.index.reset();hit.index.reset();check(budget->reserved()>0,"source sharing retains index admission after scan result destruction");
     old.reset();cached.reset();check(budget->reserved()==0,"last source releases admitted index arrays");
     const auto stamp=lvm::RecordingStamp{std::filesystem::file_size(path),std::filesystem::last_write_time(path)};
-    const auto key=lvm::recording_cache_key(path,stamp,"scan-amscidx1-parser1");auto lease=pool->find(key,lvm::CacheKind::ScanIndex);
+    const auto key=lvm::recording_cache_key(path,stamp,"scan-amscidx1-parser2-exact-bounds");auto lease=pool->find(key,lvm::CacheKind::ScanIndex);
     const auto corrupt=[&](std::size_t offset){std::fstream out(lease->path(),std::ios::in|std::ios::out|std::ios::binary);out.seekg(offset);char b;out.read(&b,1);b^=0x55;out.seekp(offset);out.write(&b,1);};
     corrupt(65536+15);lease.reset();auto repaired=lvm::scan_index_cached(path,pool,options);
     check(!repaired.from_cache && repaired.cache_error==lvm::RecordingError::ReadFailure && equal(original,*repaired.index),"damaged payload is rejected and rescanned without changing index semantics");
@@ -142,7 +142,7 @@ void scan(Check check) {
     auto no_disk=std::make_shared<lvm::DiskCache>(files.root/"tiny",65536);
     auto uncached=lvm::scan_index_cached(path,no_disk,options);check(!uncached.from_cache && uncached.cache_error==lvm::RecordingError::ResourceLimit && equal(original,*uncached.index),"optional disk denial preserves successful bounded scanning");
     const auto copied=files.root/"copy.lvm";std::filesystem::copy_file(path,copied);std::filesystem::last_write_time(copied,stamp.modified);
-    auto copy=lvm::scan_index_cached(copied,pool,options);check(!copy.from_cache && lvm::recording_cache_key(copied,stamp,"scan-amscidx1-parser1")!=key,"identical size and modification time of another path cannot alias a cache");
+    auto copy=lvm::scan_index_cached(copied,pool,options);check(!copy.from_cache && lvm::recording_cache_key(copied,stamp,"scan-amscidx1-parser2-exact-bounds")!=key,"identical size and modification time of another path cannot alias a cache");
     {std::ofstream out(path,std::ios::app);out<<"# changed\n";}auto changed=lvm::scan_index_cached(path,pool,options);
     check(!changed.from_cache && changed.index->file_size!=original.file_size,"changed file invalidates persisted index identity");
     const auto single=files.root/"no-newline.txt";{std::ofstream out(single);out<<"Time\tA\n0\t3";}

@@ -963,8 +963,9 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SETCURSOR:
             if (reinterpret_cast<HWND>(wp) == hwnd && LOWORD(lp) == HTCLIENT) {
                 POINT pt{}; GetCursorPos(&pt); ScreenToClient(hwnd,&pt);
-                SetCursor(LoadCursor(nullptr, on_reference_divider(pt.x,pt.y) ? IDC_SIZENS :
-                    ((g.pending_line || g.pending_marker || g.measure_mode) ? IDC_CROSS : IDC_HAND))); return TRUE;
+                SetCursor(on_reference_divider(pt.x,pt.y) ? LoadCursor(nullptr, IDC_SIZENS) :
+                    ((g.pending_line || g.pending_marker || g.measure_mode)
+                        ? point_placement_cursor() : LoadCursor(nullptr, IDC_HAND))); return TRUE;
             }
             break;
     }

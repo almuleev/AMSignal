@@ -3,7 +3,7 @@
 #include <string>
 
 namespace lvm {
-enum class CacheKind { ScanIndex,Overview };
+enum class CacheKind { ScanIndex,Overview,FilterState };
 // Payload + maximum temporary output, across both kinds. Live leases are pinned.
 // One process owns the directory until the last manager/lease has gone away.
 class DiskCache {

@@ -20,11 +20,11 @@ namespace {
 [[noreturn]] void disk_fail(const char* text){throw RecordingFailure(RecordingError::ResourceLimit,text);}
 std::string hex(std::uint64_t value){std::ostringstream s;s<<std::hex<<std::setfill('0')<<std::setw(16)<<value;return s.str();}
 bool hex_key(const std::string& key){return key.size()==16 && std::all_of(key.begin(),key.end(),[](char c){return (c>='0' && c<='9') || (c>='a' && c<='f');});}
-const char* extension(CacheKind kind){return kind==CacheKind::ScanIndex ? ".scan" : ".overview";}
+const char* extension(CacheKind kind){return kind==CacheKind::ScanIndex ? ".scan" : kind==CacheKind::FilterState ? ".filter" : ".overview";}
 bool owned_name(const std::string& name,std::string& key,std::string& ext) {
     if(name.size()<39 || name.compare(0,5,".ams-") || name[21]!='-')return false;
     key=name.substr(5,16);if(!hex_key(key) || !hex_key(name.substr(22,16)))return false;
-    ext=name.substr(38);return ext==".scan" || ext==".overview" || ext==".part";
+    ext=name.substr(38);return ext==".scan" || ext==".overview" || ext==".filter" || ext==".part";
 }
 bool reparse(const std::filesystem::path& path) {
 #ifdef _WIN32
@@ -143,7 +143,7 @@ DiskCache::DiskCache(const std::filesystem::path& directory,std::uint64_t max_by
         std::string key,ext;if(!owned_name(file.path().filename().string(),key,ext))continue;
         if(ext==".part") {std::error_code error;std::filesystem::remove(file.path(),error);if(error)disk_fail("Cannot remove abandoned cache output.");continue;}
         auto e=std::make_shared<Entry>();e->path=file.path();e->key=std::move(key);
-        e->kind=ext==".scan" ? CacheKind::ScanIndex : CacheKind::Overview;
+        e->kind=ext==".scan" ? CacheKind::ScanIndex : ext==".filter" ? CacheKind::FilterState : CacheKind::Overview;
         e->bytes=file.file_size();e->touched=file.last_write_time();
         if(e->bytes>std::numeric_limits<std::uint64_t>::max()-s.used)disk_fail("Cache size overflow.");
         s.used+=e->bytes;s.entries.push_back(std::move(e));s.trim(0);

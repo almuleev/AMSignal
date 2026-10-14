@@ -9,7 +9,7 @@ const Strings kRu = {
     L"Открыть", L"PNG", L"Сохранить как…", L"Старт", L"Стоп", L"Точки", L"Сброс", L"Автомасштаб",
     L"Сигнал: %zu каналов, %zu отсчётов, %.6g–%.6g с", L"Спектр: %zu каналов, верхняя частота %.6g Гц | %.6g–%.6g Гц", L" | Масштаб Y: авто", L" | Масштаб Y: фикс.", L" | Линий: %zu", L" | Маркеров: %zu", L" | Скорость: %.4gx",
     L"Время, c", L"Частота, Гц",
-    L"Δx=%.5g", L"Δy=%.5g", L"1/Δt=%.5g Гц", L"d (условн.)=%.5g",
+    L"1/Δt=%.5g Гц", L"d (условн.)=%.5g",
     L"Горячие клавиши — AMSignal",
     L"Нет данных", L"Сначала откройте файл.", L"Не удалось сохранить PNG.", L"Ошибка чтения",
     L"AMSignal",
@@ -35,8 +35,6 @@ const Strings kRu = {
     L"Сохранено (PNG): ",
     L"Проекты AMSignal / LVM / текст / CSV файлы\0*.AMSig;*.lvm;*.txt;*.csv\0Все файлы\0*.*\0",
     L"PNG изображение\0*.png\0Все файлы\0*.*\0",
-    L"Время",
-    L"Частота",
     L"Кликните на графике, чтобы поставить вертикальную линию (Esc — отмена). Можно добавить несколько линий подряд.",
     L"Кликните на графике, чтобы поставить горизонтальную линию (Esc — отмена). Можно добавить несколько линий подряд.",
     L"Кликните на графике, чтобы поставить маркер (Esc — отмена)."
@@ -47,7 +45,7 @@ const Strings kEn = {
     L"Open", L"PNG", L"Save as…", L"▶ Play", L"⏸ Pause", L"Points", L"Reset", L"Auto scale",
     L"Signal: %zu channels, %zu samples, %.6g–%.6g s", L"Spectrum: %zu channels, upper frequency %.6g Hz | %.6g–%.6g Hz", L" | Y scale: auto", L" | Y scale: fixed", L" | Lines: %zu", L" | Markers: %zu", L" | Speed: %.4gx",
     L"Time, s", L"Frequency, Hz",
-    L"Δx=%.5g", L"Δy=%.5g", L"1/Δt=%.5g Hz", L"d (coord.)=%.5g",
+    L"1/Δt=%.5g Hz", L"d (coord.)=%.5g",
     L"Keyboard shortcuts — AMSignal",
     L"No data", L"Open a file first.", L"Failed to save PNG.", L"Read error",
     L"AMSignal",
@@ -73,8 +71,6 @@ const Strings kEn = {
     L"Saved (PNG): ",
     L"AMSignal projects / LVM / text / CSV files\0*.AMSig;*.lvm;*.txt;*.csv\0All files\0*.*\0",
     L"PNG image\0*.png\0All files\0*.*\0",
-    L"Time",
-    L"Frequency",
     L"Click on the plot to place a vertical line (Esc to cancel). You can add multiple lines.",
     L"Click on the plot to place a horizontal line (Esc to cancel). You can add multiple lines.",
     L"Click on the plot to place a marker (Esc to cancel)."
@@ -247,7 +243,7 @@ const wchar_t* side_pt_x_text() {
 }
 
 const wchar_t* stitch_gaps_toggle_text() {
-    return (g_str == &kEn) ? L"Stitch time gaps in the graph" : L"Склеивать пропуски времени на графике";
+    return (g_str == &kEn) ? L"Stitch recording segments" : L"Склеивать участки записи";
 }
 
 const wchar_t* side_pt_y_text() {

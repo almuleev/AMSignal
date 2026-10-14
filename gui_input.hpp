@@ -3,6 +3,9 @@
 
 namespace gui {
 
+// Compact black/white target, with the click hotspot on the central pixel.
+HCURSOR point_placement_cursor();
+
 void add_guide_line(bool vertical, double value);
 
 bool px_to_data(int px, int py, double& dx, double& dy);

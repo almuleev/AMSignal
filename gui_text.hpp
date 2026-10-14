@@ -10,7 +10,7 @@ struct Strings {
     const wchar_t* btn_measure; const wchar_t* btn_reset; const wchar_t* btn_autoy;
     const wchar_t* st_time; const wchar_t* st_hz; const wchar_t* st_yauto; const wchar_t* st_yfix; const wchar_t* st_lines; const wchar_t* st_markers; const wchar_t* st_speed;
     const wchar_t* plot_xlabel_time; const wchar_t* plot_xlabel_freq;
-    const wchar_t* fmt_pt_dx; const wchar_t* fmt_pt_dy; const wchar_t* fmt_pt_invdt; const wchar_t* fmt_pt_dist;
+    const wchar_t* fmt_pt_invdt; const wchar_t* fmt_pt_dist;
     const wchar_t* dlg_hotkeys_title;
     const wchar_t* msg_nodata; const wchar_t* msg_openfirst; const wchar_t* msg_savepng_err; const wchar_t* msg_read_err;
     const wchar_t* welcome_title;
@@ -37,8 +37,6 @@ struct Strings {
     const wchar_t* msg_saved_png;
     const wchar_t* filter_open;
     const wchar_t* filter_png;
-    const wchar_t* csv_time;
-    const wchar_t* csv_freq;
     const wchar_t* status_vline;
     const wchar_t* status_hline;
     const wchar_t* status_marker;

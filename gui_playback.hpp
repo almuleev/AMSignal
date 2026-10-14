@@ -8,6 +8,9 @@ const wchar_t* speed_menu_text();
 void set_play_speed(double speed);
 
 void stop_play();
+void reset_playback();
+void seek_playhead(double time);
+bool hit_test_playhead(int x,int y);
 
 void start_play();
 

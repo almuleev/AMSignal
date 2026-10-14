@@ -16,6 +16,7 @@ struct ResourcePolicy {
 };
 struct ResourceSnapshot {
     std::uint64_t available_physical = 0, available_commit = 0, resident = 0;
+    std::uint64_t shared_resident = 0;
 };
 inline std::uint64_t resource_headroom(const ResourceSnapshot& memory) {
     const auto free=std::min(memory.available_physical,memory.available_commit);
@@ -38,12 +39,15 @@ class MemoryBudget : public std::enable_shared_from_this<MemoryBudget> {
 public:
     class Reservation {
     public:
-        ~Reservation() { std::lock_guard<std::mutex> lock(owner_->mutex_); owner_->reserved_ -= bytes_; }
+        ~Reservation() { std::lock_guard<std::mutex> lock(owner_->mutex_); owner_->reserved_ -= bytes_;
+            if(resident_)owner_->shared_resident_-=bytes_; }
         std::uint64_t bytes() const { std::lock_guard<std::mutex> lock(owner_->mutex_);return bytes_; }
         bool shrink_to(std::uint64_t bytes) {
             std::lock_guard<std::mutex> lock(owner_->mutex_);
             if(bytes>bytes_)return false;
-            owner_->reserved_-=bytes_-bytes;bytes_=bytes;return true;
+            owner_->reserved_-=bytes_-bytes;
+            if(resident_)owner_->shared_resident_-=bytes_-bytes;
+            bytes_=bytes;return true;
         }
         Reservation(const Reservation&) = delete;
         Reservation& operator=(const Reservation&) = delete;
@@ -52,6 +56,7 @@ public:
         Reservation(std::shared_ptr<MemoryBudget> owner,std::uint64_t bytes) : owner_(std::move(owner)),bytes_(bytes) {}
         std::shared_ptr<MemoryBudget> owner_;
         std::uint64_t bytes_;
+        bool resident_=false;
     };
     void configure(std::uint64_t limit,std::uint64_t resident,std::uint64_t free_headroom) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -63,6 +68,9 @@ public:
     std::uint64_t reserved() const {
         std::lock_guard<std::mutex> lock(mutex_); return reserved_;
     }
+    std::uint64_t shared_resident() const {
+        std::lock_guard<std::mutex> lock(mutex_);return shared_resident_;
+    }
     std::uint64_t limit() const {std::lock_guard<std::mutex> lock(mutex_);return limit_;}
     std::shared_ptr<Reservation> reserve(std::uint64_t bytes) {
         // Allocate outside the mutex: shared_ptr control-block allocation can
@@ -73,12 +81,24 @@ public:
         result->bytes_=bytes;
         reserved_+=bytes; return result;
     }
+    // Transfer already-counted resident arrays to a shared asynchronous owner.
+    // This changes ownership accounting, without admitting another allocation.
+    std::shared_ptr<Reservation> transfer_resident(std::uint64_t bytes) {
+        auto result=std::shared_ptr<Reservation>(new Reservation(shared_from_this(),0));
+        std::lock_guard<std::mutex> lock(mutex_);
+        if(!bytes || bytes>resident_)return {};
+        resident_-=bytes;reserved_+=bytes;shared_resident_+=bytes;
+        result->bytes_=bytes;result->resident_=true;return result;
+    }
 private:
     std::uint64_t available_locked() const {
         const auto used=saturated_add(resident_,reserved_);
-        return std::min(limit_>used ? limit_-used : 0,headroom_>reserved_ ? headroom_-reserved_ : 0);
+        // Transferred arrays are already allocated and reflected in OS free
+        // memory. Only prospective working reservations reduce that headroom.
+        const auto prospective=reserved_-shared_resident_;
+        return std::min(limit_>used ? limit_-used : 0,headroom_>prospective ? headroom_-prospective : 0);
     }
     mutable std::mutex mutex_;
-    std::uint64_t limit_=0,resident_=0,headroom_=0,reserved_=0;
+    std::uint64_t limit_=0,resident_=0,headroom_=0,reserved_=0,shared_resident_=0;
 };
 } // namespace lvm

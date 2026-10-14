@@ -489,34 +489,38 @@ LRESULT CALLBACK RangePromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             GetClientRect(hwnd, &client);
             const int client_w = std::max(0, static_cast<int>(client.right - client.left));
             const int content_w = std::max(360, client_w - 36);
-            const int info_h = 42;
-            const int label_h = 18;
-            const int edit_h = 24;
-            const int start_label_y = 16 + info_h + 10;
-            const int start_edit_y = start_label_y + label_h + 4;
-            const int end_label_y = start_edit_y + edit_h + 10;
-            const int end_edit_y = end_label_y + label_h + 4;
-            auto mkstatic = [&](const std::wstring& text, int x, int y, int w, int h) {
+            SIZE start_label_size{}, end_label_size{};
+            GetTextExtentPoint32W(dc, g_range_prompt.start_label.c_str(),
+                static_cast<int>(g_range_prompt.start_label.size()), &start_label_size);
+            GetTextExtentPoint32W(dc, g_range_prompt.end_label.c_str(),
+                static_cast<int>(g_range_prompt.end_label.size()), &end_label_size);
+            const int label_w = std::max(120, static_cast<int>(std::max(start_label_size.cx, end_label_size.cx)));
+            const int edit_x = 18 + label_w + 16;
+            const int edit_w = content_w - label_w - 16;
+            const int edit_h = 28;
+            const int start_y = 72;
+            const int end_y = start_y + edit_h + 12;
+            auto mkstatic = [&](const std::wstring& text, int x, int y, int w, int h, bool center = true) {
                 HWND ctl = CreateWindowExW(0, L"STATIC", text.c_str(),
-                                           WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
+                                           WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX | (center ? SS_CENTERIMAGE : 0),
                                            x, y, w, h, hwnd, nullptr,
                                            reinterpret_cast<LPCREATESTRUCT>(lp)->hInstance, nullptr);
                 if (ctl) SendMessageW(ctl, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
                 return ctl;
             };
-            mkstatic(g_range_prompt.info_label, 18, 16, content_w, info_h);
-            mkstatic(g_range_prompt.start_label, 18, start_label_y, content_w, label_h);
+            mkstatic(g_range_prompt.info_label, 18, 16, content_w, 42, false);
+            mkstatic(g_range_prompt.start_label, 18, start_y, label_w, edit_h);
             g_range_prompt.start_edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE, L"EDIT", format_edit_number(g_range_prompt.start_value).c_str(),
+                0, L"EDIT", format_edit_number(g_range_prompt.start_value).c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                18, start_edit_y, content_w, edit_h, hwnd,
+                edit_x, start_y, edit_w, edit_h, hwnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RANGE_PROMPT_START_EDIT)),
                 reinterpret_cast<LPCREATESTRUCT>(lp)->hInstance, nullptr);
-            mkstatic(g_range_prompt.end_label, 18, end_label_y, content_w, label_h);
+            mkstatic(g_range_prompt.end_label, 18, end_y, label_w, edit_h);
             g_range_prompt.end_edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE, L"EDIT", format_edit_number(g_range_prompt.end_value).c_str(),
+                0, L"EDIT", format_edit_number(g_range_prompt.end_value).c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                18, end_edit_y, content_w, edit_h, hwnd,
+                edit_x, end_y, edit_w, edit_h, hwnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RANGE_PROMPT_END_EDIT)),
                 reinterpret_cast<LPCREATESTRUCT>(lp)->hInstance, nullptr);
             const wchar_t* autofill_text = (g_str == &kEn) ? L"Min / Max" : L"Мин / Макс";
@@ -532,19 +536,19 @@ LRESULT CALLBACK RangePromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             HWND autofill = CreateWindowExW(
                 0, L"BUTTON", autofill_text,
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                button_x, 178, autofill_w, 28, hwnd,
+                button_x, 164, autofill_w, 28, hwnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RANGE_PROMPT_AUTOFILL)),
                 reinterpret_cast<LPCREATESTRUCT>(lp)->hInstance, nullptr);
             HWND ok = CreateWindowExW(
                 0, L"BUTTON", g_range_prompt.apply_text.c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_DEFPUSHBUTTON,
-                button_x + autofill_w + button_gap, 178, apply_w, 28, hwnd,
+                button_x + autofill_w + button_gap, 164, apply_w, 28, hwnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RANGE_PROMPT_OK)),
                 reinterpret_cast<LPCREATESTRUCT>(lp)->hInstance, nullptr);
             HWND cancel = CreateWindowExW(
                 0, L"BUTTON", g_range_prompt.cancel_text.c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                button_x + autofill_w + button_gap + apply_w + button_gap, 178, cancel_w, 28, hwnd,
+                button_x + autofill_w + button_gap + apply_w + button_gap, 164, cancel_w, 28, hwnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RANGE_PROMPT_CANCEL)),
                 reinterpret_cast<LPCREATESTRUCT>(lp)->hInstance, nullptr);
             if (autofill) SendMessageW(autofill, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -552,6 +556,8 @@ LRESULT CALLBACK RangePromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_range_prompt.end_edit) SendMessageW(g_range_prompt.end_edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             if (ok) SendMessageW(ok, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             if (cancel) SendMessageW(cancel, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            install_compact_themed_edit(g_range_prompt.start_edit);
+            install_compact_themed_edit(g_range_prompt.end_edit);
             SelectObject(dc, old_font);
             ReleaseDC(hwnd, dc);
             return 0;
@@ -634,16 +640,9 @@ LRESULT CALLBACK RangePromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             wchar_t txt[256]{};
             GetWindowTextW(dis->hwndItem, txt, 256);
             const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
-            if (ctl_id == IDC_RANGE_PROMPT_OK) {
-                draw_welcome_action_button(dis->hDC, dis->rcItem, txt, pressed, true, false);
-                return TRUE;
-            }
-            if (ctl_id == IDC_RANGE_PROMPT_AUTOFILL) {
-                draw_welcome_action_button(dis->hDC, dis->rcItem, txt, pressed, false, true);
-                return TRUE;
-            }
-            if (ctl_id == IDC_RANGE_PROMPT_CANCEL) {
-                draw_welcome_action_button(dis->hDC, dis->rcItem, txt, pressed, false, false);
+            if (ctl_id == IDC_RANGE_PROMPT_OK || ctl_id == IDC_RANGE_PROMPT_AUTOFILL ||
+                ctl_id == IDC_RANGE_PROMPT_CANCEL) {
+                draw_themed_button(dis->hDC, dis->rcItem, txt, pressed, ctl_id == IDC_RANGE_PROMPT_OK, false);
                 return TRUE;
             }
             break;
@@ -1168,12 +1167,16 @@ bool prompt_analysis_window(double range_start, double range_end, double& out_st
         ? (L"Enter a finite number not less than " + format_edit_number(range_start) + L".")
         : (L"Введите конечное число не меньше " + format_edit_number(range_start) + L".");
     g_range_prompt.invalid_end_text = g_str->analysis_range_invalid_end;
+    const DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE;
+    const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW;
+    RECT window_rect{0, 0, 460, 212};
+    AdjustWindowRectEx(&window_rect, style, FALSE, ex_style);
     g_range_prompt.wnd = CreateWindowExW(
-        WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW,
+        ex_style,
         L"LvmRangePrompt",
         g_range_prompt.title.c_str(),
-        WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 470, 256,
+        style,
+        CW_USEDEFAULT, CW_USEDEFAULT, window_rect.right - window_rect.left, window_rect.bottom - window_rect.top,
         g.main, nullptr,
         reinterpret_cast<HINSTANCE>(GetWindowLongPtr(g.main, GWLP_HINSTANCE)),
         nullptr);

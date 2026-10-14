@@ -6,12 +6,6 @@ const wchar_t* export_prompt_title_text(bool english) {
     return english ? L"Export data" : L"Экспорт данных";
 }
 
-const wchar_t* export_prompt_intro_text(bool english) {
-    return english
-        ? L"Choose what should be exported."
-        : L"Выберите, что нужно выгрузить.";
-}
-
 std::wstring export_range_title_text(ExportRangeMode range, bool english) {
     switch (range) {
         case ExportRangeMode::Selected:
@@ -32,24 +26,8 @@ const wchar_t* export_prompt_cancel_text(bool english) {
     return english ? L"Cancel" : L"Отмена";
 }
 
-const wchar_t* export_apply_processing_text(bool english) {
-    return english
-        ? L"Apply formulas and filter to exported data"
-        : L"Применить формулы и фильтр к экспортируемым данным";
-}
-
-const wchar_t* export_processing_settings_text(bool english) {
-    return english
-        ? L"Save formulas and filter as settings only"
-        : L"Сохранить формулы и фильтр только как настройки";
-}
-
 const wchar_t* export_include_channel_names_text(bool english) {
     return english ? L"Channel names" : L"Названия каналов";
-}
-
-const wchar_t* export_include_hidden_channels_text(bool english) {
-    return english ? L"Include hidden channels" : L"Сохранять скрытые каналы";
 }
 
 const wchar_t* export_include_points_text(bool english) {

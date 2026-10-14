@@ -148,7 +148,7 @@ CachedScanIndex scan_index_cached(const std::filesystem::path& original,std::sha
         auto reservation=options.budget ? options.budget->reserve(options.memory_bytes) : nullptr;
         if(options.budget && !reservation)fail(RecordingError::ResourceLimit,"Insufficient memory for scan index.");
         const auto path=std::filesystem::absolute(original).lexically_normal();const auto expected=stamp(path,RecordingError::ReadFailure);
-        const auto key=recording_cache_key(path,expected,"scan-amscidx1-parser1");CachedScanIndex result;
+        const auto key=recording_cache_key(path,expected,"scan-amscidx1-parser2-exact-bounds");CachedScanIndex result;
         if(cache)try {
             auto lease=cache->find(key,CacheKind::ScanIndex);
             if(lease)try{result.index=read_index(lease->path(),path,expected,limit,options.max_disk_bytes,cancel);result.from_cache=true;}

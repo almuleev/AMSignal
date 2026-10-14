@@ -147,6 +147,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 }
                 case IDC_PLAY: toggle_play(); return 0;
+                case IDM_STOP_PLAYBACK: reset_playback(); return 0;
                 case IDC_SHOW_ALL:
                 {
                     const SettingsSnapshot before = capture_settings_snapshot();
@@ -341,6 +342,17 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     sync_menu();
                     set_status();
                     InvalidateRect(hwnd, nullptr, TRUE);
+                    return 0;
+                case IDC_SIDE_STITCH_GAPS:
+                    if(HIWORD(wp)!=BN_CLICKED && HIWORD(wp)!=BN_DOUBLECLICKED)return 0;
+                    if(!has_data() || g.ds.frequency_axis)return 0;
+                    g.stitch_time_gaps=!g.stitch_time_gaps;
+                    mark_active_document_dirty();
+                    hide_gap_details_card();
+                    invalidate_plot_analysis_cache();
+                    set_toggle_checked(g.side_stitch_gaps,g.stitch_time_gaps);
+                    set_status();
+                    invalidate_plot();
                     return 0;
                 case IDM_VISMOOTH:
                     g.visual_smooth = !g.visual_smooth;

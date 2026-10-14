@@ -239,6 +239,8 @@ std::wstring hotkeys_body_text() {
     out += en ? L"  Left-drag\t: Pan view\n" : L"  ЛКМ + тяга\t: Панорамирование\n";
     out += en ? L"  Left-click\t: Place point / line / marker in active mode\n" : L"  ЛКМ\t: Поставить точку / линию / маркер в активном режиме\n";
     out += en ? L"  Click object in Cursor mode\t: Select / drag\n" : L"  Щелчок по объекту в режиме Курсор\t: Выбрать / перетащить\n";
+    out += en ? L"  Drag red timeline\t: Seek playback; Esc / right-click hides it\n"
+              : L"  Перетаскивание красной линии\t: Позиция воспроизведения; Esc / ПКМ скрывает её\n";
     out += en ? L"  Delete / Backspace\t: Delete selected annotation\n\n" : L"  Delete / Backspace\t: Удалить выделенный объект\n\n";
     append_hotkey_line(out, IDM_HOTKEYS);
     return out;

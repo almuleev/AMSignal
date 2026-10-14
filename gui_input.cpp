@@ -10,6 +10,7 @@
 #include "gui_layout.hpp"
 #include "gui_loading.hpp"
 #include "gui_navigation.hpp"
+#include "gui_playback.hpp"
 #include "gui_processing.hpp"
 #include "gui_overview.hpp"
 #include "gui_render.hpp"
@@ -21,8 +22,41 @@
 #include "gui_status.hpp"
 #include "gui_theme.hpp"
 #include "gui_time_axis.hpp"
+#include <array>
 
 namespace gui {
+
+HCURSOR point_placement_cursor() {
+    struct TargetCursor {
+        HCURSOR handle = nullptr;
+        TargetCursor() {
+            // A 17x17 visible target inside the native 32x32 cursor bitmap.
+            // AND=1/XOR=0 is transparent; AND=0 paints black or white.
+            std::array<unsigned char, 128> mask, image{};
+            mask.fill(0xff);
+            const auto ink = [](int x, int y) {
+                return (x == 0 && y == 0) ||
+                    (x == 0 && std::abs(y) >= 4 && std::abs(y) <= 7) ||
+                    (y == 0 && std::abs(x) >= 4 && std::abs(x) <= 7);
+            };
+            for (int y = 0; y < 32; ++y) for (int x = 0; x < 32; ++x) {
+                bool outline = false;
+                for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx)
+                    outline = outline || ink(x - 16 + dx, y - 16 + dy);
+                if (!outline) continue;
+                const auto bit = static_cast<unsigned char>(0x80 >> (x % 8));
+                const auto offset = y * 4 + x / 8;
+                mask[offset] &= static_cast<unsigned char>(~bit);
+                if (!ink(x - 16, y - 16)) image[offset] |= bit;
+            }
+            handle = CreateCursor(GetModuleHandleW(nullptr), 16, 16, 32, 32,
+                                  mask.data(), image.data());
+        }
+        ~TargetCursor() { if (handle) DestroyCursor(handle); }
+    };
+    static const TargetCursor cursor;
+    return cursor.handle ? cursor.handle : LoadCursor(nullptr, IDC_CROSS);
+}
 
 void add_guide_line(bool vertical, double value) {
     GuideLine gl;
@@ -499,7 +533,16 @@ void finish_annotation_drag(bool commit) {
 LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (g.mode == AnalysisMode::FRF) return handle_frf_input(hwnd, msg, wp, lp);
     switch (msg) {
+        case WM_CAPTURECHANGED:
+            if(g.playhead_dragging) {
+                g.playhead_dragging=false;seek_playhead(g.playhead_drag_before);
+            }
+            return 0;
         case WM_CANCELMODE:
+            if(g.playhead_dragging) {
+                g.playhead_dragging=false;seek_playhead(g.playhead_drag_before);
+                if(GetCapture()==hwnd)ReleaseCapture();
+            }
             cancel_overview_snap();
             if (g.annotation_drag_kind!=App::AnnotationDragKind::None) finish_annotation_drag(false);
             g_filter_slider_before.reset();
@@ -511,13 +554,18 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 GetCursorPos(&pt);
                 ScreenToClient(hwnd, &pt);
                 RECT p = plot_rect();
+                if(g.playhead_dragging || (!g.pending_line && !g.pending_marker &&
+                   !(GetKeyState(VK_SHIFT)&0x8000) && hit_test_playhead(pt.x,pt.y))) {
+                    SetCursor(LoadCursor(nullptr,IDC_SIZEWE));return TRUE;
+                }
                 bool in_plot = (pt.x >= p.left && pt.x <= p.right && pt.y >= p.top && pt.y <= p.bottom);
                 const bool selecting_fft_here =
                     (g.mode == AnalysisMode::Time) && in_plot &&
                     (GetKeyState(VK_SHIFT) & 0x8000) != 0 &&
-                    !g.measure_mode && !g.pending_line && !g.pending_marker;
+                    !g.pending_line && !g.pending_marker;
                 if (g.dragging || g.fft_selecting || g.measure_mode || g.pending_line || g.pending_marker || selecting_fft_here) {
-                    SetCursor(LoadCursor(nullptr, IDC_CROSS));
+                    SetCursor(!g.fft_selecting && !selecting_fft_here && (g.measure_mode || g.pending_line || g.pending_marker)
+                        ? point_placement_cursor() : LoadCursor(nullptr, IDC_CROSS));
                     return TRUE;
                 }
                 if (in_plot) {
@@ -635,7 +683,16 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             const bool placing_annotation=g.measure_mode || g.pending_line || g.pending_marker;
-            if ((g.mode == AnalysisMode::Time) && g.show_gap_markers && !placing_annotation) {
+            const bool selecting_range = g.mode == AnalysisMode::Time &&
+                ((wp & MK_SHIFT) != 0 || (GetKeyState(VK_SHIFT) & 0x8000) != 0) &&
+                !g.pending_line && !g.pending_marker;
+            if(!g.pending_line && !g.pending_marker && !selecting_range && hit_test_playhead(mx,my)) {
+                stop_play();clear_annotation_selection();
+                g.playhead_selected=true;g.playhead_dragging=true;g.playhead_drag_before=g.playhead;
+                SetCapture(hwnd);return 0;
+            }
+            g.playhead_selected=false;
+            if ((g.mode == AnalysisMode::Time) && g.show_gap_markers && !placing_annotation && !selecting_range) {
                 const int gap_index = hit_test_gap_marker(mx, my);
                 if (gap_index >= 0) {
                     // An annotation drawn over a gap must be selectable before
@@ -680,14 +737,14 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             if (mx < p.left || mx > p.right || my < p.top || my > p.bottom) return 0;
+            // Shift range selection also takes priority over existing annotations.
             // Creation tools deliberately take priority over existing
             // annotations, so a point, marker, or guide can be placed at an
             // already marked coordinate. In cursor mode a press on an object
             // selects it and starts a possible drag.
-            if (!placing_annotation && begin_annotation_drag(hwnd,mx,my)) return 0;
+            if (!selecting_range && !placing_annotation && begin_annotation_drag(hwnd,mx,my)) return 0;
             clear_annotation_selection();
-            const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            if ((g.mode == AnalysisMode::Time) && shift && !g.pending_line && !g.pending_marker && !g.measure_mode) {
+            if (selecting_range) {
                 const int pw = p.right - p.left;
                 if (pw > 0) {
                     const int clamped_x = std::clamp(mx, static_cast<int>(p.left), static_cast<int>(p.right));
@@ -728,6 +785,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_RBUTTONDOWN:
+            if(hit_test_playhead(GET_X_LPARAM(lp),GET_Y_LPARAM(lp))) {reset_playback();return 0;}
             if (g.annotations_locked) return 0;
             if (g.gap_details_visible) {
                 hide_gap_details_card();
@@ -740,6 +798,12 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_MOUSEMOVE: {
+            if(g.playhead_dragging) {
+                const auto x=std::clamp<int>(GET_X_LPARAM(lp),g.vrect.left,g.vrect.right);
+                double time,value;
+                if(px_to_data(x,GET_Y_LPARAM(lp),time,value))seek_playhead(time);
+                return 0;
+            }
             if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
                 update_annotation_drag(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
                 InvalidateRect(hwnd,nullptr,FALSE);
@@ -824,6 +888,13 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_LBUTTONUP:
+            if(g.playhead_dragging) {
+                const auto x=std::clamp<int>(GET_X_LPARAM(lp),g.vrect.left,g.vrect.right);
+                double time,value;
+                if(px_to_data(x,GET_Y_LPARAM(lp),time,value))seek_playhead(time);
+                g.playhead_dragging=false;if(GetCapture()==hwnd)ReleaseCapture();
+                return 0;
+            }
             if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
                 finish_annotation_drag(true);
                 if (GetCapture()==hwnd) ReleaseCapture();
@@ -884,6 +955,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_KEYDOWN:
             if(wp==VK_ESCAPE || wp==VK_DELETE || wp==VK_BACK)cancel_overview_snap();
             if (wp==VK_DELETE || wp==VK_BACK) {
+                if(g.mode==AnalysisMode::Time && g.playhead_selected) {reset_playback();return 0;}
                 if (delete_selected_annotation()) {
                     set_status();
                     InvalidateRect(hwnd,nullptr,FALSE);
@@ -894,6 +966,11 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 hide_gap_details_card();
             }
             if (wp == VK_ESCAPE) {
+                if(g.playhead_dragging) {
+                    g.playhead_dragging=false;seek_playhead(g.playhead_drag_before);
+                    if(GetCapture()==hwnd)ReleaseCapture();
+                    return 0;
+                }
                 if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
                     finish_annotation_drag(false);
                     if (GetCapture()==hwnd) ReleaseCapture();
@@ -925,6 +1002,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
+                if(g.mode==AnalysisMode::Time && g.playhead_active) {reset_playback();return 0;}
                 if (has_fft_window()) {
                     clear_fft_window();
                     set_status();

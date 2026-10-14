@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="AMSignal-${version}-x64.exe" product-name="AMSignal"
+             product-version="${version}" file-version="${version}"
+             original-filename="AMSignal-${version}-x64.exe">
+      <authenticode-sign hash-algorithm="sha256" description="AMSignal"
+                         description-url="https://github.com/almuleev/AMSignal" />
+    </pe-file>
+    <pe-file path="lvm_reader.exe" product-name="AMSignal"
+             product-version="${version}" file-version="${version}"
+             original-filename="lvm_reader.exe">
+      <authenticode-sign hash-algorithm="sha256" description="AMSignal CLI"
+                         description-url="https://github.com/almuleev/AMSignal" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

@@ -1,1 +1,2 @@
 101 ICON "AM_logo.ico"
+#include "AM_version.rc"

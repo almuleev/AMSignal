@@ -112,8 +112,8 @@ void add_recent_file(const std::wstring& path) {
 
 void save_runtime_settings_now() {
     if (g_config_path.empty()) g_config_path = app_config_path();
-    // Retire only obsolete loading-policy keys; preserve other user settings.
-    for(const auto key:{L"light_mode",L"light_mode_open_start",L"light_mode_open_end"})
+    // Retire obsolete loading-policy keys and the document-only stitching key.
+    for(const auto key:{L"light_mode",L"light_mode_open_start",L"light_mode_open_end",L"stitch_time_gaps"})
         WritePrivateProfileStringW(L"ui",key,nullptr,g_config_path.c_str());
 
     WritePrivateProfileStringW(L"ui", L"language", (g_str == &kEn) ? L"en" : L"ru", g_config_path.c_str());
@@ -124,7 +124,6 @@ void save_runtime_settings_now() {
     WritePrivateProfileStringW(L"resources", L"automatic", g.resource_policy.automatic ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"resources", L"manual_mib", std::to_wstring(g.resource_policy.manual_mib).c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"show_gap_markers", g.show_gap_markers ? L"1" : L"0", g_config_path.c_str());
-    WritePrivateProfileStringW(L"ui", L"stitch_time_gaps", g.stitch_time_gaps ? L"1" : L"0", g_config_path.c_str());
     normalize_filter_bounds();
     WritePrivateProfileStringW(L"ui", L"filter_enabled", g.noise_threshold_enabled ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"filter_mode", std::to_wstring(g.noise_threshold_mode).c_str(), g_config_path.c_str());
@@ -286,7 +285,6 @@ void load_runtime_settings() {
     g.vertical_pan = read_ini_int(L"ui", L"vertical_pan", g.vertical_pan ? 1 : 0) != 0;
     g.snap_to_data = read_ini_int(L"ui", L"snap_to_data", g.snap_to_data ? 1 : 0) != 0;
     g.show_gap_markers = read_ini_int(L"ui", L"show_gap_markers", g.show_gap_markers ? 1 : 0) != 0;
-    g.stitch_time_gaps = read_ini_int(L"ui", L"stitch_time_gaps", g.stitch_time_gaps ? 1 : 0) != 0;
     g.noise_threshold_enabled = read_ini_int(L"ui", L"filter_enabled", g.noise_threshold_enabled ? 1 : 0) != 0;
     g.noise_threshold_mode = read_ini_int(L"ui", L"filter_mode", g.noise_threshold_mode);
     g.noise_threshold_topology = read_ini_int(L"ui", L"filter_topology", g.noise_threshold_topology);

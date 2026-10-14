@@ -22,11 +22,16 @@ GUI_TEST_OBJECT := .build/make_gui/gui_regression.o
 BENCH_BIN := tests/perf_benchmark.exe
 GUI_FLAGS := $(CPPFLAGS) $(CXXFLAGS) -DAPP_VERSION_W=L\"$(VERSION)\" -I.
 GUI_RES  := AM_logo.o
+VERSION_NUMBERS := $(shell printf '%s' '$(RELEASE_VERSION)' | sed -nE 's/^([0-9]+)\.([0-9]+)\.([0-9]+)([.+-].*)?$$/\1,\2,\3,0/p')
+ifeq ($(VERSION_NUMBERS),)
+    VERSION_NUMBERS := 0,0,0,0
+endif
 
 ifeq ($(OS),Windows_NT)
     BIN      := $(TARGET).exe
     TEST_BIN := tests/run_tests.exe
     GUI_BIN  := AMSignal-$(RELEASE_VERSION)-x64.exe
+    CLI_RES  := .build/cli/version.o
 else
     BIN      := $(TARGET)
     TEST_BIN := tests/run_tests
@@ -41,8 +46,15 @@ all: $(BIN)
 main.o: FORCE
 FORCE:
 
-$(BIN): $(APP_OBJ)
-	$(CXX) $(CXXFLAGS) -o $@ $(APP_OBJ) $(LDFLAGS)
+$(BIN): $(APP_OBJ) $(CLI_RES)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+ifeq ($(OS),Windows_NT)
+$(CLI_RES): AM_version.rc FORCE
+	mkdir -p .build/cli
+	printf '%s\n' '#define AM_VERSION_STRING "$(RELEASE_VERSION)"' '#define AM_VERSION_NUMBERS $(VERSION_NUMBERS)' '#define AM_CLI 1' '#define AM_ORIGINAL_FILENAME "lvm_reader.exe"' '#include "AM_version.rc"' > .build/cli/version.rc
+	$(WINDRES) -I. -O coff -i .build/cli/version.rc -o $@
+endif
 
 %.o: %.cpp $(HDRS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
@@ -87,11 +99,13 @@ $(TEST_BIN): tests/run_tests.cpp tests/recording_overview_tests.cpp tests/record
 # Win32 import libraries. On Windows you can also run: powershell ./build_gui.ps1
 gui: $(GUI_BIN)
 
-$(GUI_RES): AM_logo.rc AM_logo.ico
-	$(WINDRES) -O coff -i $< -o $@
+$(GUI_RES): AM_logo.rc AM_version.rc AM_logo.ico FORCE
+	mkdir -p .build
+	printf '%s\n' '#define AM_VERSION_STRING "$(RELEASE_VERSION)"' '#define AM_VERSION_NUMBERS $(VERSION_NUMBERS)' '#define AM_ORIGINAL_FILENAME "$(GUI_BIN)"' '#include "AM_logo.rc"' > .build/logo-version.rc
+	$(WINDRES) -I. -O coff -i .build/logo-version.rc -o $@
 
 $(GUI_BIN): $(GUI_OBJECTS) $(GUI_RES)
 	$(CXX) -municode -mwindows -o $@ $^ $(LDFLAGS) -lcomdlg32 -lgdi32 -luser32 -lgdiplus -lcomctl32 -luxtheme -ladvapi32 -lshell32 -lole32 -luuid
 
 clean:
-	rm -f $(APP_OBJ) $(BIN) $(TEST_BIN) $(GUI_BIN) $(GUI_RES) $(GUI_OBJECTS) $(GUI_OBJECTS:.o=.d) $(GUI_TEST_OBJECT) $(GUI_TEST_OBJECT:.o=.d) $(BENCH_BIN) tests/gui_regression.exe
+	rm -f $(APP_OBJ) $(BIN) $(TEST_BIN) $(GUI_BIN) $(GUI_RES) $(CLI_RES) $(GUI_OBJECTS) $(GUI_OBJECTS:.o=.d) $(GUI_TEST_OBJECT) $(GUI_TEST_OBJECT:.o=.d) $(BENCH_BIN) tests/gui_regression.exe

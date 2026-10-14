@@ -5,6 +5,8 @@
 #include "gui_documents.hpp"
 #include "gui_ids.hpp"
 #include "gui_layout.hpp"
+#include "gui_menu.hpp"
+#include "gui_time_axis.hpp"
 #include "gui_render.hpp"
 #include "gui_settings.hpp"
 #include "gui_spectrum.hpp"
@@ -44,23 +46,60 @@ void set_play_speed(double speed) {
 
 void stop_play() {
     g.playing = false;
+    const bool captured=g.playhead_dragging;
+    g.playhead_dragging=false;g.playhead_selected=false;
+    if(captured && GetCapture()==g.main)ReleaseCapture();
     KillTimer(g.main, 1);
     if (g.play) SetWindowTextW(g.play, g_str->btn_play);
     redraw_button(g.play);
+    sync_menu();
+}
+
+void reset_playback() {
+    stop_play();g.playhead_active=false;g.playhead=g.data_t0;
+    set_status();invalidate_plot();sync_menu();
+}
+
+void seek_playhead(double time) {
+    if(!has_data() || g.mode!=AnalysisMode::Time || !std::isfinite(time))return;
+    g.playhead=std::clamp(time,g.data_t0,g.data_t1);g.playhead_active=true;
+    g.play_anchor_data=g.playhead;QueryPerformanceCounter(&g.play_anchor_qpc);
+    set_status();invalidate_plot();
+}
+
+bool hit_test_playhead(int x,int y) {
+    if(g.mode!=AnalysisMode::Time || !g.playhead_active || !g.vvalid ||
+       g.playhead<g.win_start || g.playhead>g.win_end || g.vx1<=g.vx0 ||
+       x<g.vrect.left || x>g.vrect.right || y<g.vrect.top || y>g.vrect.bottom)return false;
+    const auto fraction=(stitched_time_from_raw(g.playhead)-g.vx0)/(g.vx1-g.vx0);
+    return std::fabs(x-(g.vrect.left+fraction*(g.vrect.right-g.vrect.left)))<=6;
 }
 
 void start_play() {
-    if (!has_data() || g.mode != AnalysisMode::Time) return;
+    if (!has_data() || g.mode != AnalysisMode::Time || !g.main) return;
+    if(g.playhead_dragging)stop_play();
+    g.playhead_selected=false;
+    if(g.playhead>=g.data_t1) {
+        const auto span=g.win_end-g.win_start;
+        g.playhead=g.data_t0;g.win_start=g.data_t0;
+        g.win_end=std::min(g.data_t1,g.data_t0+span);
+    } else if(!g.playhead_active) {
+        g.playhead=g.win_start;
+    } else if(g.playhead<g.win_start || g.playhead>g.win_end) {
+        const auto span=g.win_end-g.win_start;
+        g.win_start=std::clamp(g.playhead-span*.5,g.data_t0,std::max(g.data_t0,g.data_t1-span));
+        g.win_end=std::min(g.data_t1,g.win_start+span);
+    }
     g.playing = true;
     g.playhead_active = true;
-    if (g.playhead < g.win_start || g.playhead >= g.data_t1) g.playhead = g.win_start;
     // Anchor the playhead to wall-clock time so playback runs at 1 s of signal
     // per 1 s of real time, independent of timer jitter.
     g.play_anchor_data = g.playhead;
     QueryPerformanceCounter(&g.play_anchor_qpc);
-    SetTimer(g.main, 1, 16, nullptr);   // ~60 fps for smooth scrolling
-    if (g.play) SetWindowTextW(g.play, g_str->btn_pause);
+    if(!SetTimer(g.main,1,16,nullptr))g.playing=false;
+    if (g.play) SetWindowTextW(g.play, g.playing ? g_str->btn_pause : g_str->btn_play);
     redraw_button(g.play);
+    sync_menu();set_status();invalidate_plot();
 }
 
 void toggle_play() {
@@ -107,7 +146,7 @@ LRESULT handle_playback_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return 0;
             }
-            if (g.playing && (g.mode == AnalysisMode::Time) && has_data()) {
+            if (wp==1 && g.playing && (g.mode == AnalysisMode::Time) && has_data()) {
                 // Real-time playhead: 1 s of signal per 1 s of wall-clock time.
                 LARGE_INTEGER now, freq;
                 QueryPerformanceCounter(&now);

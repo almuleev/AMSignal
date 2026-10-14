@@ -202,6 +202,8 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.side_filter_high_value = mk_panel_ctl(L"STATIC", L"", SS_RIGHT | SS_NOPREFIX, 0, g.side_filter_controls);
             g.side_filter_high_track = mk_panel_ctl(TRACKBAR_CLASS, L"", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,
                                                     IDC_SIDE_FILTER_HIGH_TRACK, g.side_filter_controls);
+            g.side_stitch_gaps = mk_panel_ctl(L"BUTTON", stitch_gaps_toggle_text(),
+                BS_OWNERDRAW | WS_TABSTOP, IDC_SIDE_STITCH_GAPS, g.side_channel_controls);
             g.side_global_formula_label = mk_panel_ctl(L"STATIC", side_global_formula_label_text(), SS_LEFT, 0, g.side_channel_controls);
             g.side_global_formula_edit = mk_panel_ctl(L"EDIT", default_channel_formula_text().c_str(),
                                                       WS_BORDER | ES_AUTOHSCROLL, IDC_SIDE_GLOBAL_FORMULA_EDIT, g.side_channel_controls);

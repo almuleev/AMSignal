@@ -89,8 +89,8 @@ void request_async_load_cancel() {
     }
 }
 
-bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_channels,
-                          bool requested_time_window, double cached_global_gap_step,
+bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
+                          bool source_preview, double cached_global_gap_step,
                           bool cached_global_gap_step_ready,
                           std::optional<lvm::RecordingStamp> expected_stamp,double source_filter_step) {
     if (ds.time.empty()) {
@@ -116,7 +116,7 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
     }
 
     begin_loaded_document();
-    g.current_file_partial = requested_time_window || ds.partial;
+    g.current_file_partial = source_preview || ds.partial;
     g_filter_slider_before.reset();
     g.ds = std::move(ds);
     g.source_scan_index=index;
@@ -128,7 +128,7 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
     invalidate_stitched_time_cache();
     g.envelopes.clear();
     g.envelope_serial.clear();
-    g.visible.assign(g.ds.channel_count(), hide_channels ? 0 : 1);
+    g.visible.assign(g.ds.channel_count(), 1);
     g.channel_labels.assign(g.ds.channel_count(), L"");
     for (std::size_t i = 0; i < g.ds.channel_count(); ++i) {
         if (i < g.ds.names.size() && !g.ds.names[i].empty()) {
@@ -178,7 +178,6 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
     g.playhead = g.data_t0;
     g.playhead_active = false;
     g.auto_y = true;   // a fresh file starts on auto-fit
-    if (hide_channels) g.auto_y_amp = true;
     if (g.mode != AnalysisMode::Time) {
         // New files should open in the time plot by default.
         set_mode(AnalysisMode::Time);
@@ -205,7 +204,7 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_
         g.mode = AnalysisMode::Time;
         set_mode(AnalysisMode::FFT);
     }
-    if (!requested_time_window) {
+    if (!source_preview) {
         g.cached_scan_path = wpath;
         g.cached_scan_start = g.data_t0;
         g.cached_scan_end = g.data_t1;
@@ -243,7 +242,7 @@ bool apply_scanned_recording(AsyncScanResult& result) {
     if(!result.ok || !result.index || !result.source_metadata.ok)return false;
     g.cached_scan_path=result.path;g.cached_scan_valid=true;g.cached_scan_index=result.index;
     g.cached_scan_start=result.range_start;g.cached_scan_end=result.range_end;
-    if(!apply_loaded_dataset(std::move(result.source_metadata),result.path,false,true,0,false,
+    if(!apply_loaded_dataset(std::move(result.source_metadata),result.path,true,0,false,
         lvm::RecordingStamp{result.index->file_size,result.index->modified}))return false;
     g.recording_rows=result.source_rows;
     g.data_t0=g.win_start=result.range_start;g.data_t1=g.win_end=result.range_end;
@@ -260,8 +259,8 @@ bool apply_scanned_recording(AsyncScanResult& result) {
 bool move_resident_recordings_to_disk() {
     bool changed=false;
     const auto convert=[&](DocumentState& document,bool active) {
-        if(document.overview.render_enabled || document.current_file_partial || document.ds.frequency_axis ||
-           document.ds.rows()<3 || !document.recording_source)return;
+        if(document.current_file_partial || document.ds.frequency_axis || !document.recording_source ||
+           (document.ds.rows()<3 && !document.recording_source->resident_backed()))return;
         std::shared_ptr<const lvm::RecordingSource> source;
         try {
             document.recording_source->check_current();
@@ -276,9 +275,15 @@ bool move_resident_recordings_to_disk() {
         seed.time.assign(document.ds.time.begin(),document.ds.time.begin()+2);
         if(document.ds.raw_time.size()>=2)seed.raw_time.assign(document.ds.raw_time.begin(),document.ds.raw_time.begin()+2);
         for(const auto& column:document.ds.channels)seed.channels.emplace_back(column.begin(),column.begin()+2);
-        if(active) {g_spectrum_worker.cancel();g_frf_worker.cancel();g_frf_worker.clear_cache();
+        if(active) {cancel_recording_overview();g_overview_worker.trim_cache(0);
+            g_spectrum_worker.cancel();g_frf_worker.cancel();g_frf_worker.clear_cache();
             ++g.spec_generation;++g.frf.generation;g.spec_pending=false;g.frf.pending=false;}
-        document.recording_rows=document.ds.rows();document.ds=std::move(seed);document.recording_source=std::move(source);
+        if(document.ds.rows()>2)document.recording_rows=document.ds.rows();
+        document.ds=std::move(seed);document.recording_source=std::move(source);
+        // Completed spectra need the unchanged file stamp, not a pinned copy
+        // of the now-demoted original arrays.
+        if(document.spec.recording_source)document.spec.recording_source=document.recording_source;
+        document.processed_source.reset();document.processed_source_origin.reset();
         document.overview={};document.overview.render_enabled=true;
         document.transformed_channel_cache.clear();document.transformed_channel_cache_valid.clear();
         document.filtered_channel_cache.clear();document.filtered_channel_cache_valid.clear();
@@ -442,8 +447,7 @@ std::size_t display_load_memory_budget(std::uint64_t available_physical,
     return static_cast<std::size_t>(std::max<std::uint64_t>(1,allowance));
 }
 
-bool start_async_load_task(const std::wstring& wpath, const double* fragment_start,
-                           const double* fragment_end, bool hide_channels) {
+bool start_async_load_task(const std::wstring& wpath) {
     if (g.async_load_stage != AsyncLoadStage::None) {
         g.last_error = "A file is already loading.";
         return false;
@@ -466,15 +470,6 @@ bool start_async_load_task(const std::wstring& wpath, const double* fragment_sta
         }
         auto reservation=budget->reserve(2*load_options.max_resident_bytes);
         if(!reservation) { g.last_error="Unable to reserve memory for loading.";return false; }
-        if(g.cached_scan_valid && lstrcmpiW(g.cached_scan_path.c_str(),wpath.c_str())==0)
-            load_options.scan_index = g.cached_scan_index;
-        if (fragment_start && fragment_end && std::isfinite(*fragment_start) &&
-            std::isfinite(*fragment_end) && *fragment_end > *fragment_start) {
-            load_options.use_time_window = true;
-            load_options.time_start = *fragment_start;
-            load_options.time_end = *fragment_end;
-        }
-
         g.last_error.clear();
         g.async_load_stage = AsyncLoadStage::LoadingFile;
         const unsigned long long token = ++g.async_load_token;
@@ -484,14 +479,12 @@ bool start_async_load_task(const std::wstring& wpath, const double* fragment_sta
 
         const std::wstring path_copy = wpath;
         const HWND target = g.main;
-        g_load_worker = std::thread([token, path_copy, target, load_options, hide_channels, cancel_flag,reservation]() mutable {
+        g_load_worker = std::thread([token, path_copy, target, load_options, cancel_flag,reservation]() mutable {
           try {
             auto result = std::make_unique<AsyncLoadResult>();
             result->memory_reservation=reservation;
             result->token = token;
             result->path = path_copy;
-            result->hide_channels = hide_channels;
-            result->requested_time_window = load_options.use_time_window;
             std::error_code stamp_error;
             const auto source_path=std::filesystem::path(path_copy);
             result->source_size=std::filesystem::file_size(source_path,stamp_error);
@@ -504,16 +497,14 @@ bool start_async_load_task(const std::wstring& wpath, const double* fragment_sta
             if (result->ok) {
                 const std::vector<double>& raw_time = result->ds.raw_time.empty() ? result->ds.time : result->ds.raw_time;
                 lvm::drop_duplicate_time_channels(result->ds, raw_time, cancel_flag.get());
-                if (!load_options.use_time_window && !result->ds.frequency_axis) {
+                if (!result->ds.frequency_axis) {
                     // Sectioned LabVIEW exports can still contain small backward jumps
                     // between blocks; normalize them so the plot stays strictly ordered.
                     lvm::make_monotonic(result->ds.time, cancel_flag.get());
                 }
                 if (result->ds.channel_count() == 0) { result->ok = false; result->error = "No data channels remain after removing duplicate time columns."; }
-                if (!hide_channels) {
-                    result->cached_global_gap_step = precompute_global_gap_step(result->ds.time);
-                    result->cached_global_gap_step_ready = true;
-                }
+                result->cached_global_gap_step = precompute_global_gap_step(result->ds.time);
+                result->cached_global_gap_step_ready = true;
             } else {
                 result->error = result->ds.error;
             }
@@ -536,9 +527,6 @@ static bool start_source_open(const std::wstring& wpath) {
     g.cached_scan_valid = g.cached_scan_valid && g.cached_scan_index &&
         std::filesystem::file_size(std::filesystem::path(wpath), ec) == g.cached_scan_index->file_size && !ec &&
         std::filesystem::last_write_time(std::filesystem::path(wpath), ec) == g.cached_scan_index->modified && !ec;
-    if (g.cached_scan_valid && lstrcmpiW(g.cached_scan_path.c_str(), wpath.c_str()) == 0) {
-        return start_async_scan_task(wpath);
-    }
     return start_async_scan_task(wpath);
 }
 
@@ -624,7 +612,7 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             bool accepted=false;
             if(result->resident_data.ok) {
                 g.cached_scan_path=result->path;g.cached_scan_valid=true;g.cached_scan_index=result->index;
-                accepted=apply_loaded_dataset(std::move(result->resident_data),result->path,false,false,
+                accepted=apply_loaded_dataset(std::move(result->resident_data),result->path,false,
                     result->resident_gap_step,true,lvm::RecordingStamp{result->index->file_size,result->index->modified},result->resident_filter_step);
                 result->resident_data={};result->resident_reservation.reset();
             } else accepted=apply_scanned_recording(*result);
@@ -676,8 +664,8 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 continue_open_queue();
                 return 0;
             }
-            const bool accepted=apply_loaded_dataset(std::move(result->ds), result->path, result->hide_channels,
-                                 result->requested_time_window, result->cached_global_gap_step,
+            const bool accepted=apply_loaded_dataset(std::move(result->ds), result->path,
+                                 false, result->cached_global_gap_step,
                                  result->cached_global_gap_step_ready,result->source_stamp_valid
                                     ? std::optional<lvm::RecordingStamp>{{result->source_size,result->source_modified}} : std::nullopt);
             result->ds={};result->memory_reservation.reset();

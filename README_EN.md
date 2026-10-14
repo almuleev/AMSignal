@@ -103,6 +103,12 @@ handled separately by filling with the channel mean, without shifting channels.
 The screenshots above show the real application interface.
 The graph previews below are based on the bundled sample input files from [`lvm_files_for_tests`](lvm_files_for_tests).
 
+## Code signing policy
+
+Free SignPath Foundation signing integration is prepared; provider acceptance
+and the first signed release are pending. See the [code signing policy](docs/CODE_SIGNING.md).
+Existing downloads must not be assumed to have a trusted signature.
+
 ## Quick Start
 
 ### Download a ready-to-run build

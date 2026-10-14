@@ -77,6 +77,32 @@ std::shared_ptr<const RecordingSource> RecordingSource::from_memory(Dataset&& da
     return source;
 }
 
+std::uint64_t RecordingSource::dataset_array_bytes(const Dataset& data) {
+    auto bytes=saturated_add(data.time.capacity()*sizeof(double),data.raw_time.capacity()*sizeof(double));
+    bytes=saturated_add(bytes,data.channels.capacity()*sizeof(std::vector<double>));
+    for(const auto& values:data.channels)bytes=saturated_add(bytes,values.capacity()*sizeof(double));
+    return bytes;
+}
+std::shared_ptr<const RecordingSource> RecordingSource::from_resident(Dataset& data,
+    std::shared_ptr<const RecordingSource> file,std::shared_ptr<MemoryBudget> budget,double filter_step) {
+    if(!file || !file->file_backed() || !budget || !data.ok || data.rows()<3 ||
+       data.source_columns!=file->physical_columns() || data.time.front()!=file->bounds().start ||
+       data.time.back()!=file->bounds().end || !std::isfinite(filter_step) || filter_step<=0 ||
+       !std::is_sorted(data.time.begin(),data.time.end()) ||
+       !std::all_of(data.time.begin(),data.time.end(),[](double t){return std::isfinite(t);}) ||
+       !std::all_of(data.channels.begin(),data.channels.end(),[&](const auto& values){return values.size()==data.rows();}))
+        throw RecordingFailure(RecordingError::InvalidRequest,"Invalid resident recording transfer.");
+    auto source=std::const_pointer_cast<RecordingSource>(from_file(file->path(),file->bounds(),
+        file->physical_columns(),file->scan_index(),file->stamp(),filter_step));
+    auto memory=std::make_shared<Dataset>();
+    source->resident_reservation_=budget->transfer_resident(dataset_array_bytes(data));
+    if(!source->resident_reservation_)
+        throw RecordingFailure(RecordingError::ResourceLimit,"Resident recording accounting is unavailable.");
+    // No throwing operations after the transfer: the document can replace its
+    // now-empty Dataset with its preallocated metadata/seed immediately.
+    *memory=std::move(data);source->memory_=std::move(memory);return source;
+}
+
 void RecordingSource::check_current() const {
     if(raw_) {raw_->check_current();return;}
     if (stamp_ && !same_stamp(*stamp_, read_stamp(path_, RecordingError::SourceChanged)))

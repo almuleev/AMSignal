@@ -534,6 +534,8 @@ void set_side_panel_tab(int tab) {
     if (g.side_tab_points) InvalidateRect(g.side_tab_points, nullptr, FALSE);
     if (g.side_tab_filter) InvalidateRect(g.side_tab_filter, nullptr, FALSE);
     if (show_channels) {
+        set_toggle_checked(g.side_stitch_gaps,g.stitch_time_gaps);
+        if(g.side_stitch_gaps)EnableWindow(g.side_stitch_gaps,has_data() && !g.ds.frequency_axis);
         load_side_transform_controls();
     } else if (show_points) {
         populate_side_point_group_list();
@@ -554,6 +556,7 @@ void refresh_side_panel_controls() {
     sync_point_display_from_active_group();
     if (g.sidepanel_btn) SetWindowTextW(g.sidepanel_btn, side_panel_button_text());
     if (g.side_tab_channels) SetWindowTextW(g.side_tab_channels, side_tab_channels_text());
+    if (g.side_stitch_gaps) SetWindowTextW(g.side_stitch_gaps,stitch_gaps_toggle_text());
     if (g.side_tab_points) SetWindowTextW(g.side_tab_points, side_tab_points_text());
     if (g.side_tab_filter) SetWindowTextW(g.side_tab_filter, side_tab_filter_text());
     if (g.side_channel_hint) SetWindowTextW(g.side_channel_hint, side_channel_hint_text());

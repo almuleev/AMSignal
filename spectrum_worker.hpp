@@ -13,7 +13,6 @@ class SpectrumWorker {
 public:
     struct Result { std::uint64_t generation; Spectrum spectrum; };
     struct AffineTransform { double mul = 1.0, add = 0.0; };
-    using Prepare = std::function<Dataset(const std::atomic<bool>*,std::shared_ptr<MemoryBudget::Reservation>&)>;
     using Compute = std::function<Spectrum(const std::atomic<bool>*)>;
     SpectrumWorker() = default;
     ~SpectrumWorker();
@@ -21,8 +20,6 @@ public:
                 std::vector<AffineTransform> transforms = {},AnalysisResources resources = {},
                 std::shared_ptr<MemoryBudget::Reservation> reservation = {},Compute fallback = {},
                 std::shared_ptr<const RecordingSource> source = {});
-    void submit_source(Prepare prepare,std::vector<std::size_t> source_channels,
-                       std::uint64_t generation,AnalysisResources resources);
     void submit_computation(Compute compute,std::vector<std::size_t> source_channels,std::uint64_t generation);
     void cancel();
     // Terminal, idempotent cancel+join. Call before destroying process-wide
@@ -38,7 +35,6 @@ private:
         std::uint64_t generation;
         std::shared_ptr<std::atomic<bool>> cancelled;
         AnalysisResources resources;
-        Prepare prepare;
         Compute compute;
         Compute fallback;
         std::shared_ptr<const RecordingSource> source;

@@ -496,8 +496,6 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
             } else if (key == "stitch_time_gaps") {
                 parse_bool(value, g.stitch_time_gaps);
                 if (g.stitch_time_gaps) hide_gap_details_card();
-            } else if (key == "light_mode") {
-                // Obsolete project key is deliberately ignored; source selection is automatic.
             } else if (key == "auto_y") {
                 parse_bool(value, g.auto_y);
             } else if (key == "y_lock_min") {

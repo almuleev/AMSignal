@@ -54,8 +54,8 @@ if ($Test) {
         $outName = Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) $outName
     }
     $resourceObject = Join-Path $objectDir 'AM_logo_res.o'
-    & windres -O coff -i AM_logo.rc -o $resourceObject
-    if ($LASTEXITCODE -ne 0) { throw 'Resource compilation failed.' }
+    . (Join-Path $PSScriptRoot 'build_version_resource.ps1')
+    Build-VersionResource -Version $version -OriginalFilename "AMSignal-$releaseVersion-x64.exe" -OutputPath $resourceObject
     & g++ -municode -static -mwindows -o $outName $resourceObject @objects @libraries
 }
 if ($LASTEXITCODE -ne 0) { throw "Link failed: $outName (exit $LASTEXITCODE)." }

@@ -226,6 +226,7 @@ bool is_side_toggle_id(int id) {
            id == IDC_SIDE_PT_DIST ||
            id == IDC_SIDE_PT_SNAP ||
            id == IDC_SIDE_FILTER_ENABLE ||
+           id == IDC_SIDE_STITCH_GAPS ||
            id == IDC_SIDE_POINT_GROUP_VISIBLE;
 }
 
@@ -247,8 +248,7 @@ bool is_settings_hotkey_modifier_id(int id) {
 
 bool is_settings_checkbox_id(int id) {
     return id == IDC_SET_GAP_MARKERS ||
-           id == IDC_SET_MEMORY_AUTO ||
-           id == IDC_SET_STITCH_GAPS;
+           id == IDC_SET_MEMORY_AUTO;
 }
 
 bool uses_manual_toggle_state(HWND hwnd) {
@@ -258,7 +258,6 @@ bool uses_manual_toggle_state(HWND hwnd) {
            is_side_toggle_id(id) ||
            id == IDC_SET_GAP_MARKERS ||
            id == IDC_SET_MEMORY_AUTO ||
-           id == IDC_SET_STITCH_GAPS ||
            id == IDC_EXPORT_APPLY_SETTINGS ||
            id == IDC_EXPORT_APPLY_DATA ||
            id == IDC_EXPORT_INCLUDE_CHANNEL_NAMES ||

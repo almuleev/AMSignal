@@ -33,8 +33,6 @@ struct AsyncLoadResult {
     lvm::Dataset ds;
     bool ok = false;
     bool cancelled = false;
-    bool hide_channels = false;
-    bool requested_time_window = false;
     double cached_global_gap_step = 0.0;
     bool cached_global_gap_step_ready = false;
     std::string error;
@@ -48,8 +46,8 @@ void request_async_load_cancel();
 // Registers the per-user Windows association for AMSignal project files.
 void register_project_file_association();
 
-bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath, bool hide_channels,
-                          bool requested_time_window, double cached_global_gap_step,
+bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
+                          bool source_preview, double cached_global_gap_step,
                           bool cached_global_gap_step_ready,
                           std::optional<lvm::RecordingStamp> expected_stamp = {},double source_filter_step=0);
 // Releases full resident samples without changing the numerical input/settings.
@@ -64,8 +62,7 @@ bool apply_scanned_recording(AsyncScanResult& result);
 std::size_t display_load_memory_budget(std::uint64_t available_physical,
                                      std::uint64_t available_commit);
 
-bool start_async_load_task(const std::wstring& wpath, const double* fragment_start = nullptr,
-                           const double* fragment_end = nullptr, bool hide_channels = false);
+bool start_async_load_task(const std::wstring& wpath);
 
 bool load_path_interactive(const std::wstring& wpath);
 

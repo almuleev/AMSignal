@@ -18,22 +18,40 @@ bool requires_processed() {
     return g.noise_threshold_enabled || std::find(g.channel_transform_kind.begin(),g.channel_transform_kind.end(),TransformRuntimeKind::CachedFormula)!=g.channel_transform_kind.end();
 }
 }
+void enable_background_signal_processing() {
+    if(g.overview.render_enabled || !g.noise_threshold_enabled || g.ds.frequency_axis ||
+       g.current_file_partial || !g.recording_source || !g.recording_source->file_backed())return;
+    const auto visible=std::count(g.visible.begin(),g.visible.end(),char{1});
+    // Small signals retain the immediate resident path. Large filtered views
+    // must not cycle whole-channel caches from inside WM_PAINT.
+    if(!visible || g.ds.rows()<=262144/static_cast<std::size_t>(visible))return;
+    if(share_resident_recording())return;
+    g.recording_rows=g.ds.rows();
+    g.overview.render_enabled=true;
+    for(auto& values:g.filtered_channel_cache)std::vector<double>().swap(values);
+    std::fill(g.filtered_channel_cache_valid.begin(),g.filtered_channel_cache_valid.end(),0);
+}
 bool request_recording_overview(const std::filesystem::path& cache,lvm::AnalysisRange range,
                                std::vector<std::size_t> channels,std::size_t pixels,bool display_density) {
     cancel_recording_overview();
-    g.overview.generation=++next_generation;
     try {
+        // Admission may demote a resident document and replace its source.
+        // Capture source/revision/generation only after that transition.
+        auto budget=current_analysis_resources(24ULL*1024*1024).budget;
+        g.overview.generation=++next_generation;
         lvm::OverviewWorker::Request request;
         ensure_channel_formula_vectors();
         bool processed=g.noise_threshold_enabled;
         for(auto kind:g.channel_transform_kind)processed=processed || kind==TransformRuntimeKind::CachedFormula;
-        request.source=processed ? processed_recording_source() : g.recording_source;
+        // A full resident document used the GUI cadence. Preserve it when
+        // moving its display processing to the worker; seed rows cannot set Fs.
+        const double filter_step=!g.current_file_partial && g.ds.rows()>2 ? current_filter_sample_step() : 0;
+        request.source=processed ? processed_recording_source(true,filter_step,budget) : g.recording_source;
         request.index=g.overview.index;
         if(request.index && request.index->source()!=request.source)request.index.reset();
         g.overview.source=request.source;g.overview.numerical=g.numerical_revision;
         request.generation=g.overview.generation;request.cache=cache;
         if(cache.empty() || processed){request.cache.clear();request.managed_cache=recording_overview_cache();}
-        auto budget=current_analysis_resources(24ULL*1024*1024).budget;
         request.cache_bytes=static_cast<std::size_t>(std::min<std::uint64_t>(128ULL*1024*1024,budget->limit()/8));
         request.build.budget=budget;request.view.budget=std::move(budget);
         // The binary time axis costs 8N bytes. Reserve an explicit allowance
@@ -57,7 +75,7 @@ bool request_recording_overview(const std::filesystem::path& cache,lvm::Analysis
         g.overview.requested_channels=request.view.channels;g.overview.requested_pixels=pixels;
         g.overview.requested_display_density=display_density;
         g.overview.requested_resource_policy=g.resource_policy;
-        g_overview_worker.submit(std::move(request));g.overview.pending=true;return true;
+        g_overview_worker.submit(std::move(request));g.overview.pending=true;g.overview.progress_percent=-1;return true;
     } catch(const lvm::RecordingFailure& e) {g.overview.error=e.error;}
       catch(const std::bad_alloc&) {g.overview.error=lvm::RecordingError::ResourceLimit;}
       catch(...) {g.overview.error=lvm::RecordingError::ReadFailure;}
@@ -65,11 +83,21 @@ bool request_recording_overview(const std::filesystem::path& cache,lvm::Analysis
 }
 void cancel_recording_overview() {
     cancel_overview_snap();
-    g_overview_worker.cancel();g.overview.pending=false;
+    g_overview_worker.cancel();g.overview.pending=false;g.overview.progress_percent=-1;
     g.overview.generation=++next_generation;g.overview.error.reset();
 }
 bool poll_recording_overview() {
     auto result=g_overview_worker.take_result();
+    if(!result && g.overview.pending) {
+        const auto progress=g_overview_worker.progress();
+        const int percent=progress.generation==g.overview.generation &&
+            progress.phase==lvm::OverviewWorker::Phase::Building && g.recording_rows && progress.rows
+            ? static_cast<int>(std::min<long double>(99,100.0L*progress.rows/g.recording_rows)) : -1;
+        if(percent!=g.overview.progress_percent) {
+            g.overview.progress_percent=percent;
+            if(g.main && g.mode==AnalysisMode::Time)invalidate_plot();
+        }
+    }
     if(!result || result->generation!=g.overview.generation || result->source!=g.overview.source ||
        (!result->source->processing_identity().empty() && g.overview.numerical!=g.numerical_revision))return false;
     if(!result->error) {
@@ -92,13 +120,10 @@ bool poll_recording_overview() {
     if(g.main)invalidate_plot();
     return true;
 }
-bool overview_processing_supported() {
-    ensure_channel_formula_vectors();
-    return true;
-}
 bool synchronize_overview_viewport(std::size_t pixels) {
-    if(!g.overview.render_enabled || !overview_processing_supported() || !g.recording_source ||
+    if(!g.overview.render_enabled || !g.recording_source ||
        !g.recording_source->file_backed() || g.win_end<=g.win_start || !pixels)return false;
+    ensure_channel_formula_vectors();
     try{g.recording_source->check_current();}
     catch(const lvm::RecordingFailure& e) {
         cancel_recording_overview();g.overview.view.reset();g.overview.index.reset();
@@ -138,7 +163,7 @@ bool overview_view_can_render() {
 }
 bool overview_time_yrange(double& minimum,double& maximum) {
     minimum=-1;maximum=1;
-    if(!overview_processing_supported() || !overview_view_can_render())return false;
+    if(!overview_view_can_render())return false;
     double low=std::numeric_limits<double>::infinity(),high=-low;
     for(const auto& bucket:g.overview.view->buckets)for(std::size_t k=0;k<bucket.channels.size();++k) {
         if(bucket.last_time<g.win_start || bucket.first_time>g.win_end)continue;

@@ -12,14 +12,10 @@ enum class ExportRangeMode {
 };
 
 const wchar_t* export_prompt_title_text(bool english);
-const wchar_t* export_prompt_intro_text(bool english);
 std::wstring export_range_title_text(ExportRangeMode range, bool english);
 const wchar_t* export_prompt_continue_text(bool english);
 const wchar_t* export_prompt_cancel_text(bool english);
-const wchar_t* export_apply_processing_text(bool english);
-const wchar_t* export_processing_settings_text(bool english);
 const wchar_t* export_include_channel_names_text(bool english);
-const wchar_t* export_include_hidden_channels_text(bool english);
 const wchar_t* export_include_points_text(bool english);
 const wchar_t* export_include_markers_text(bool english);
 const wchar_t* export_include_guides_text(bool english);

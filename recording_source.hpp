@@ -43,6 +43,11 @@ public:
         std::optional<RecordingStamp> expected = {},double filter_sample_step=0);
     // Takes ownership without copying sample arrays. Input must already be prepared.
     static std::shared_ptr<const RecordingSource> from_memory(Dataset&& data);
+    // Moves prepared arrays only after validation/allocation/admission succeeds.
+    // The file descriptor remains available for invalidation and later demotion.
+    static std::shared_ptr<const RecordingSource> from_resident(Dataset& data,
+        std::shared_ptr<const RecordingSource> file,std::shared_ptr<MemoryBudget> budget,double filter_step);
+    static std::uint64_t dataset_array_bytes(const Dataset& data);
     using Replay = std::function<void(const RecordingReadRequest&,const RecordingBlockConsumer&,const std::atomic<bool>*)>;
     // Immutable processing view. The identity includes the processing recipe;
     // its replay owns causal state and must return only the requested interval.
@@ -55,18 +60,22 @@ public:
     const TimeRange& bounds() const { return bounds_; }
     std::size_t channel_count() const { return physical_columns_.size(); }
     std::optional<std::size_t> sample_count() const {
-        return memory_ ? std::optional<std::size_t>(memory_->rows()) : std::nullopt;
+        return memory_ ? std::optional<std::size_t>(memory_->rows()) : raw_ ? raw_->sample_count() : std::nullopt;
     }
     const std::optional<RecordingStamp>& stamp() const { return stamp_; }
-    bool file_backed() const { return !memory_; }
+    bool file_backed() const { return !path_.empty(); }
+    bool resident_backed() const { return memory_ || (raw_ && raw_->resident_backed()); }
+    const Dataset* resident_data() const { return memory_ ? memory_.get() : raw_ ? raw_->resident_data() : nullptr; }
     const std::filesystem::path& path() const { return path_; }
     const std::vector<std::size_t>& physical_columns() const { return physical_columns_; }
+    const std::shared_ptr<const ScanIndex>& scan_index() const { return raw_ ? raw_->scan_index() : index_; }
     // Throws on stale/missing sources. Checks before/after reads and each block.
     void check_current() const;
     std::size_t replay(const RecordingReadRequest& request, const RecordingBlockConsumer& consume,
                        const std::atomic<bool>* cancel = nullptr) const;
 
 private:
+    std::shared_ptr<MemoryBudget::Reservation> resident_reservation_;
     TimeRange bounds_;
     std::filesystem::path path_;
     std::vector<std::size_t> physical_columns_;

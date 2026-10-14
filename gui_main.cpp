@@ -47,6 +47,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if(wp==2){poll_recording_overview();poll_overview_snap();poll_source_export();}
             return handle_playback_message(hwnd, msg, wp, lp);
         case WM_CANCELMODE:
+        case WM_CAPTURECHANGED:
         case WM_SETCURSOR:
         case WM_MOUSEWHEEL:
         case WM_LBUTTONDOWN:

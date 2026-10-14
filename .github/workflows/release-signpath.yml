@@ -1,0 +1,164 @@
+name: Signed release (SignPath Foundation)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag on main (for example v0.17.0-rc.4)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signpath-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'almuleev/AMSignal' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      commit: ${{ steps.source.outputs.commit }}
+      artifact_id: ${{ steps.unsigned.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify configuration and immutable release source
+        id: source
+        shell: pwsh
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          SIGNPATH_ENABLED: ${{ vars.SIGNPATH_ENABLED }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          SIGNPATH_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_CONFIGURATION_SLUG }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SIGNPATH_ENABLED -ne 'true') { throw 'SignPath is not activated. See docs/CODE_SIGNING.md.' }
+          foreach ($name in @('SIGNPATH_ORGANIZATION_ID','SIGNPATH_PROJECT_SLUG','SIGNPATH_POLICY_SLUG','SIGNPATH_CONFIGURATION_SLUG')) {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing repository variable: $name" }
+          }
+          if ($env:REQUESTED_TAG -notmatch '^v(\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?)$') { throw 'Invalid release tag.' }
+          $version = $Matches[1]
+          $ref = 'refs/tags/' + $env:REQUESTED_TAG
+          $commit = git rev-parse --verify ($ref + '^{commit}')
+          if ($LASTEXITCODE -ne 0) { throw 'Release tag does not exist.' }
+          git merge-base --is-ancestor $commit origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release source is not part of main.' }
+          git checkout --detach $commit
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot check out release source.' }
+          if (-not (Test-Path docs/signpath-artifact.xml)) { throw 'This tag predates the signing integration. Use a new release tag.' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-binutils
+      - name: Core and GUI regressions
+        shell: msys2 {0}
+        run: make test test-gui CXX=g++
+      - name: Production GUI and CLI
+        shell: msys2 {0}
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build_cli.ps1 || exit $?
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build_gui.ps1 || exit $?
+      - name: Check metadata and stage only project executables
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          ./verify_release_binaries.ps1 -InputDirectory . -Version $env:RELEASE_VERSION
+          ./tests/release_signing.ps1 -InputDirectory . -Version $env:RELEASE_VERSION
+          New-Item -ItemType Directory dist/signpath-input | Out-Null
+          Copy-Item -LiteralPath "AMSignal-${env:RELEASE_VERSION}-x64.exe", 'lvm_reader.exe' -Destination dist/signpath-input
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: unsigned
+        with:
+          name: signpath-input
+          path: dist/signpath-input/*
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      - name: Submit request and wait for maintainer approval in SignPath
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ needs.build.outputs.artifact_id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed
+          parameters: |
+            version: ${{ toJSON(needs.build.outputs.version) }}
+      - name: Verify signatures, then package and hash the signed bytes
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          ./package_release.ps1 -InputDirectory signed -Version $env:RELEASE_VERSION -OutputDir dist/signed/package -RequireSignature -Zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-signed-release
+          path: |
+            dist/signed/*.zip
+            dist/signed/*.sha256
+            dist/signed/package/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    needs: [build, sign]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-signed-release
+          path: release-files
+      - name: Create a draft with verified signed assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $existing = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'Release already exists. Its assets will not be overwritten.' }
+          $assets = @(Get-ChildItem release-files -Recurse -File | ForEach-Object FullName)
+          $notes = @('Signed Windows GUI and CLI; SHA-256 checksums attached.', '',
+            'Code signing policy: https://github.com/almuleev/AMSignal/blob/main/docs/CODE_SIGNING.md', '',
+            'Review and complete the release notes before publishing this draft.')
+          [IO.File]::WriteAllLines('release-notes.md', $notes)
+          $arguments = @('release','create',$env:RELEASE_TAG,'--repo',$env:GITHUB_REPOSITORY,
+            '--verify-tag','--draft','--title',"AMSignal $env:RELEASE_TAG",'--notes-file','release-notes.md')
+          if ($env:RELEASE_TAG.Contains('-')) { $arguments += '--prerelease' }
+          & gh @arguments @assets
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create release draft.' }

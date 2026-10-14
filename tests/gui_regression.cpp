@@ -6,6 +6,7 @@
 #include "../gui_frf_render.hpp"
 #include "../gui_input.hpp"
 #include "../gui_navigation.hpp"
+#include "../gui_playback.hpp"
 #include "../gui_hotkeys.hpp"
 #include "../gui_window.hpp"
 #include "../gui_layout.hpp"
@@ -35,6 +36,7 @@
 #include "../gui_controls.hpp"
 #include "../gui_recording_cache.hpp"
 #include "../gui_recording_processing.hpp"
+#include "../gui_filter_state_cache.hpp"
 #include "../gui_source_export.hpp"
 #include "../disk_spectrum.hpp"
 using namespace gui;
@@ -128,6 +130,7 @@ void document_history_and_save_state() {
     require(active_document_has_unsaved_changes(), "new edit after saving marks the project dirty again");
 
     DocumentState other = static_cast<DocumentState&>(g);
+    g.stitch_time_gaps=true;other.stitch_time_gaps=false;
     other.file_name = L"other.lvm";
     other.history.reset();
     other.project_revision = 0;
@@ -137,6 +140,7 @@ void document_history_and_save_state() {
     g.inactive_documents.push_back(std::move(other));
     const std::size_t first_history_count = g_undo.size();
     require(switch_to_document(1), "switches to an inactive document for independent history");
+    require(!g.stitch_time_gaps,"switching files restores that file's independent stitching choice");
     require(g_undo.empty(), "inactive document starts with its own empty undo history");
     GuideLine second;
     second.value = 2.0;
@@ -147,6 +151,7 @@ void document_history_and_save_state() {
     push_undo(second_action);
     require(g_undo.size() == 1, "second document receives its own undo action");
     require(switch_to_document(1), "switches back to the first document");
+    require(g.stitch_time_gaps,"returning to the first file restores its enabled stitching");
     require(g_undo.size() == first_history_count, "first document restores its own undo history");
     require(active_document_has_unsaved_changes(), "first document restores its independent dirty state");
 }
@@ -207,6 +212,7 @@ void exports() {
     g.global_formula = L"2*x"; g.channel_formulas = {L"x+1", L"x-1"};
     g.noise_threshold_enabled = true; g.noise_threshold_min = 0.25; g.noise_threshold_max = 0.75;
     g.distinguish_curves = true;
+    g.stitch_time_gaps = true;
     g.show_channel_legend = false;
     g.frf.apply_processing = false;
     g.frf.logarithmic_frequency_axis = false;
@@ -226,6 +232,7 @@ void exports() {
             "project restores formulas without baking them into data");
     require(g.noise_threshold_enabled, "project restores filter settings");
     require(g.distinguish_curves, "project restores grayscale curve symbols");
+    require(g.stitch_time_gaps,"project restores the document's stitching choice");
     require(!g.show_channel_legend, "project restores hidden channel legend");
     require(!g.frf.apply_processing, "project restores the FRF raw-channel choice");
     require(!g.frf.logarithmic_frequency_axis && !g.frf.show_reference_amplitude &&
@@ -533,6 +540,35 @@ void user_axis_names_outside_plot() {
     g_theme = previous_theme;
 }
 
+void spectrum_pending_message() {
+    reset_document({"A"},{0,1,2,3},{{1,2,3,4}});
+    g.mode=AnalysisMode::FFT;g.spec_attempted=true;g.spec_visible_state=g.visible;
+    const auto* previous_theme=g_theme;
+    HDC dc=CreateCompatibleDC(nullptr);BITMAPINFO info{};
+    info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=640;info.bmiHeader.biHeight=-300;
+    info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+    void* pixels=nullptr;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&pixels,nullptr,0);
+    require(bitmap && pixels,"spectrum waiting notice has a real GDI rendering surface");
+    const auto old_bitmap=SelectObject(dc,bitmap);
+    HFONT font=CreateFontW(-18,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,ANTIALIASED_QUALITY,DEFAULT_PITCH,L"Segoe UI");
+    const auto old_font=SelectObject(dc,font);g.ui_font=g.axis_font=font;
+    const RECT plot{50,40,600,240};auto* data=static_cast<unsigned long*>(pixels);
+    for(const auto* theme:{&kLightTheme,&kDarkTheme})for(const auto* language:{&kEn,&kRu})for(int state=0;state<3;++state) {
+        g_theme=theme;g_str=language;g.spec_pending=state==0;g.spec.error=state==1 ? "FFT test error" : "";
+        draw_axes(dc,plot,0,1,0,1);GdiFlush();
+        const std::vector<unsigned long> axes(data,data+640*300);
+        draw_freq(dc,plot);GdiFlush();
+        int top=300,bottom=-1,count=0;
+        for(int y=plot.top+24;y<plot.top+60;++y)for(int x=plot.left+24;x<plot.right-24;++x)
+            if((data[y*640+x]&0xffffff)!=(axes[y*640+x]&0xffffff)){++count;top=std::min(top,y);bottom=std::max(bottom,y);}
+        require(count>40 && bottom-top>=8,
+            "spectrum pending/error/unavailable notice renders full glyphs despite axis baseline alignment in both languages/themes");
+    }
+    SelectObject(dc,old_font);g.ui_font=g.axis_font=nullptr;DeleteObject(font);
+    SelectObject(dc,old_bitmap);DeleteObject(bitmap);DeleteDC(dc);g_theme=previous_theme;g_str=&kEn;
+}
+
 void channel_legend_visibility() {
     reset_document({"A", "B"}, {0,1,2,3}, {{1,2,3,4},{2,3,4,5}});
     require(g.show_channel_legend, "old and new documents show the legend by default");
@@ -601,6 +637,115 @@ void channel_legend_visibility() {
     SelectObject(dc, old_bitmap);
     DeleteObject(bitmap);
     DeleteDC(dc);
+}
+
+void shift_range_with_point_mode() {
+    const auto window=CreateWindowExW(0,L"STATIC",L"Shift range selection",WS_POPUP,0,0,1000,650,
+        nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(window!=nullptr,"Shift selection regression has a hidden window");
+    struct Cleanup {HWND hwnd;~Cleanup(){if(GetCapture()==hwnd)ReleaseCapture();DestroyWindow(hwnd);g.main=nullptr;}} cleanup{window};
+    for(bool points:{false,true}) for(bool locked:{false,true}) for(bool stitched:{false,true}) {
+        reset_document({"A"},{0,1,2,102,103,104},{{0,1,2,1,0,1}});
+        g.main=window;g.measure_mode=points;g.annotations_locked=locked;
+        g.show_channel_legend=false;g.stitch_time_gaps=stitched;g.snap_to_data=false;
+        const RECT plot=plot_rect();g.vrect=plot;g.vx0=0;g.vx1=stitched_time_from_raw(104);
+        g.vy0=0;g.vy1=2;g.vvalid=true;
+        const int start=plot.left+(plot.right-plot.left)/4;
+        const int end=plot.left+3*(plot.right-plot.left)/4;
+        const int y=(plot.top+plot.bottom)/2;
+        const auto raw_at=[&](int x){return raw_time_from_stitched(
+            double(x-plot.left)/(plot.right-plot.left)*stitched_time_from_raw(104));};
+        const double start_time=raw_at(start),end_time=raw_at(end);
+        PointGroup group;group.points={{start_time,1}};g.point_groups.push_back(group);
+        g.show_gap_markers=true;
+        g.visible_gap_markers.push_back({{start-5,plot.top,start+5,plot.bottom},100,100});
+        seek_playhead(start_time);
+        handle_input_message(window,WM_LBUTTONDOWN,MK_SHIFT|MK_LBUTTON,MAKELPARAM(start,y));
+        require(g.fft_selecting && !g.point_click_pending && !g.dragging && !g.playhead_dragging &&
+                g.annotation_drag_kind==App::AnnotationDragKind::None && !g.gap_click_pending,
+            "Shift selects a range ahead of points, gap cards and the red timeline, including locked annotations");
+        handle_input_message(window,WM_MOUSEMOVE,MK_SHIFT|MK_LBUTTON,MAKELPARAM(end,y));
+        // Releasing Shift before the mouse must still finish the range gesture.
+        handle_input_message(window,WM_LBUTTONUP,0,MAKELPARAM(end,y));
+        require(!g.fft_selecting && has_fft_window(),"releasing the mouse commits the selected analysis interval");
+        near(g.fft_window_start,start_time,"Shift range begins at the original acquisition coordinate");
+        near(g.fft_window_end,end_time,"Shift range ends at the original acquisition coordinate");
+        require(g.point_groups.front().points==group.points && g.playhead==start_time &&
+                g.measure_mode==points && g.win_start==0 && g.win_end==104,
+            "Shift selection preserves points, timeline, point mode and viewport");
+        require(g_undo.size()==1,"a Shift range selection creates one undo entry");
+        pop_undo();require(!has_fft_window(),"undo restores the previous whole-recording analysis range");
+        pop_redo();require(has_fft_window() && g.fft_window_start==start_time && g.fft_window_end==end_time,
+            "redo restores the exact selected interval");
+        handle_input_message(window,WM_LBUTTONDOWN,MK_SHIFT,MAKELPARAM((start+end)/2,y));
+        handle_input_message(window,WM_LBUTTONUP,0,MAKELPARAM((start+end)/2,y));
+        require(!has_fft_window() && g.point_groups.front().points==group.points,
+            "Shift clicking the selected interval clears it without placing a point");
+        if(points && !locked) {
+            reset_playback();
+            handle_input_message(window,WM_LBUTTONDOWN,0,MAKELPARAM(end,y));
+            handle_input_message(window,WM_LBUTTONUP,0,MAKELPARAM(end,y));
+            std::size_t count=0;for(const auto& item:g.point_groups)count+=item.points.size();
+            require(count==2 && !has_fft_window(),"a plain click still places a point with point mode enabled");
+        }
+    }
+}
+
+void playback_timeline_controls() {
+    reset_document({"A"},{0,1,2,3,4},{{0,1,2,1,0}});
+    const auto window=CreateWindowExW(0,L"STATIC",L"Playback timeline",WS_POPUP,0,0,1000,650,
+        nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(window!=nullptr,"playback regression has a real hidden timer owner");g.main=window;
+    struct Cleanup {HWND hwnd;~Cleanup(){stop_play();if(GetCapture()==hwnd)ReleaseCapture();DestroyWindow(hwnd);g.main=nullptr;}} cleanup{window};
+    set_fft_window(1,3);const auto numerical=g.numerical_revision;
+    g.win_start=3;g.win_end=4;seek_playhead(4);start_play();
+    require(g.playing && g.playhead_active && g.playhead==0 && g.win_start==0 && g.win_end==1,
+        "playback after EOF restarts at the recording beginning and restores a visible window");
+    LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);g.play_anchor_qpc.QuadPart-=frequency.QuadPart*10;
+    handle_playback_message(window,WM_TIMER,1,0);
+    require(!g.playing && g.playhead_active && g.playhead==4,"EOF pauses playback without trapping its visible timeline");
+    start_play();require(g.playing && g.playhead==0,"playback can be started again after a completed run");
+    stop_play();seek_playhead(1.5);start_play();
+    require(g.playing && g.play_anchor_data==1.5,"resume uses the explicitly chosen timeline position");stop_play();
+    g.win_start=0;g.win_end=4;g.vrect=plot_rect();g.vx0=0;g.vx1=4;g.vy0=0;g.vy1=2;g.vvalid=true;
+    const auto px=[&](double fraction){return g.vrect.left+static_cast<int>(fraction*(g.vrect.right-g.vrect.left));};
+    const int y=g.vrect.top+40;
+    require(hit_test_playhead(px(1.5/4),y) && !hit_test_playhead(px(.9),y),"only the visible red line claims timeline dragging");
+    handle_input_message(window,WM_LBUTTONDOWN,0,MAKELPARAM(px(1.5/4),y));
+    require(g.playhead_dragging && g.playhead_selected && !g.point_click_pending,"red timeline can be grabbed even with point mode enabled");
+    handle_input_message(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(px(.75),y));
+    handle_input_message(window,WM_LBUTTONUP,0,MAKELPARAM(px(.75),y));
+    require(!g.playhead_dragging && !g.playing && std::fabs(g.playhead-3)<.01 && g.point_groups.empty(),
+        "timeline dragging seeks without adding an annotation or moving the viewport");
+    handle_input_message(window,WM_KEYDOWN,VK_DELETE,0);
+    require(!g.playhead_active && !g.playing,"Delete removes the selected timeline");
+    seek_playhead(2);handle_input_message(window,WM_KEYDOWN,VK_ESCAPE,0);
+    require(!g.playhead_active && has_fft_window() && g.fft_window_start==1 && g.fft_window_end==3,
+        "Escape hides the timeline while preserving the numerical analysis interval");
+    seek_playhead(2);handle_input_message(window,WM_RBUTTONDOWN,0,MAKELPARAM(px(.5),y));
+    require(!g.playhead_active,"right click on the red line removes it");
+    seek_playhead(2);handle_input_message(window,WM_LBUTTONDOWN,0,MAKELPARAM(px(.5),y));
+    handle_input_message(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(px(.9),y));
+    handle_input_message(window,WM_KEYDOWN,VK_ESCAPE,0);
+    require(g.playhead_active && !g.playhead_dragging && g.playhead==2,"Escape during a timeline drag restores its previous position");
+    g.overview.render_enabled=true;g.recording_rows=g.ds.rows();
+    handle_input_message(window,WM_LBUTTONDOWN,0,MAKELPARAM(px(.5),y));
+    handle_input_message(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(px(.8),y));
+    handle_input_message(window,WM_CAPTURECHANGED,0,0);
+    require(!g.playhead_dragging && g.playhead==2,"losing capture cancels timeline dragging in the source renderer");
+    if(GetCapture()==window)ReleaseCapture();
+    handle_commands_message(window,WM_COMMAND,IDM_STOP_PLAYBACK,0);
+    require(!g.playhead_active && !g.playing && g.numerical_revision==numerical,
+        "the menu resets playback without changing the numerical input");
+    g.overview.render_enabled=false;
+    g.ds.time={0,1,2,102,103,104};g.ds.channels={{0,1,2,3,4,5}};g.data_t1=g.win_end=104;
+    g.stitch_time_gaps=true;invalidate_stitched_time_cache();g.vx0=0;g.vx1=5;g.vvalid=true;
+    seek_playhead(103);handle_input_message(window,WM_LBUTTONDOWN,0,MAKELPARAM(px(.8),y));
+    handle_input_message(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(px(.2),y));
+    handle_input_message(window,WM_LBUTTONUP,0,MAKELPARAM(px(.2),y));
+    require(std::fabs(g.playhead-1)<.01,"dragging a stitched timeline preserves raw acquisition coordinates");
+    start_play();set_mode(AnalysisMode::FFT);
+    require(!g.playing && !g.playhead_dragging && !g.playhead_selected,"changing analysis mode cancels timeline interaction and its timer");
 }
 
 void routed_window_messages() {
@@ -1224,10 +1369,11 @@ void frf_gap_stitching() {
     require(window.hwnd!=nullptr,"hidden settings test window");
     g.main=window.hwnd;
     HWND toggle=CreateWindowExW(0,L"BUTTON",L"Stitch",WS_CHILD|BS_OWNERDRAW,0,0,100,25,
-        window.hwnd,reinterpret_cast<HMENU>(IDC_SET_STITCH_GAPS),GetModuleHandleW(nullptr),nullptr);
-    require(toggle!=nullptr,"time stitching settings control");
+        window.hwnd,reinterpret_cast<HMENU>(IDC_SIDE_STITCH_GAPS),GetModuleHandleW(nullptr),nullptr);
+    g.side_stitch_gaps=toggle;
+    require(toggle!=nullptr && is_side_toggle_id(IDC_SIDE_STITCH_GAPS),"time stitching control belongs to Channels");
     const auto click = [&] {
-        SettingsProc(window.hwnd,WM_COMMAND,MAKEWPARAM(IDC_SET_STITCH_GAPS,BN_CLICKED),
+        handle_commands_message(window.hwnd,WM_COMMAND,MAKEWPARAM(IDC_SIDE_STITCH_GAPS,BN_CLICKED),
                      reinterpret_cast<LPARAM>(toggle));
     };
     click();
@@ -1248,7 +1394,7 @@ void frf_gap_stitching() {
     require(!g.stitch_time_gaps && g.frf.result.ok && !g.frf.pending,"disabling display stitching keeps FRF available");
     click(); click();
     require(g.frf.generation==generation && g.frf.result.common().transfer==transfer,"display stitching does not recalculate or change FRF");
-    g.main=nullptr;
+    g.side_stitch_gaps=nullptr;g.main=nullptr;
     g.stitch_time_gaps=true;
     require(ensure_current_frf() && g.frf.generation==generation,"FRF cache is independent of display stitching");
     g.frf.options.segment_length=1024;
@@ -1263,7 +1409,7 @@ void frf_loaded_document_defaults() {
     loaded.names={"Loaded support","Loaded response"};
     loaded.time={0,1,2,3}; loaded.raw_time=loaded.time;
     loaded.channels={{1,0,-1,0},{2,0,-2,0}};
-    apply_loaded_dataset(std::move(loaded),L"loaded.lvm",false,false,0,false);
+    apply_loaded_dataset(std::move(loaded),L"loaded.lvm",false,0,false);
     require(g.frf.inputs.empty() && g.frf.outputs.empty(),
         "opening a file clears preselected FRF channel roles");
     require(set_frf_channels({0},{1}),"FRF clear test selects both roles");
@@ -1568,7 +1714,7 @@ void document_source_and_resources() {
     {std::ofstream f(path);f<<"Time\tA\tB\n0\t4\t7\n1\t5\t8\n2\t6\t9\n";}
     reset_document({"old"},{0,1},{{1,2}});
     auto loaded=lvm::read_lvm_file(path);lvm::drop_duplicate_time_channels(loaded,loaded.raw_time);
-    require(apply_loaded_dataset(std::move(loaded),path.wstring(),false,false,0,false),"valid load publishes a document source");
+    require(apply_loaded_dataset(std::move(loaded),path.wstring(),false,0,false),"valid load publishes a document source");
     const auto source=current_recording_source();const auto samples=g.ds.time.data();
     require(source==g.recording_source && source==current_recording_source(),"repeated jobs share the document descriptor without copying samples");
     const auto occupied=document_data_memory_bytes();
@@ -1582,16 +1728,19 @@ void document_source_and_resources() {
     const auto old_stamp=*source->stamp();
     {std::ofstream f(path,std::ios::app);f<<"# changed\n";}
     auto replacement=lvm::read_lvm_file(path);lvm::drop_duplicate_time_channels(replacement,replacement.raw_time);
-    require(!apply_loaded_dataset(std::move(replacement),path.wstring(),false,false,0,false,old_stamp) &&
+    require(!apply_loaded_dataset(std::move(replacement),path.wstring(),false,0,false,old_stamp) &&
         g.ds.time.data()==samples && open_document_count()==count,"stale publication rejects before replacing the active document");
     bool stale=false;try{current_recording_source();}catch(const lvm::RecordingFailure& e){stale=e.error==lvm::RecordingError::SourceChanged;}
     require(stale,"shared source detects changed files after document switching");
     require(set_resource_policy(false,1024) && g.numerical_revision==before,"manual resource policy does not invalidate numerical input");
     save_runtime_settings_now();g.resource_policy={true,2048};load_runtime_settings();
     require(!g.resource_policy.automatic && g.resource_policy.manual_mib==1024,"manual memory limit persists in INI");
+    WritePrivateProfileStringW(L"ui",L"stitch_time_gaps",L"1",g_config_path.c_str());
     WritePrivateProfileStringW(L"ui",L"light_mode",L"1",g_config_path.c_str());load_runtime_settings();
+    require(!g.stitch_time_gaps,"legacy global INI stitching does not override the active document");
     save_runtime_settings_now();
     require(read_ini_int(L"ui",L"light_mode",-1)==-1 && !g.resource_policy.automatic,"legacy Light Mode preference is retired without losing the data budget");
+    require(read_ini_int(L"ui",L"stitch_time_gaps",-1)==-1,"runtime settings retire the global stitching key while projects retain it");
     require(!set_resource_policy(false,0) && g.resource_policy.manual_mib==1024,"invalid manual limit cannot enable unlimited loading");
     require(set_resource_policy(true,1024),"user can return to Auto without losing their manual value");
     save_runtime_settings_now();
@@ -1844,12 +1993,12 @@ void overview_renderer() {
     g.show_channel_legend=true;draw_chart(dc,plot);
     require(g_legend_items.size()==2,"ready overview rebuilds the common clickable channel legend");
     g.noise_threshold_enabled=true;draw_chart(dc,plot);
-    require(!g.vvalid && overview_processing_supported() && g_legend_items.empty() && IsRectEmpty(&g_legend_box),
+    require(!g.vvalid && !g.overview.source->processing_identity().empty() && g_legend_items.empty() && IsRectEmpty(&g_legend_box),
             "filter requests a processed source and clears stale raw legend regions while pending");
     wait();draw_chart(dc,plot);
     require(g.vvalid && !g.overview.source->processing_identity().empty(),"filtered overview publishes its own processed index");
     g.noise_threshold_enabled=false;g.channel_formulas[0]=L"x*x";rebuild_formula_cache_from_state();draw_chart(dc,plot);
-    require(!g.vvalid && overview_processing_supported(),"nonlinear formula requests original-sample processing rather than transforming raw extrema");
+    require(!g.vvalid && !g.overview.source->processing_identity().empty(),"nonlinear formula requests original-sample processing rather than transforming raw extrema");
     wait();draw_chart(dc,plot);bool squared=true;
     visit_overview_curve(0,.064,[&](auto point){const auto at=std::lower_bound(time.begin(),time.end(),point.time)-time.begin();
         squared=squared && at<static_cast<std::ptrdiff_t>(time.size()) && point.value==values[0][at]*values[0][at];});
@@ -1857,7 +2006,6 @@ void overview_renderer() {
     require(request_overview_snap(x,y,accept),"nonlinear overview Snap reads the processed source");wait_snap();
     require(accepted==4 && picked.channel==0 && picked.value==values[0][picked.sample]*values[0][picked.sample],"nonlinear Snap publishes an exact transformed original sample");
     g.channel_formulas[0]=L"x";rebuild_formula_cache_from_state();g.stitch_time_gaps=true;
-    require(overview_processing_supported(),"full-source display stitching uses exact cached timestamps");
     require(std::fabs(stitched_time_from_raw(time.back())-20)<1e-8 &&
             std::fabs(raw_time_from_stitched(stitched_time_from_raw(time[12000]))-time[12000])<1e-8,
             "file-backed stitching removes the outage and reversibly maps original coordinates");
@@ -2017,6 +2165,214 @@ void persistent_recording_cache() {
     DestroyWindow(g.main);g.main=nullptr;configure_recording_disk_cache({},2ULL*1024*1024*1024);
 }
 
+void persistent_filter_continuations() {
+    const auto path=std::filesystem::absolute(test_dir/"persistent-filter.txt");
+    constexpr std::size_t count=30000;
+    {std::ofstream out(path);out<<std::setprecision(17)<<"Time\tA\tB\n";
+        for(std::size_t i=0;i<count;++i)out<<i*.001+(i>=15000 ? 2 : 0)<<'\t'
+            <<(i==14000 ? std::numeric_limits<double>::quiet_NaN() : std::sin(i*.017))<<'\t'
+            <<(i==14500 ? std::numeric_limits<double>::infinity() : std::cos(i*.021))<<'\n';}
+    reset_document({"previous"},{0,1},{{1,2}});
+    auto data=lvm::read_lvm_file(path);
+    require(apply_loaded_dataset(std::move(data),path.wstring(),false,.001,true),"persistent filter source opens");
+    configure_recording_disk_cache(std::filesystem::absolute(test_dir/"filter-state-cache"));
+    g.noise_threshold_enabled=true;g.noise_threshold_mode=FilterModeBandPass;
+    g.noise_threshold_topology=FilterTopologyLinkwitzRiley;g.noise_threshold_min=10;g.noise_threshold_max=100;
+    FilterSettings settings{FilterModeBandPass,FilterTopologyLinkwitzRiley,10,100,.001};
+    const auto expected_a=filter_signal(g.ds.time,g.ds.channels[0],settings);
+    const auto expected_b=filter_signal(g.ds.time,g.ds.channels[1],settings);
+    lvm::RecordingReadRequest read;read.channels={0,1};read.block_rows=17;
+    auto source=processed_recording_source(true,.001,refresh_load_memory_budget());
+    require(source->replay(read,[](const auto&,const auto&){})==count,"successful full replay creates continuation coverage");
+    std::filesystem::path stored;
+    for(const auto& entry:std::filesystem::directory_iterator(recording_disk_cache()->directory()))
+        if(entry.path().extension()==".filter")stored=entry.path();
+    require(!stored.empty() && std::filesystem::file_size(stored)<2ULL*1024*1024,"filter states persist within the shared disk allowance");
+    read.range=lvm::AnalysisRange::selected(g.ds.time[13995],g.ds.time[15005]);read.channels={1,0};
+    const auto verify=[&](const auto& candidate) {
+        std::vector<double> a,b;candidate->replay(read,[&](const auto&,const auto& values){
+            b.insert(b.end(),values[0].begin(),values[0].end());a.insert(a.end(),values[1].begin(),values[1].end());});
+        bool same=a.size()==1011 && b.size()==1011;
+        const auto equal=[](double x,double y){return x==y || (std::isnan(x) && std::isnan(y));};
+        for(std::size_t i=0;same && i<a.size();++i)same=equal(a[i],expected_a[13995+i]) && equal(b[i],expected_b[13995+i]);
+        require(same,"restored filter states preserve NaN/Inf, gap resets, reordered channels and block boundaries exactly");
+    };
+    g.processed_source.reset();g.processed_source_origin.reset();
+    auto restored=processed_recording_source(true,.001,refresh_load_memory_budget());verify(restored);
+    auto tiny_budget=std::make_shared<lvm::MemoryBudget>();tiny_budget->configure(1,0,1);
+    g.processed_source.reset();g.processed_source_origin.reset();
+    verify(processed_recording_source(true,.001,tiny_budget));
+    // Test the artifact itself, so an unnoticed fallback cannot pass by merely
+    // recalculating the same prefix. Include a checkpoint ending on NaN.
+    {
+        auto cache=std::make_shared<lvm::DiskCache>(std::filesystem::absolute(test_dir/"portable-filter-state-cache"));
+        std::vector<FilterCheckpoint> saved;
+        FilterCheckpoint state;state.time=g.ds.time[14000];state.channels={0,1};
+        const std::vector<double> prefix(g.ds.time.begin(),g.ds.time.begin()+14001);
+        for(const auto& channel:g.ds.channels) {
+            FilterStream filter(settings);filter.process(prefix,std::vector<double>(channel.begin(),channel.begin()+14001));
+            state.filters.push_back(std::move(filter));
+        }
+        saved.push_back(std::move(state));
+        const auto raw=g.recording_source;
+        save_filter_checkpoints(cache,raw,"portable-test",.001,saved,nullptr);
+        auto unknown_cadence=settings;unknown_cadence.sample_step=0;std::vector<FilterCheckpoint> loaded;
+        require(load_filter_checkpoints(cache,raw,"portable-test",unknown_cadence,512,nullptr,loaded) &&
+            unknown_cadence.sample_step==.001 && loaded.size()==1 && loaded[0].channels==saved[0].channels &&
+            loaded[0].filters[0].continuation()==saved[0].filters[0].continuation() &&
+            loaded[0].filters[1].continuation()==saved[0].filters[1].continuation(),
+            "portable cache restores exact biquads, reset state, previous time and previously unknown cadence");
+        auto wrong_cadence=settings;wrong_cadence.sample_step=.002;
+        require(!load_filter_checkpoints(cache,raw,"portable-test",wrong_cadence,512,nullptr,loaded),
+            "cache cannot supply states from a different known filter cadence");
+        save_filter_checkpoints(cache,raw,"portable-test",.001,saved,nullptr);
+        std::atomic<bool> stop{true};bool cancelled_cache=false;
+        try{load_filter_checkpoints(cache,raw,"portable-test",settings,512,&stop,loaded);}
+        catch(const lvm::RecordingFailure& error){cancelled_cache=error.error==lvm::RecordingError::Cancelled;}
+        require(cancelled_cache,"optional state-cache load propagates cancellation");
+    }
+    std::atomic<bool> cancelled{true};bool cancellation=false;
+    try{restored->replay(read,[](const auto&,const auto&){},&cancelled);}catch(const lvm::RecordingFailure& error){cancellation=error.error==lvm::RecordingError::Cancelled;}
+    require(cancellation,"cancelled filtered replay does not bypass cancellation via persistent states");
+    // Corruption must fall back to the exact causal prefix, never bad samples.
+    for(const auto& entry:std::filesystem::directory_iterator(recording_disk_cache()->directory()))
+        if(entry.path().extension()==".filter")stored=entry.path();
+    {std::fstream damaged(stored,std::ios::in|std::ios::out|std::ios::binary);damaged.seekp(24);damaged.put('\x7f');}
+    g.processed_source.reset();g.processed_source_origin.reset();
+    auto fallback=processed_recording_source(true,.001,refresh_load_memory_budget());verify(fallback);
+    g.noise_threshold_max=150;rebuild_formula_cache_from_state();
+    auto changed=processed_recording_source(true,.001,refresh_load_memory_budget());
+    require(changed->processing_identity()!=fallback->processing_identity(),"a different filter recipe cannot reuse the previous continuation states");
+    {std::ofstream append(path,std::ios::app);append<<"# changed source\n";}
+    bool stale=false;try{restored->replay(read,[](const auto&,const auto&){});}catch(const lvm::RecordingFailure& error){stale=error.error==lvm::RecordingError::SourceChanged;}
+    require(stale,"persistent continuation never makes a changed file appear current");
+}
+
+void background_filtered_resident_view() {
+    const auto path=std::filesystem::absolute(test_dir/"resident-filter-view.txt");
+    constexpr std::size_t rows=131073;
+    {std::ofstream out(path);out<<std::setprecision(17)<<"Time\tA\tB\n";
+        for(std::size_t i=0;i<rows;++i) {
+            const double t=i ? i*.001+(i>=60000 ? 2 : 0) : -6.9388939039072284e-18;
+            const double a=i==70000 ? std::numeric_limits<double>::quiet_NaN() : std::sin(i*.017);
+            out<<t<<'\t'<<a<<'\t'<<(i==71000 ? std::numeric_limits<double>::infinity() : 2*a)<<'\n';
+        }}
+    reset_document({"previous"},{0,1},{{1,2}});
+    g.main=CreateWindowExW(0,L"STATIC",L"Resident filter",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    auto data=lvm::read_lvm_file(path);
+    // Reopening after discovery must keep exactly the same endpoints, including
+    // section-offset cancellation near zero as in the real test1.lvm.
+    auto scan=std::make_shared<lvm::ScanIndex>();double low=0,high=0;std::string scan_error;
+    require(lvm::scan_time_bounds(path,low,high,scan_error,nullptr,scan.get()),"near-zero resident filter fixture scans");
+    g.cached_scan_path=path.wstring();g.cached_scan_index=scan;g.cached_scan_valid=true;
+    require(low==data.time.front() && high==data.time.back(),"cached scan and resident filter endpoints agree exactly");
+    // Deliberately distinct from the full-file median: the existing resident
+    // renderer used this GUI cadence and the worker must preserve it.
+    constexpr double step=.0008;
+    require(apply_loaded_dataset(std::move(data),path.wstring(),false,step,true),"resident filter fixture opens a full replayable document");
+    require(!g.overview.render_enabled && g.ds.rows()==rows,"unfiltered resident fixture keeps the immediate renderer");
+    g.channel_formulas[1]=L"-2*x+1";rebuild_formula_cache_from_state();
+    g.noise_threshold_enabled=true;g.noise_threshold_mode=FilterModeBandPass;
+    g.noise_threshold_topology=FilterTopologyButterworth;g.noise_threshold_min=20;g.noise_threshold_max=100;
+    FilterSettings settings{g.noise_threshold_mode,g.noise_threshold_topology,20,100,step};
+    const auto expected_a=filter_signal(g.ds.time,g.ds.channels[0],settings);
+    auto transformed=g.ds.channels[1];for(auto& v:transformed)v=-2*v+1;
+    const auto expected_b=filter_signal(g.ds.time,transformed,settings);
+    const auto original_time=g.ds.time;
+    const auto* resident=g.ds.time.data();const auto numerical=g.numerical_revision;
+    HDC dc=CreateCompatibleDC(nullptr);HBITMAP bitmap=CreateBitmap(1000,650,1,32,nullptr);const auto old=SelectObject(dc,bitmap);
+    const RECT plot{60,40,940,570};draw_time(dc,plot);
+    require(g.overview.render_enabled && g.overview.pending && !g.vvalid && g.recording_rows==rows,
+        "large resident filter paint submits background processing and records the full sample count");
+    require(g.filtered_channel_cache[0].empty() && g.filtered_channel_cache[1].empty(),
+        "paint does not synchronously filter whole resident channels");
+    const auto first_generation=g.overview.generation;draw_time(dc,plot);
+    require(g.overview.generation==first_generation,"repainting a pending filter does not restart its build");
+    const auto wait=[&] {const auto started=std::chrono::steady_clock::now();
+        while(g.overview.pending && std::chrono::steady_clock::now()-started<std::chrono::seconds(15)){poll_recording_overview();Sleep(1);}
+        require(!g.overview.pending && !g.overview.error,"background filtered view completes successfully");};
+    wait();draw_time(dc,plot);
+    const auto index=g.overview.index;const auto source=g.overview.source;const auto ready_generation=g.overview.generation;
+    draw_time(dc,plot);
+    require(g.vvalid && !g.overview.pending && g.overview.index==index && g.overview.generation==ready_generation,
+        "ready filtered repaint reuses its index without another filtering job");
+    require(processed_recording_source()==source,"resident display and numerical input reuse the same unchanged filter cadence recipe");
+    g.win_start=original_time[rows-40];g.win_end=original_time.back();draw_time(dc,plot);wait();draw_time(dc,plot);
+    require(g.overview.index==index && g.overview.source==source && g.overview.view->sample_count==40,
+        "deep zoom reuses the processed hierarchy and requests exact original sample positions");
+    bool exact=true;std::size_t samples=0;
+    for(const auto& bucket:g.overview.view->buckets) {
+        exact=exact && bucket.sample_count==1;
+        if(bucket.sample_count!=1)continue;
+        const auto i=static_cast<std::size_t>(bucket.first_sample);
+        exact=exact && bucket.channels[0].first.value==expected_a[i] && bucket.channels[1].first.value==expected_b[i];++samples;
+    }
+    require(exact && samples==40,"asynchronous filtered Signal preserves resident Fs, affine formulas and gap resets exactly");
+    lvm::RecordingReadRequest query;query.range=lvm::AnalysisRange::selected(original_time[69995],original_time[71005]);
+    query.channels={1,0};query.block_rows=17;
+    std::vector<double> replay_a,replay_b;
+    source->replay(query,[&](const auto&,const auto& values){
+        replay_b.insert(replay_b.end(),values[0].begin(),values[0].end());
+        replay_a.insert(replay_a.end(),values[1].begin(),values[1].end());});
+    bool continuation=replay_a.size()==1011 && replay_b.size()==1011;
+    for(std::size_t i=0;continuation && i<replay_a.size();++i) {
+        const auto equal=[](double a,double b){return a==b || (std::isnan(a) && std::isnan(b));};
+        continuation=equal(replay_a[i],expected_a[69995+i]) && equal(replay_b[i],expected_b[69995+i]);
+    }
+    require(continuation,"filter checkpoints preserve NaN/Inf resets and exact values with reordered channels and 17-row blocks");
+    require(g.recording_source->resident_data() && g.recording_source->resident_data()->time.data()==resident &&
+        g.ds.rows()==2 && g.numerical_revision==numerical &&
+        g.filtered_channel_cache[0].empty() && g.filtered_channel_cache[1].empty(),
+        "navigation retains original allocations in the immutable owner without synchronous filtered caches");
+    // FFT/FRF must use complete RAM originals after the UI Dataset became seed.
+    lvm::Dataset control;control.ok=true;control.names=g.ds.names;
+    control.time.assign(original_time.begin()+2000,original_time.begin()+6096);
+    control.channels.emplace_back(expected_a.begin()+2000,expected_a.begin()+6096);
+    control.channels.emplace_back(expected_b.begin()+2000,expected_b.begin()+6096);
+    const auto expected_spectrum=lvm::compute_spectrum(control,0);
+    change_analysis_range(lvm::AnalysisRange::selected(control.time.front(),control.time.back()));
+    set_mode(AnalysisMode::FFT);
+    const auto finish_spectrum=std::chrono::steady_clock::now();
+    while(g.spec_pending && std::chrono::steady_clock::now()-finish_spectrum<std::chrono::seconds(15)) {
+        if(auto result=g_spectrum_worker.take_result())apply_spectrum_result(std::move(result->spectrum));else Sleep(1);
+    }
+    require(g.spec_valid && g.spec.n==4096 && !g.spec.disk && g.spec.freqs==expected_spectrum.freqs &&
+        g.spec.amp==expected_spectrum.amp,"resident filtered FFT uses every original RAM sample and matches the old resident control exactly");
+    g.frf.inputs={0};g.frf.outputs={1};g.frf.apply_processing=true;g.frf.options.segment_length=2048;
+    lvm::FrfInput pair;pair.time=control.time;pair.reference=control.channels[0];pair.response=control.channels[1];
+    const auto expected_frf=lvm::analyze_frf(pair,g.frf.options);
+    g.mode=AnalysisMode::FRF;compute_frf_from_current_source();
+    const auto finish_frf=std::chrono::steady_clock::now();
+    while(g.frf.pending && std::chrono::steady_clock::now()-finish_frf<std::chrono::seconds(15)){poll_frf_result();Sleep(1);}
+    require(!g.frf.pending && g.frf.result.ok && g.frf.result.common().sample_count==4096,
+        "resident filtered FRF completes the full selected region after ownership transfer");
+    const auto& actual=g.frf.result.common();bool matching=actual.frequencies==expected_frf.frequencies &&
+        actual.valid==expected_frf.valid && actual.coherence_valid==expected_frf.coherence_valid &&
+        actual.reference_amplitude_valid==expected_frf.reference_amplitude_valid;
+    for(std::size_t i=0;matching && i<actual.valid.size();++i) {
+        if(actual.valid[i])matching=actual.transfer[i]==expected_frf.transfer[i];
+        if(actual.coherence_valid[i])matching=matching && actual.coherence[i]==expected_frf.coherence[i];
+        if(actual.reference_amplitude_valid[i])matching=matching && actual.reference_amplitude[i]==expected_frf.reference_amplitude[i];
+    }
+    require(matching,"filtered RAM H1, coherence, reference spectrum, grids and masks exactly match the resident method");
+    set_mode(AnalysisMode::Time);
+    g.noise_threshold_max=200;recompute_transforms_from_state();draw_time(dc,plot);
+    require(g.overview.pending && g.overview.source!=source && !g.vvalid,
+        "new filter recipe invalidates the old filtered display before publication");
+    cancel_recording_overview();Sleep(10);poll_recording_overview();
+    require(!g.overview.pending && !g.vvalid,"cancelling a replacement filter never publishes an outdated graph");
+    g.noise_threshold_enabled=false;recompute_transforms_from_state();draw_time(dc,plot);wait();draw_time(dc,plot);
+    require(g.vvalid && g.overview.source==g.recording_source && g.recording_source->resident_backed() && g.recording_rows==rows,
+        "disabling the filter restores the original overview without discarding the resident recording");
+    require(move_resident_recordings_to_disk() && g.ds.rows()==2 && g.recording_rows==rows,
+        "a resident document using the background renderer can still release original arrays under memory pressure");
+    draw_time(dc,plot);wait();draw_time(dc,plot);
+    require(g.vvalid && g.overview.source==g.recording_source && current_filter_sample_step()==step,
+        "storage demotion preserves cadence and rebinds the asynchronous renderer to the new source");
+    cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};
+    SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);DestroyWindow(g.main);g.main=nullptr;
+}
+
 void adaptive_opening_and_cache() {
     reset_document({"previous"},{0,1},{{7,8}});
     const auto path=std::filesystem::absolute(test_dir/"adaptive-open.txt");
@@ -2068,7 +2424,7 @@ void demotion_edge_cases() {
     {std::ofstream out(path);out<<"Time\tA\n0\t0\n";for(int i=1;i<17;++i)out<<i+9<<'\t'<<i<<'\n';}
     g.main=CreateWindowExW(0,L"STATIC",L"Demotion edge",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
     auto data=lvm::read_lvm_file(path);const auto expected=precompute_global_gap_step(data.time);
-    require(apply_loaded_dataset(std::move(data),path.wstring(),false,false,0,false),"ordinary resident fixture opens before lazy cadence is computed");
+    require(apply_loaded_dataset(std::move(data),path.wstring(),false,0,false),"ordinary resident fixture opens before lazy cadence is computed");
     g.cached_global_gap_step=0;g.cached_global_gap_step_ready=false;
     require(move_resident_recordings_to_disk() && g.ds.rows()==2,"uncached resident fixture can be demoted under memory pressure");
     require(expected==1 && current_filter_sample_step()==expected,
@@ -2375,10 +2731,11 @@ int main(int argc,char** argv) {
         }
         document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); multiple_open_documents(); processing(); fft_recording_recovery();
         display_load_budget(); loading_window_ownership(); bounded_load_recovery(); document_source_and_resources(); background_document_overview(); overview_renderer(); resource_settings_and_load_ownership(); analysis_admission_and_publication(); persistent_recording_cache(); resident_envelope_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
-        adaptive_opening_and_cache();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
+        persistent_filter_continuations();background_filtered_resident_view();adaptive_opening_and_cache();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
         user_axis_names_outside_plot();
+        spectrum_pending_message();
         channel_legend_visibility();
-        routed_window_messages();
+        shift_range_with_point_mode();playback_timeline_controls();routed_window_messages();
         measurement_label_units();
         frf_filter_tab();
         frf_integration();

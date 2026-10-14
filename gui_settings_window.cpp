@@ -241,7 +241,8 @@ void refresh_settings_controls() {
     EnableWindow(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_APPLY),!g.resource_policy.automatic);
     const auto memory=resource_snapshot();
     const auto limit=lvm::resource_limit(g.resource_policy,memory)/(1024*1024);
-    const auto occupied=(memory.resident+refresh_load_memory_budget()->reserved())/(1024*1024);
+    // Shared originals appear in both resident and RAII reservations; count once.
+    const auto occupied=(memory.resident-memory.shared_resident+refresh_load_memory_budget()->reserved())/(1024*1024);
     PROCESS_MEMORY_COUNTERS_EX process{};process.cb=sizeof(process);
     GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&process),sizeof(process));
     const auto status=(g_str==&kEn ? L"Data + analysis: " : L"Данные + расчёты: ")+std::to_wstring(limit)+
@@ -254,8 +255,6 @@ void refresh_settings_controls() {
     if (HWND theme = GetDlgItem(g.settings_wnd, IDW_THEME_DARK)) InvalidateRect(theme, nullptr, FALSE);
     set_toggle_checked(GetDlgItem(g.settings_wnd, IDC_SET_GAP_MARKERS), g.show_gap_markers);
     if (HWND gap = GetDlgItem(g.settings_wnd, IDC_SET_GAP_MARKERS)) SetWindowTextW(gap, gap_markers_toggle_text());
-    set_toggle_checked(GetDlgItem(g.settings_wnd, IDC_SET_STITCH_GAPS), g.stitch_time_gaps);
-    if (HWND stitch = GetDlgItem(g.settings_wnd, IDC_SET_STITCH_GAPS)) SetWindowTextW(stitch, stitch_gaps_toggle_text());
     const std::pair<int,const std::wstring*> axis_edits[] = {
         {IDC_SET_TIME_AXIS_X_EDIT,&g.axis_x_label}, {IDC_SET_TIME_AXIS_Y_EDIT,&g.time_axis_y_label},
         {IDC_SET_FFT_AXIS_X_EDIT,&g.fft_axis_x_label},
@@ -294,7 +293,6 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mk(L"BUTTON", g_str->theme_light, BS_OWNERDRAW, 264, 36, 120, 22, IDW_THEME_LIGHT);
             mk(L"BUTTON", g_str->theme_dark, BS_OWNERDRAW, 390, 36, 120, 22, IDW_THEME_DARK);
             mkcheck(gap_markers_toggle_text(), 28, 70, 278, 28, IDC_SET_GAP_MARKERS);
-            mkcheck(stitch_gaps_toggle_text(), 28, 104, 360, 28, IDC_SET_STITCH_GAPS);
             // Keep coordinate names visibly separate from the general settings.
             mk(L"STATIC", en ? L"Signal" : L"Сигнал", SS_LEFT, 28, 180, 120, 20, 0);
             install_axis_label_edit(mk(L"EDIT", g.axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 176, 120, 24, IDC_SET_TIME_AXIS_X_EDIT));
@@ -334,7 +332,6 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             load_selected_hotkey_controls(hwnd);
             CheckRadioButton(hwnd, IDC_SET_LANG_RU, IDC_SET_LANG_EN, g_str == &kEn ? IDC_SET_LANG_EN : IDC_SET_LANG_RU);
             set_toggle_checked(GetDlgItem(hwnd, IDC_SET_GAP_MARKERS), g.show_gap_markers);
-            set_toggle_checked(GetDlgItem(hwnd, IDC_SET_STITCH_GAPS), g.stitch_time_gaps);
             enable_file_drop_support(hwnd);
             return 0;
         }
@@ -380,18 +377,6 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         g.show_gap_markers = checked();
                         mark_active_document_dirty();
                         if (!g.show_gap_markers) hide_gap_details_card();
-                        invalidate_plot_analysis_cache();
-                        save_runtime_settings();
-                        InvalidateRect(g.main, nullptr, FALSE);
-                        refresh_settings_controls();
-                    }
-                    return 0;
-                case IDC_SET_STITCH_GAPS:
-                    if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED) {
-                        toggle_checked_state(ctl);
-                        g.stitch_time_gaps = checked();
-                        mark_active_document_dirty();
-                        hide_gap_details_card();
                         invalidate_plot_analysis_cache();
                         save_runtime_settings();
                         InvalidateRect(g.main, nullptr, FALSE);

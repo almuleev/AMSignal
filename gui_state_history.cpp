@@ -523,6 +523,7 @@ void rebuild_formula_cache_from_state() {
 void recompute_transforms_from_state() {
     invalidate_plot_analysis_cache();
     invalidate_filtered_channel_cache();
+    enable_background_signal_processing();
     clear_spectrum_cache_state();
     if ((g.mode == AnalysisMode::FFT) && !g.formula_ini_deferred) compute_spectrum();
     on_frf_processing_changed();

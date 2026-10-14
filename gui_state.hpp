@@ -111,9 +111,10 @@ struct DocumentState {
         std::vector<std::size_t> channels;
         std::uint64_t generation=0;
         bool pending=false;
+        int progress_percent=-1;
         std::optional<lvm::RecordingError> error;
         std::vector<lvm::OverviewGap> gaps;
-        // Full source rendering; Dataset holds only metadata/seed rows in this path.
+        // Full source rendering; Dataset can be resident or metadata/seed rows.
         bool render_enabled=false;
         std::filesystem::path cache_path;
         lvm::TimeRange requested_range;
@@ -375,6 +376,7 @@ struct App : DocumentState {
     HWND side_filter_high_value = nullptr;
     HWND side_filter_high_track = nullptr;
     HWND side_global_formula_label = nullptr;
+    HWND side_stitch_gaps = nullptr;
     HWND side_global_formula_edit = nullptr;
     HWND side_global_formula_apply = nullptr;
     HWND side_channel_separator = nullptr;
@@ -414,6 +416,8 @@ struct App : DocumentState {
     // icon_font removed � toolbar now uses text labels with ui_font
 
     bool dragging = false;
+    bool playhead_selected=false,playhead_dragging=false;
+    double playhead_drag_before=0;
     int drag_x = 0, drag_y = 0;
     double drag_lo = 0.0, drag_hi = 0.0;
     double drag_y_lo = 0.0, drag_y_hi = 0.0;

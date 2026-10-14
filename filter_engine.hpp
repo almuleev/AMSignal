@@ -2,6 +2,7 @@
 #include <atomic>
 #include <vector>
 #include <memory>
+#include <array>
 
 enum FilterMode {
     FilterModeLowPass = 0,
@@ -32,6 +33,12 @@ public:
     ~FilterStream();
     FilterStream(FilterStream&&) noexcept;
     FilterStream& operator=(FilterStream&&) noexcept;
+    // Independent exact continuation, including the previous acquisition time.
+    FilterStream clone() const;
+    static std::size_t snapshot_bytes();
+    // Portable state payload; coefficients are rebuilt from the recipe/Fs.
+    std::array<double,10> continuation() const;
+    bool restore_continuation(const std::array<double,10>& state);
     std::vector<double> process(const std::vector<double>& time,const std::vector<double>& samples,
                                 const std::atomic<bool>* cancel = nullptr);
 private:
