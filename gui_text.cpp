@@ -91,7 +91,7 @@ const wchar_t* mode_frf_text() {
 }
 
 const wchar_t* gap_markers_toggle_text() {
-    return (g_str == &kEn) ? L"Show gap markers" : L"Показывать разрывы";
+    return (g_str == &kEn) ? L"Mark time gaps" : L"Отмечать разрывы времени";
 }
 
 const wchar_t* filter_toggle_text() {
@@ -243,7 +243,7 @@ const wchar_t* side_pt_x_text() {
 }
 
 const wchar_t* stitch_gaps_toggle_text() {
-    return (g_str == &kEn) ? L"Stitch recording segments" : L"Склеивать участки записи";
+    return (g_str == &kEn) ? L"Hide time gaps" : L"Скрывать разрывы времени";
 }
 
 const wchar_t* side_pt_y_text() {
@@ -266,8 +266,8 @@ const wchar_t* side_pt_dist_text() {
     return g_str == &kEn ? L"d (coord.)" : L"d (условн.)";
 }
 
-const wchar_t* side_pt_snap_text() {
-    return (g_str == &kEn) ? L"Snap" : L"Привязка";
+const wchar_t* magnet_button_text() {
+    return (g_str == &kEn) ? L"Magnet" : L"Магнит";
 }
 
 std::wstring to_w(const std::string& s) {

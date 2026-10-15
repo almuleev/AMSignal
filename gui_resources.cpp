@@ -8,6 +8,7 @@
 #include "gui_overview.hpp"
 #include "gui_documents.hpp"
 #include "gui_loading.hpp"
+#include "gui_recording_cache.hpp"
 #include "processor_resources.hpp"
 #include <limits>
 #include <unordered_set>
@@ -91,6 +92,20 @@ bool set_resource_policy(bool automatic,unsigned manual_mib) {
     lvm::trim_fft_cached_plans(static_cast<std::size_t>(budget->limit()/8));
     if(refresh_load_memory_budget()->available()<32ULL*1024*1024)move_resident_recordings_to_disk();
     refresh_load_memory_budget();save_runtime_settings();return true;
+}
+bool set_disk_cache_policy(bool unlimited,unsigned manual_mib,bool persist) {
+    if(manual_mib<64 || manual_mib>1048576)return false;
+    const auto bytes=unlimited ? std::numeric_limits<std::uint64_t>::max()
+        : static_cast<std::uint64_t>(manual_mib)*1024*1024;
+    try { set_recording_disk_cache_limit(bytes); }
+    catch(const lvm::RecordingFailure& e) {
+        if(e.error!=lvm::RecordingError::ResourceLimit)throw;
+        return false;
+    }
+    catch(const std::filesystem::filesystem_error&) { return false; }
+    g.disk_cache_unlimited=unlimited;g.disk_cache_mib=manual_mib;
+    if(persist)save_runtime_settings();
+    return true;
 }
 lvm::AnalysisResources current_analysis_resources(std::uint64_t required) {
     lvm::AnalysisResources result;result.budget=refresh_load_memory_budget();

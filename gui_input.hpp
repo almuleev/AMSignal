@@ -5,6 +5,8 @@ namespace gui {
 
 // Compact black/white target, with the click hotspot on the central pixel.
 HCURSOR point_placement_cursor();
+inline constexpr int point_cursor_sizes[] = {17,21,25,31,41,49,63};
+bool set_point_cursor_size(int pixels);
 
 void add_guide_line(bool vertical, double value);
 

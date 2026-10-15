@@ -19,6 +19,24 @@ struct NumericPromptState {
 
 extern NumericPromptState g_numeric_prompt;
 
+struct GuidePromptState {
+    HWND wnd = nullptr;
+    HWND direction = nullptr;
+    HWND label = nullptr;
+    HWND edit = nullptr;
+    HWND error = nullptr;
+    bool done = false;
+    bool accepted = false;
+    bool vertical = true;
+    double vertical_value = 0;
+    double horizontal_value = 0;
+    double value = 0;
+    std::wstring vertical_text;
+    std::wstring horizontal_text;
+};
+extern GuidePromptState g_guide_prompt;
+LRESULT CALLBACK GuidePromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+
 struct RangePromptState {
     HWND wnd = nullptr;
     HWND start_edit = nullptr;
@@ -164,7 +182,7 @@ const wchar_t* speed_prompt_cancel_text();
 
 const wchar_t* speed_prompt_invalid_text();
 
-const wchar_t* guide_prompt_title_text(bool vertical);
+const wchar_t* guide_prompt_title_text();
 
 const wchar_t* guide_prompt_label_text(bool vertical);
 
@@ -199,7 +217,9 @@ bool prompt_analysis_window(double range_start, double range_end, double& out_st
 
 bool prompt_export_options(ExportOptions& out_options);
 
-bool prompt_exact_guide_value(bool vertical, double& out_value);
+double exact_guide_default_value(bool vertical);
+
+bool prompt_exact_guide_value(bool& vertical, double& out_value);
 
 bool prompt_custom_play_speed(double& out_speed);
 

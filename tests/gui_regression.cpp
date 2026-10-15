@@ -1,8 +1,13 @@
 // Integration tests linked to the production GUI modules; no visible windows.
 #include "../gui_dialogs.hpp"
 #include "../gui_analysis_source.hpp"
+#include "../gui_analysis_range.hpp"
+#include "../gui_marker_values.hpp"
+#include "../gui_gap_details.hpp"
+#include "../gui_menu.hpp"
 #include "../gui_commands.hpp"
 #include "../gui_frf.hpp"
+#include "../gui_frequency_view.hpp"
 #include "../gui_frf_render.hpp"
 #include "../gui_input.hpp"
 #include "../gui_navigation.hpp"
@@ -216,6 +221,7 @@ void exports() {
     g.distinguish_curves = true;
     g.stitch_time_gaps = true;
     g.show_channel_legend = false;
+    g.show_marker_values = false;
     g.frf.apply_processing = false;
     g.frf.logarithmic_frequency_axis = false;
     g.frf.show_reference_amplitude = false;
@@ -236,6 +242,7 @@ void exports() {
     require(g.distinguish_curves, "project restores grayscale curve symbols");
     require(g.stitch_time_gaps,"project restores the document's stitching choice");
     require(!g.show_channel_legend, "project restores hidden channel legend");
+    require(!g.show_marker_values,"project restores the marker readout visibility choice");
     require(!g.frf.apply_processing, "project restores the FRF raw-channel choice");
     require(!g.frf.logarithmic_frequency_axis && !g.frf.show_reference_amplitude &&
             std::fabs(g.frf.reference_height_fraction-.42)<1e-9 && !g.frf.reference_auto_y &&
@@ -690,7 +697,410 @@ void shift_range_with_point_mode() {
             std::size_t count=0;for(const auto& item:g.point_groups)count+=item.points.size();
             require(count==2 && !has_fft_window(),"a plain click still places a point with point mode enabled");
         }
+        g.win_start=start_time;g.win_end=end_time;
+        set_fft_window(start_time,end_time);
+        const auto revision=g.numerical_revision;
+        const double left=stitched_time_from_raw(start_time),right=stitched_time_from_raw(end_time);
+        const double step=(right-left)*.1;
+        POINT wheel{(start+end)/2,y};ClientToScreen(window,&wheel);
+        const auto wheel_position=MAKELPARAM(wheel.x,wheel.y);
+        WndProc(window,WM_MOUSEWHEEL,MAKEWPARAM(MK_SHIFT,WHEEL_DELTA),wheel_position);
+        near(stitched_time_from_raw(g.win_start),left-step,"Shift wheel pans left using the message modifier, including point mode and stitched time");
+        near(stitched_time_from_raw(g.win_end),right-step,"Shift wheel preserves the viewport width");
+        WndProc(window,WM_MOUSEWHEEL,MAKEWPARAM(MK_SHIFT,-WHEEL_DELTA),wheel_position);
+        near(g.win_start,start_time,"reverse Shift wheel returns to the original position");
+        WndProc(window,WM_MOUSEHWHEEL,MAKEWPARAM(0,WHEEL_DELTA),wheel_position);
+        near(stitched_time_from_raw(g.win_start),left+step,"native horizontal wheel is routed to rightward graph navigation");
+        WndProc(window,WM_MOUSEHWHEEL,MAKEWPARAM(0,-WHEEL_DELTA),wheel_position);
+        near(g.win_start,start_time,"native horizontal wheel supports the reverse direction");
+        require(has_fft_window() && g.fft_window_start==start_time && g.fft_window_end==end_time &&
+            g.numerical_revision==revision,"wheel navigation preserves the selected analysis interval and numerical revision");
     }
+}
+
+void analysis_range_edge_editing() {
+    HWND window=CreateWindowExW(0,L"STATIC",L"Analysis range edges",WS_POPUP,0,0,1000,650,
+        nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(window!=nullptr,"analysis range editing has a hidden window");
+    struct Cleanup {HWND hwnd;~Cleanup(){if(GetCapture()==hwnd)ReleaseCapture();DestroyWindow(hwnd);g.main=nullptr;}} cleanup{window};
+    for(bool stitched:{false,true}) for(bool points:{false,true}) for(bool locked:{false,true}) {
+        reset_document({"A"},{0,1,2,102,103,104},{{0,1,2,1,0,1}});
+        g.main=window;g.stitch_time_gaps=stitched;g.measure_mode=points;g.annotations_locked=locked;
+        g.show_channel_legend=false;g.show_gap_markers=false;g.snap_to_data=false;
+        const RECT plot=plot_rect();const int y=(plot.top+plot.bottom)/2;
+        const auto x=[&](double fraction){return plot.left+static_cast<int>((plot.right-plot.left)*fraction);};
+        const auto time=[&](int pixel){return raw_time_from_stitched(double(pixel-plot.left)/(plot.right-plot.left)*stitched_time_from_raw(104));};
+        const double a=time(x(.25)),b=time(x(.75));set_fft_window(a,b);g_undo.clear();g_redo.clear();
+        const auto revision=g.frf.generation;
+        int left=analysis_range_edge_x(a,plot),right=analysis_range_edge_x(b,plot);
+        require(hit_test_analysis_range_edge(left,y)==1 && hit_test_analysis_range_edge(right,y)==2,
+            "both real interval edges can be grabbed on normal and stitched axes");
+        WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(left,y));
+        WndProc(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(x(.125),y));
+        require(g.fft_selecting && g.fft_resize_edge==1 && g.fft_window_start==a && g.fft_window_end==b &&
+            g.frf.generation==revision && g_undo.empty(),"edge movement previews without recalculation or undo entries, including point/locked modes");
+        WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(x(.125),y));
+        near(g.fft_window_start,time(x(.125)),"left-edge release commits the exact original time");
+        require(g.fft_window_end==b && g_undo.size()==1 && !g.fft_selecting && !g.fft_resize_edge,
+            "left-edge edit preserves the opposite edge and creates one undo entry");
+        pop_undo();require(g.fft_window_start==a && g.fft_window_end==b,"Undo restores the entire previous interval");
+        pop_redo();near(g.fft_window_start,time(x(.125)),"Redo restores the dragged edge");
+        right=analysis_range_edge_x(b,plot);
+        const double unchanged_left=g.fft_window_start;
+        WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(right,y));
+        WndProc(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(x(.875),y));
+        WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(x(.875),y));
+        near(g.fft_window_end,time(x(.875)),"right-edge release commits its original acquisition time");
+        require(g.fft_window_start==unchanged_left,"right-edge edit leaves the left endpoint fixed");
+        for(UINT cancel:{WM_KEYDOWN,WM_CAPTURECHANGED,WM_CANCELMODE,WM_RBUTTONDOWN}) {
+            const double before_start=g.fft_window_start,before_end=g.fft_window_end;
+            const auto undo_count=g_undo.size();
+            left=analysis_range_edge_x(before_start,plot);
+            WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(left,y));
+            WndProc(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(x(.375),y));
+            WndProc(window,cancel,cancel==WM_KEYDOWN ? VK_ESCAPE : 0,0);
+            require(!g.fft_selecting && !g.fft_resize_edge && g.fft_window_start==before_start &&
+                g.fft_window_end==before_end && g_undo.size()==undo_count,"Escape, capture loss, cancellation and right click discard edge previews");
+        }
+        left=analysis_range_edge_x(g.fft_window_start,plot);
+        const auto undo_count=g_undo.size();
+        WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(left,y));
+        WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(left,y));
+        require(g_undo.size()==undo_count,"clicking an edge without movement leaves the selected interval intact");
+        const double fixed_end=g.fft_window_end;
+        WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(left,y));
+        WndProc(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(x(.95),y));
+        WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(x(.95),y));
+        require(g.fft_window_start==fixed_end && g.fft_window_end>fixed_end,
+            "dragging an edge past its opposite endpoint keeps the interval ordered and nonempty");
+        pop_undo();
+        g.win_start=time(x(.5));g.win_end=104;
+        require(analysis_range_edge_x(g.fft_window_start,plot)<0 && !hit_test_analysis_range_edge(plot.left+4,y),
+            "an off-screen boundary does not create a phantom drag handle at the plot edge");
+    }
+    reset_document({"A"},{0,1,2,3,4,5,6,7,8,9,10},{{0,1,0,1,0,1,0,1,0,1,0}});g.main=window;
+    Gdiplus::GdiplusStartupInput startup;ULONG_PTR token=0;
+    require(Gdiplus::GdiplusStartup(&token,&startup,nullptr)==Gdiplus::Ok,"GDI+ starts for range overlay pixel checks");
+    HDC dc=CreateCompatibleDC(nullptr);BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth=400;info.bmiHeader.biHeight=-160;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+    void* pixels=nullptr;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&pixels,nullptr,0);
+    const auto old=SelectObject(dc,bitmap);const auto previous_theme=g_theme;
+    const RECT image{0,0,400,160},plot{10,10,390,150};
+    for(const auto* theme:{&kLightTheme,&kDarkTheme}) {
+        g_theme=theme;HBRUSH background=CreateSolidBrush(theme->bg_plot);FillRect(dc,&image,background);GdiFlush();
+        const auto* begin=static_cast<const unsigned char*>(pixels);std::vector<unsigned char> baseline(begin,begin+400*160*4);
+        const auto unchanged=[&](int left,int top,int right,int bottom) {
+            for(int y=top;y<bottom;++y) {
+                const int offset=(y*400+left)*4;
+                if(!std::equal(baseline.begin()+offset,baseline.begin()+offset+(right-left)*4,begin+offset))return false;
+            }
+            return true;
+        };
+        g.win_start=3;g.win_end=7;set_fft_window(1,2);draw_analysis_range_selection(dc,plot);GdiFlush();
+        require(!unchanged(12,12,388,148) && unchanged(0,0,400,10),
+            "zooming outside the working interval shows sparse hatching only inside the plot in both themes");
+        const std::vector<unsigned char> excluded_view(begin,begin+400*160*4);
+        FillRect(dc,&image,background);set_fft_window(8,9);draw_analysis_range_selection(dc,plot);GdiFlush();
+        require(std::equal(excluded_view.begin(),excluded_view.end(),begin),
+            "a working interval outside either viewport edge produces the same hatching without cumulative shading");
+        FillRect(dc,&image,background);
+        g.win_start=0;g.win_end=10;set_fft_window(3,7);draw_analysis_range_selection(dc,plot);GdiFlush();
+        require(unchanged(132,12,268,148) && !unchanged(12,30,115,130) && !unchanged(285,30,388,130),
+            "the working interval remains pixel-identical while sparse hatching marks both excluded sides");
+        FillRect(dc,&image,background);g.win_start=3;g.win_end=7;set_fft_window(0,10);
+        draw_analysis_range_selection(dc,plot);GdiFlush();
+        require(std::equal(baseline.begin(),baseline.end(),begin),
+            "zooming inside the selected interval leaves every pixel unchanged in both themes");
+        set_fft_window(3,7);g.win_start=0;g.win_end=10;
+        update_analysis_range_hover(window,-1,-1);FillRect(dc,&image,background);draw_analysis_range_selection(dc,plot);GdiFlush();
+        const std::vector<unsigned char> normal_edges(begin,begin+400*160*4);
+        const RECT actual_plot=plot_rect();
+        WndProc(window,WM_MOUSEMOVE,0,MAKELPARAM(analysis_range_edge_x(3,actual_plot),(actual_plot.top+actual_plot.bottom)/2));
+        FillRect(dc,&image,background);draw_analysis_range_selection(dc,plot);GdiFlush();
+        require(!std::equal(normal_edges.begin(),normal_edges.end(),begin) && unchanged(132,30,268,130),
+            "hover increases boundary contrast without changing the working interior");
+        WndProc(window,WM_MOUSELEAVE,0,0);FillRect(dc,&image,background);draw_analysis_range_selection(dc,plot);GdiFlush();
+        require(std::equal(normal_edges.begin(),normal_edges.end(),begin),"mouse leave clears range-boundary hover styling");
+        for(const auto* language:{&kRu,&kEn}) {
+            g_str=language;const auto caption=analysis_range_caption_text();
+            require(caption.find(L"3–7")!=std::wstring::npos && caption.find(L"Δt 4")!=std::wstring::npos,
+                "analysis caption shows both original endpoints and duration");
+            g.win_start=8;g.win_end=10;
+            require(analysis_range_caption_text()==caption,"offscreen selection keeps its interval caption");
+            g.stitch_time_gaps=true;
+            require(analysis_range_caption_text().find(language==&kEn ? L"source" : L"исх.")!=std::wstring::npos,
+                "stitched analysis caption identifies original acquisition times");
+            g.stitch_time_gaps=false;g.win_start=0;g.win_end=10;
+            g.fft_selecting=true;g.fft_select_anchor_t=8;g.fft_select_current_t=2;
+            require(analysis_range_caption_text().find(L"2–8")!=std::wstring::npos &&
+                analysis_range_caption_text().find(L"Δt 6")!=std::wstring::npos,"caption follows ordered selection previews");
+            g.fft_selecting=false;
+        }
+        g_str=&kEn;g.mode=AnalysisMode::FFT;require(analysis_range_caption_text().empty(),"time interval caption is hidden outside Signal");g.mode=AnalysisMode::Time;
+        DeleteObject(background);
+    }
+    g_theme=previous_theme;SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);Gdiplus::GdiplusShutdown(token);
+}
+
+void analysis_range_edge_magnet() {
+    HWND window=CreateWindowExW(0,L"STATIC",L"Range magnet",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(window!=nullptr,"range magnet has a hidden input window");
+    struct Cleanup {HWND window;~Cleanup(){cancel_overview_snap();if(GetCapture()==window)ReleaseCapture();DestroyWindow(window);g.main=nullptr;}} cleanup{window};
+    const double nan=std::numeric_limits<double>::quiet_NaN();
+    for(bool stitched:{false,true})for(bool locked:{false,true}) {
+        reset_document({"Low","High"},stitched ? std::vector<double>{0,1,2,102,103,104} : std::vector<double>{0,1,2,3,4,5},
+            {{nan,nan,1,nan,nan,nan},{nan,nan,nan,9,nan,nan}});
+        g.main=window;g.stitch_time_gaps=stitched;g.annotations_locked=locked;g.measure_mode=true;
+        g.snap_to_data=true;g.show_channel_legend=false;
+        const RECT plot=plot_rect();g.vrect=plot;g.vx0=0;g.vx1=5;g.vy0=0;g.vy1=10;g.vvalid=true;
+        const auto px=[&](double time){return plot.left+static_cast<int>(time/5*(plot.right-plot.left));};
+        const auto py=[&](double value){return plot.bottom-static_cast<int>(value/10*(plot.bottom-plot.top));};
+        const double a=.5,b=raw_time_from_stitched(4.5),high_time=stitched ? 102 : 3;
+        set_fft_window(a,b);g_undo.clear();g_redo.clear();
+        for(int edge:{1,2}) {
+            const double expected=edge==1 ? high_time : 2;
+            const int x=analysis_range_edge_x(edge==1 ? a : b,plot),y=py(edge==1 ? 9 : 1);
+            WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(x,y));
+            WndProc(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(px(2.4),y));
+            require(g.fft_select_current_t==expected && g.fft_window_start==a && g.fft_window_end==b && g_undo.empty(),
+                "each magnetic boundary previews the actual sample on the curve nearest cursor Y without committing");
+            WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(px(2.4),y));
+            require(g.fft_window_start==(edge==1 ? expected : a) && g.fft_window_end==(edge==2 ? expected : b) && g_undo.size()==1,
+                "magnetic boundary release stores original time and exactly one Undo, including stitched/point/locked modes");
+            pop_undo();require(g.fft_window_start==a && g.fft_window_end==b,"Undo restores both pre-snap boundaries");
+            pop_redo();require((edge==1 ? g.fft_window_start : g.fft_window_end)==expected,"Redo restores the exact magnetic boundary");
+            pop_undo();g_undo.clear();g_redo.clear();
+        }
+        g.visible[1]=0;
+        int left=analysis_range_edge_x(a,plot);
+        WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(left,py(9)));
+        WndProc(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(px(2.4),py(9)));
+        require(g.fft_select_current_t==2,"hidden channels do not attract a moving analysis boundary");
+        WndProc(window,WM_KEYDOWN,VK_ESCAPE,0);
+        require(g.fft_window_start==a && g.fft_window_end==b && g_undo.empty(),"Escape cancels a magnetic preview without editing the interval");
+        g.visible[1]=1;g.snap_to_data=false;
+        WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(left,py(9)));
+        WndProc(window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(px(2.4),py(9)));
+        const double free_time=g.fft_select_current_t;
+        require(free_time!=2 && free_time!=high_time,"turning the magnet off leaves continuous boundary positioning");
+        WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(px(2.4),py(9)));
+        require(g.fft_window_start==free_time && g_undo.size()==1,"free boundary placement preserves its exact cursor coordinate");
+        pop_undo();g_undo.clear();g_redo.clear();g.snap_to_data=true;
+        WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(left,py(9)));
+        WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(left,py(9)));
+        require(g.fft_window_start==a && g.fft_window_end==b && g_undo.empty(),"clicking a boundary without moving does not magnetize it unexpectedly");
+    }
+}
+
+void exact_line_dialog() {
+    reset_document({"A"},{0,1,2},{{-1,0,1}});
+    const auto instance=GetModuleHandleW(nullptr);
+    HWND owner=CreateWindowExW(0,L"STATIC",L"Guide dialog owner",WS_POPUP,100,100,800,600,nullptr,nullptr,instance,nullptr);
+    require(owner!=nullptr,"exact line dialog has a modal owner");g.main=owner;
+    const auto previous_theme=g_theme;
+    HFONT font=CreateFontW(-14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,DEFAULT_QUALITY,DEFAULT_PITCH,L"Segoe UI");g.ui_font=font;
+    struct Cleanup {HWND owner;HFONT font;const Theme* theme;~Cleanup(){
+        if(g_guide_prompt.wnd)DestroyWindow(g_guide_prompt.wnd);
+        DestroyWindow(owner);DeleteObject(font);
+        g.main=nullptr;g.ui_font=nullptr;g_theme=theme;g_str=&kEn;update_theme_brushes();}
+    } cleanup{owner,font,previous_theme};
+    WNDCLASSEXW cls{};cls.cbSize=sizeof(cls);cls.hInstance=instance;cls.lpfnWndProc=GuidePromptProc;
+    cls.lpszClassName=L"GuideDialogRegression";
+    require(RegisterClassExW(&cls)!=0,"exact line dialog production procedure registers for testing");
+    const auto text=[](HWND control){wchar_t value[256]{};GetWindowTextW(control,value,256);return std::wstring(value);};
+    for(const auto* theme:{&kLightTheme,&kDarkTheme})for(const auto* language:{&kRu,&kEn}) {
+        g_theme=theme;g_str=language;update_theme_brushes();
+        HMENU menu=make_menu();
+        require(GetMenuState(menu,IDM_ADD_LINE_EXACT,MF_BYCOMMAND)!=static_cast<UINT>(-1) &&
+            GetMenuState(menu,IDM_ADD_HLINE_EXACT_LEGACY,MF_BYCOMMAND)==static_cast<UINT>(-1),
+            "the Tools menu contains one exact line command instead of two direction-specific commands");DestroyMenu(menu);
+        for(const auto mode:{AnalysisMode::Time,AnalysisMode::FFT,AnalysisMode::FRF}) {
+            g.mode=mode;g_guide_prompt=GuidePromptState{};
+            g_guide_prompt.vertical_value=.125;g_guide_prompt.horizontal_value=-2.75;
+            RECT bounds{0,0,460,236};const DWORD style=WS_CAPTION|WS_SYSMENU|WS_POPUP;
+            AdjustWindowRectEx(&bounds,style,FALSE,WS_EX_DLGMODALFRAME|WS_EX_TOOLWINDOW);
+            HWND dialog=CreateWindowExW(WS_EX_DLGMODALFRAME|WS_EX_TOOLWINDOW,cls.lpszClassName,guide_prompt_title_text(),style,
+                0,0,bounds.right-bounds.left,bounds.bottom-bounds.top,owner,nullptr,instance,nullptr);
+            g_guide_prompt.wnd=dialog;
+            require(dialog && text(dialog)==guide_prompt_title_text() && SendMessageW(g_guide_prompt.direction,CB_GETCOUNT,0,0)==2,
+                "the themed exact line dialog offers both directions in RU/EN and Time/FFT/FRF");
+            require(!(GetWindowLongPtrW(g_guide_prompt.edit,GWL_EXSTYLE)&WS_EX_CLIENTEDGE) &&
+                (GetWindowLongPtrW(g_guide_prompt.direction,GWL_STYLE)&CBS_OWNERDRAWFIXED),
+                "exact line controls use the compact themed edit and owner-drawn direction selector");
+            require(text(g_guide_prompt.label)==guide_prompt_label_text(true) && text(g_guide_prompt.edit)==L"0.125",
+                "vertical line initially uses the X/frequency label and its own value");
+            const auto choose=[&](int direction) {
+                SendMessageW(g_guide_prompt.direction,CB_SETCURSEL,direction,0);
+                SendMessageW(dialog,WM_COMMAND,MAKEWPARAM(IDC_GUIDE_DIRECTION,CBN_SELCHANGE),reinterpret_cast<LPARAM>(g_guide_prompt.direction));
+            };
+            SetWindowTextW(g_guide_prompt.edit,L"1.2345678901234567");choose(1);
+            require(!g_guide_prompt.vertical && text(g_guide_prompt.label)==guide_prompt_label_text(false) && text(g_guide_prompt.edit)==L"-2.75",
+                "horizontal selection uses the Y/amplitude/FRF magnitude label and a separate initial value");
+            SetWindowTextW(g_guide_prompt.edit,L"-3.5");choose(0);
+            require(text(g_guide_prompt.edit)==L"1.2345678901234567","switching direction retains every digit of the entered coordinate");choose(1);
+            require(text(g_guide_prompt.edit)==L"-3.5","returning to the horizontal direction retains its own coordinate");
+            for(const auto* invalid:{L"nan",L"inf",L"abc",L""}) {
+                SetWindowTextW(g_guide_prompt.edit,invalid);SendMessageW(dialog,WM_COMMAND,IDOK,0);
+                require(IsWindow(dialog) && !g_guide_prompt.accepted && !text(g_guide_prompt.error).empty(),
+                    "invalid and non-finite line coordinates remain in the themed dialog with an inline error");
+            }
+            SetWindowTextW(g_guide_prompt.edit,L"-3.5");SendMessageW(dialog,WM_COMMAND,IDOK,0);
+            require(g_guide_prompt.accepted && !g_guide_prompt.vertical && g_guide_prompt.value==-3.5 && !IsWindow(dialog),
+                "Add accepts the selected direction and exact finite value");
+        }
+    }
+    g.mode=AnalysisMode::Time;g_str=&kEn;g.guides.clear();g_undo.clear();g_redo.clear();
+    const UINT_PTR timer=SetTimer(owner,0,1,[](HWND window,UINT,UINT_PTR timer_id,DWORD){
+        if(!g_guide_prompt.wnd)return;
+        KillTimer(window,timer_id);
+        SendMessageW(g_guide_prompt.direction,CB_SETCURSEL,1,0);
+        SendMessageW(g_guide_prompt.wnd,WM_COMMAND,MAKEWPARAM(IDC_GUIDE_DIRECTION,CBN_SELCHANGE),0);
+        SetWindowTextW(g_guide_prompt.edit,L"-0.125");SendMessageW(g_guide_prompt.wnd,WM_COMMAND,IDOK,0);
+    });
+    require(timer!=0,"modal guide command has an automated user response");
+    handle_commands_message(owner,WM_COMMAND,IDM_ADD_LINE_EXACT,0);KillTimer(owner,timer);
+    require(g.guides.size()==1 && !g.guides[0].vertical && g.guides[0].value==-.125 && g.guides[0].mode==AnalysisMode::Time,
+        "the unified menu command adds the direction and value chosen in the modal dialog");
+    pop_undo();require(g.guides.empty(),"Undo removes the exactly positioned line");
+    pop_redo();require(g.guides.size()==1 && !g.guides[0].vertical && g.guides[0].value==-.125,"Redo restores the chosen line");
+    const UINT_PTR cancel_timer=SetTimer(owner,0,1,[](HWND window,UINT,UINT_PTR timer_id,DWORD){
+        if(!g_guide_prompt.wnd)return;
+        KillTimer(window,timer_id);SendMessageW(g_guide_prompt.wnd,WM_COMMAND,IDCANCEL,0);
+    });
+    require(cancel_timer!=0,"modal guide cancellation has an automated response");
+    bool vertical=true;double value=42;
+    require(!prompt_exact_guide_value(vertical,value) && vertical && value==42 && g.guides.size()==1 && IsWindowEnabled(owner),
+        "Cancel preserves output arguments and annotations and reenables the modal owner");KillTimer(owner,cancel_timer);
+}
+
+void offscreen_marker_lines() {
+    reset_document({"A"},{1,2,100},{{0,1,0}});
+    HDC screen=GetDC(nullptr),dc=CreateCompatibleDC(screen);
+    HBITMAP bitmap=CreateCompatibleBitmap(screen,400,240);
+    const auto old=SelectObject(dc,bitmap);ReleaseDC(nullptr,screen);
+    const auto previous_theme=g_theme;
+    struct Cleanup {HDC dc;HBITMAP bitmap;HGDIOBJ old;const Theme* theme;
+        ~Cleanup(){g_theme=theme;SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);}
+    } cleanup{dc,bitmap,old,previous_theme};
+    g.vrect={20,20,380,220};g.vy0=0;g.vy1=10;g.vvalid=true;
+    const RECT image{0,0,400,240};
+    for(const auto* theme:{&kLightTheme,&kDarkTheme}) {
+        g_theme=theme;
+        const auto paint=[&](double x,double y) {
+            g.markers={{x,y,L"M",false,g.mode,false,-1}};
+            HBRUSH background=CreateSolidBrush(theme->bg_plot);
+            FillRect(dc,&image,background);DeleteObject(background);draw_markers(dc);GdiFlush();
+        };
+        for(int mapping=0;mapping<4;++mapping) {
+            g.mode=mapping==0 ? AnalysisMode::Time : mapping==1 ? AnalysisMode::FFT : AnalysisMode::FRF;
+            g.frf.frequency_start=1;g.frf.frequency_end=100;g.frf.log_start=0;g.frf.log_end=2;
+            g.frf.logarithmic_frequency_axis=mapping==3;
+            g.vx0=mapping==3 ? 0 : 1;g.vx1=mapping==3 ? 2 : 100;
+            for(double x:{.1,1000.0,1e300}) {
+                paint(x,5);
+                require(GetPixel(dc,80,120)==theme->frame && GetPixel(dc,320,120)==theme->frame,
+                    "a marker outside either X edge retains its horizontal projection in Time/FFT/linear/log FRF");
+                require(GetPixel(dc,80,80)==theme->bg_plot,
+                    "an off-screen marker does not create a false vertical projection");
+            }
+            const double inside_x=mapping==3 ? 10 : 50.5;
+            for(double y:{-1000.0,1000.0,1e300}) {
+                paint(inside_x,y);
+                require(GetPixel(dc,200,100)==theme->frame && GetPixel(dc,200,180)==theme->frame,
+                    "a marker outside either Y edge retains its vertical projection");
+                require(GetPixel(dc,80,120)==theme->bg_plot,
+                    "an off-screen Y does not create a false horizontal projection");
+            }
+            paint(1000,1000);
+            require(GetPixel(dc,80,120)==theme->bg_plot && GetPixel(dc,200,180)==theme->bg_plot,
+                "a marker outside both axes leaves no projections inside the viewport");
+        }
+        g.mode=AnalysisMode::Time;g.ds.time={0,1,2,102,103,104};g.ds.channels={{0,1,2,3,4,5}};
+        g.stitch_time_gaps=true;invalidate_stitched_time_cache();g.vx0=2;g.vx1=4;
+        paint(104,5);
+        require(GetPixel(dc,80,120)==theme->frame && GetPixel(dc,320,120)==theme->frame,
+            "a marker outside the stitched time viewport retains its horizontal projection");
+        g.stitch_time_gaps=false;invalidate_stitched_time_cache();
+    }
+}
+
+void marker_value_readouts() {
+    reset_document({"Signal A"},{0,1,2,3,4},{{0,2,4,6,8}});
+    HWND window=CreateWindowExW(0,L"STATIC",L"Marker readouts",WS_POPUP,0,0,1000,650,
+        nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(window!=nullptr,"marker values have a hidden interaction window");g.main=window;
+    HDC screen=GetDC(window),dc=CreateCompatibleDC(screen);HBITMAP bitmap=CreateCompatibleBitmap(screen,1000,650);
+    const auto old=SelectObject(dc,bitmap);ReleaseDC(window,screen);
+    struct Cleanup {HWND hwnd;HDC dc;HBITMAP bitmap;HGDIOBJ old;~Cleanup(){SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);if(GetCapture()==hwnd)ReleaseCapture();DestroyWindow(hwnd);g.main=nullptr;}} cleanup{window,dc,bitmap,old};
+    const RECT plot=plot_rect();g.vrect=plot;g.vx0=0;g.vx1=4;g.vy0=0;g.vy1=8;g.vvalid=true;
+    g.show_channel_legend=false;g.snap_to_data=false;g.measure_mode=false;g.pending_marker=true;
+    const int x=(plot.left+plot.right)/2,y=(plot.top+plot.bottom)/2;
+    WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(x,y));WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(x,y));
+    MarkerValuePanel panel;
+    require(g.markers.size()==1 && marker_value_panel(dc,panel) && panel.marker==0,
+        "a newly placed free marker immediately exposes stored coordinates without requiring a snapped channel");
+    require(panel.x.find(L"t = 2")!=std::wstring::npos && panel.y.find(L"Y = 4")!=std::wstring::npos,
+        "the new marker readout uses both stored coordinate values");
+    draw_marker_values(dc);const auto count=g.markers.size();
+    WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(panel.bounds.left+12,panel.bounds.top+12));
+    WndProc(window,WM_LBUTTONUP,0,MAKELPARAM(panel.bounds.left+12,panel.bounds.top+12));
+    require(g.markers.size()==count && !g.point_click_pending,"clicking the readout cannot place another marker under the panel");
+    const auto revision=g.numerical_revision;
+    const int close_x=(panel.close.left+panel.close.right)/2,close_y=(panel.close.top+panel.close.bottom)/2;
+    WndProc(window,WM_LBUTTONDOWN,0,MAKELPARAM(close_x,close_y));
+    require(!g.show_marker_values && g.markers.size()==count && g.numerical_revision==revision,
+        "the readout close button hides values without deleting annotations or changing numerical inputs");
+    require(!marker_value_panel(dc,panel),"hidden readouts do not produce panels");
+    pop_undo();require(g.show_marker_values,"Undo restores hidden marker values");
+    pop_redo();require(!g.show_marker_values,"Redo restores readout hiding");
+    save_runtime_settings_now();g.show_marker_values=true;load_runtime_settings();
+    require(!g.show_marker_values,"the marker values preference persists in runtime settings");
+    WndProc(window,WM_COMMAND,IDM_MARKER_VALUES,0);
+    require(g.show_marker_values,"the View command restores marker values");
+    g.pending_marker=false;g.markers.clear();
+    for(int i=0;i<1000;++i)g.markers.push_back({1+i*.002,2,L"M"+std::to_wstring(i+1),false,AnalysisMode::Time,true,0});
+    g.active_marker=999;g.vvalid=true;
+    const auto previous_theme=g_theme;
+    for(const auto* theme:{&kLightTheme,&kDarkTheme}) for(const auto* language:{&kRu,&kEn}) {
+        g_theme=theme;g_str=language;
+        require(marker_value_panel(dc,panel) && panel.marker==999 && panel.title.find(L"Signal A")!=std::wstring::npos,
+            "many markers still produce only one channel-labelled readout in both themes/languages");
+        require(panel.bounds.left>plot.left && panel.bounds.right<plot.right && panel.bounds.top>plot.top && panel.bounds.bottom<plot.bottom,
+            "marker value panels remain inside the plot and leave scale gutters clear");
+    }
+    g_theme=previous_theme;g_str=&kEn;
+    g.markers={{2,2,L"Lower",false,AnalysisMode::Time,false,-1},{2,6,L"Upper",false,AnalysisMode::Time,false,-1}};
+    const int marker_x=plot.left+(plot.right-plot.left)/2;
+    update_marker_values_hover(window,marker_x,plot.bottom-(plot.bottom-plot.top)*3/4);
+    require(g.active_marker==1,"free markers sharing a frequency/time coordinate can be inspected by their own intersection");
+    update_marker_values_hover(window,marker_x,plot.bottom-(plot.bottom-plot.top)/4);
+    require(g.active_marker==0,"hovering the other marker with the same X selects its own stored values");
+    g.markers.clear();for(int i=0;i<1000;++i)g.markers.push_back({1+i*.002,2,L"M"+std::to_wstring(i+1),false,AnalysisMode::Time,true,0});
+    g.active_marker=999;update_marker_values_hover(window,plot.left+(plot.right-plot.left)/4,plot.top+20);
+    require(g.active_marker!=999,"hovering a different marker switches the single readout");
+    g.markers={{3.999,7.99,L"Edge",false,AnalysisMode::Time,false,-1}};g.active_marker=0;
+    require(marker_value_panel(dc,panel) && panel.bounds.right<plot.right && panel.bounds.top>plot.top,
+        "a marker near the upper-right corner moves its readout left or below rather than clipping it");
+    g.markers[0].x=5;require(!marker_value_panel(dc,panel),"off-screen markers do not leave floating value panels");
+    g.markers[0].x=-6.9388939039072284e-18;g.markers[0].y=-1.25;g.vx0=-1;g.vx1=1;g.vy0=-2;g.vy1=2;
+    require(marker_value_panel(dc,panel) && panel.x.find(L"-6.938")!=std::wstring::npos && panel.y.find(L"-1.25")!=std::wstring::npos,
+        "small and negative original coordinates are not rounded to zero");
+    g.markers[0].x=0;g.markers[0].y=1;g.vx0=-1;g.vx1=1;g.stitch_time_gaps=true;
+    require(marker_value_panel(dc,panel) && panel.x.find(L"source")!=std::wstring::npos,
+        "stitched time readouts explicitly retain the original acquisition coordinate");
+    g.stitch_time_gaps=false;g.mode=AnalysisMode::FFT;g.markers[0].mode=g.mode;g.markers[0].x=.5;g.vx0=0;g.vx1=1;
+    require(marker_value_panel(dc,panel) && panel.x.find(L"Hz")!=std::wstring::npos && panel.y.find(L"A = 1")!=std::wstring::npos,
+        "FFT marker values identify frequency and physical amplitude");
+    g.mode=AnalysisMode::FRF;g.markers[0].mode=g.mode;g.markers[0].x=10;g.markers[0].y=1.25;
+    g.frf.frequency_start=1;g.frf.frequency_end=100;g.frf.log_start=0;g.frf.log_end=2;
+    for(bool logarithmic:{false,true}) {
+        g.frf.logarithmic_frequency_axis=logarithmic;g.vx0=logarithmic ? 0 : 1;g.vx1=logarithmic ? 2 : 100;
+        require(marker_value_panel(dc,panel) && panel.x.find(L"f = 10 Hz")!=std::wstring::npos && panel.y==L"|H| = 1.25",
+            "linear and log FRF show the stored dimensionless magnitude without amplitude units");
+    }
+    WndProc(window,WM_COMMAND,IDM_MARKER_VALUES,0);
+    require(!g.show_marker_values && frf_command_supported(IDM_MARKER_VALUES),"readout visibility remains available in FRF");
 }
 
 void playback_timeline_controls() {
@@ -775,6 +1185,27 @@ void routed_window_messages() {
         require(!g.measure_mode && !g.pending_marker && g.pending_line == 0,
                 "cursor tool cancels every annotation placement mode");
     }
+    for(AnalysisMode mode:{AnalysisMode::Time,AnalysisMode::FFT,AnalysisMode::FRF}) {
+        g.mode=mode;
+        WndProc(g.main,WM_COMMAND,IDM_ADD_VLINE,0);
+        const bool snap_before=g.snap_to_data;
+        const auto revision=g.numerical_revision;
+        WndProc(g.main,WM_COMMAND,IDC_MAGNET_TOOL,0);
+        require(g.snap_to_data!=snap_before && g.pending_line==1 && g.numerical_revision==revision,
+            "shared magnet toggles independently of the Points tab without disarming lines or changing numerical inputs");
+        pop_undo();require(g.snap_to_data==snap_before,"Undo restores the shared magnet state in every analysis mode");
+        pop_redo();require(g.snap_to_data!=snap_before,"Redo restores the shared magnet toggle in every analysis mode");
+        WndProc(g.main,WM_COMMAND,IDC_MAGNET_TOOL,0);
+        WndProc(g.main,WM_COMMAND,IDC_CURSOR_TOOL,0);
+    }
+    g.mode=AnalysisMode::Time;
+    require(!is_side_toggle_id(IDC_MAGNET_TOOL),"the shared magnet is not a Points sidebar checkbox");
+    for(const auto* language:{&kRu,&kEn}) {
+        g_str=language;
+        require(std::wstring(magnet_button_text())==(language==&kEn ? L"Magnet" : L"Магнит"),
+            "the shared magnet retains an accessible localized name behind its icon in both languages");
+    }
+    g_str=&kEn;
     PointGroup annotation_group;
     annotation_group.points={{1.0,2.0}};
     g.point_groups={annotation_group};
@@ -872,6 +1303,61 @@ void bounded_load_recovery() {
     require(g.ds.channels==std::vector<std::vector<double>>{{7,8}},"bounded load recovery preserves the current document");
     request_async_load_cancel();if(g_load_worker.joinable())g_load_worker.join();
     g.async_load_stage=AsyncLoadStage::None;g.async_load_cancel_flag.reset();
+}
+
+void filter_bound_crossing() {
+    reset_document({"signal"},{0,.001,.002,.003},{{1,0,-1,0}});
+    HWND window=CreateWindowExW(0,L"STATIC",L"Filter bounds",WS_POPUP,0,0,400,240,
+        nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(window!=nullptr,"filter bounds regression has a hidden control owner");g.main=window;
+    const auto track=[&](int id,int y) {
+        return CreateWindowExW(0,TRACKBAR_CLASSW,L"",WS_CHILD|TBS_HORZ,0,y,300,30,
+            window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);
+    };
+    g.side_filter_low_track=track(IDC_SIDE_FILTER_LOW_TRACK,0);
+    g.side_filter_high_track=track(IDC_SIDE_FILTER_HIGH_TRACK,60);
+    g.side_filter_low_value=CreateWindowExW(0,L"STATIC",L"",WS_CHILD,0,30,300,20,window,nullptr,nullptr,nullptr);
+    g.side_filter_high_value=CreateWindowExW(0,L"STATIC",L"",WS_CHILD,0,90,300,20,window,nullptr,nullptr,nullptr);
+    struct Cleanup {HWND window;~Cleanup(){DestroyWindow(window);g.main=nullptr;
+        g.side_filter_low_track=g.side_filter_high_track=g.side_filter_low_value=g.side_filter_high_value=nullptr;}
+    } cleanup{window};
+    require(g.side_filter_low_track && g.side_filter_high_track && g.side_filter_low_value && g.side_filter_high_value,
+        "both native filter sliders and readouts are available");
+    const auto text=[](HWND label){wchar_t value[64]{};GetWindowTextW(label,value,64);return std::wstring(value);};
+    const auto drag=[&](bool low,int position,UINT notification) {
+        HWND ctl=low ? g.side_filter_low_track : g.side_filter_high_track;
+        SendMessageW(ctl,TBM_SETPOS,TRUE,position);
+        handle_commands_message(window,WM_HSCROLL,MAKEWPARAM(notification,position),reinterpret_cast<LPARAM>(ctl));
+    };
+    for(const auto& change:{std::pair<bool,int>{false,400},{true,950},{true,500},{false,900},{false,0},{true,1000}}) {
+        g.noise_threshold_min=100;g.noise_threshold_max=400;g.noise_threshold_enabled=true;
+        g_undo.clear();g_redo.clear();g_filter_slider_before.reset();sync_filter_controls_from_state();
+        const double value=filter_slider_to_frequency(change.second,500);
+        const double expected_low=change.first ? value : std::min(100.0,value);
+        const double expected_high=change.first ? std::max(400.0,value) : value;
+        const auto revision=g.numerical_revision;
+        // Crossing and then retreating must restore the untouched bound in the preview.
+        drag(change.first,change.first ? 1000 : 0,TB_THUMBTRACK);
+        drag(change.first,change.second,TB_THUMBTRACK);
+        require(text(g.side_filter_low_value)==filter_frequency_text(expected_low) &&
+            text(g.side_filter_high_value)==filter_frequency_text(expected_high),
+            "drag preview displays the chosen cutoff and clamps only the other bound, including retreat from a crossing");
+        require(SendMessageW(g.side_filter_low_track,TBM_GETPOS,0,0)==frequency_to_filter_slider(expected_low,500) &&
+            SendMessageW(g.side_filter_high_track,TBM_GETPOS,0,0)==frequency_to_filter_slider(expected_high,500),
+            "both slider positions agree with their preview readouts");
+        require(g.noise_threshold_min==100 && g.noise_threshold_max==400 && g.numerical_revision==revision && g_undo.empty(),
+            "coupled previews do not recompute filtering or create undo entries");
+        drag(change.first,change.second,TB_THUMBPOSITION);
+        near(g.noise_threshold_min,expected_low,"committed lower cutoff follows the edited bound without swapping");
+        near(g.noise_threshold_max,expected_high,"committed upper cutoff follows the edited bound without swapping");
+        drag(change.first,change.second,TB_ENDTRACK);
+        require(g_undo.size()==1,"committing both filter bounds creates exactly one undo entry");
+        pop_undo();
+        require(g.noise_threshold_min==100 && g.noise_threshold_max==400,"Undo restores both original filter bounds");
+        pop_redo();
+        near(g.noise_threshold_min,expected_low,"Redo restores the corrected lower cutoff");
+        near(g.noise_threshold_max,expected_high,"Redo restores the corrected upper cutoff");
+    }
 }
 
 void resident_envelope_and_history() {
@@ -1045,6 +1531,7 @@ void frf_integration() {
         g.main=window.hwnd;
         g.ui_font=reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
         update_theme_brushes();
+        create_frequency_view_controls(g.main,GetModuleHandleW(nullptr));
         create_frf_panel(g.main,GetModuleHandleW(nullptr));
         layout();
         require(g.frf_panel!=nullptr,"FRF panel is embedded in the existing main window");
@@ -1062,6 +1549,31 @@ void frf_integration() {
         // Leave horizontal room on both sides so the drag verifies the shared
         // frequency pan rather than clamping at the full-range boundary.
         zoom_at(.5,.8);
+        POINT wheel{reference_x,reference_y};ClientToScreen(g.main,&wheel);
+        const auto wheel_position=MAKELPARAM(wheel.x,wheel.y);
+        const auto generation_before_wheel=g.frf.generation;
+        const bool logarithmic_before_wheel=g.frf.logarithmic_frequency_axis;
+        const double low_before_wheel=g.frf.frequency_start,high_before_wheel=g.frf.frequency_end;
+        const double log_low_before_wheel=g.frf.log_start,log_high_before_wheel=g.frf.log_end;
+        for(bool logarithmic:{false,true}) {
+            g.frf.logarithmic_frequency_axis=logarithmic;
+            double *lo=nullptr,*hi=nullptr,minb=0,maxb=0,minw=0;
+            require(active_axis(lo,hi,minb,maxb,minw),"FRF wheel check has a ready frequency axis");
+            *lo=minb+(maxb-minb)*.25;*hi=minb+(maxb-minb)*.75;
+            sync_frf_frequency_limits();
+            const double before=logarithmic ? g.frf.log_start : g.frf.frequency_start;
+            const double width=logarithmic ? g.frf.log_end-g.frf.log_start : g.frf.frequency_end-g.frf.frequency_start;
+            WndProc(g.main,WM_MOUSEWHEEL,MAKEWPARAM(MK_SHIFT,WHEEL_DELTA),wheel_position);
+            near(logarithmic ? g.frf.log_start : g.frf.frequency_start,before-width*.1,
+                "Shift wheel pans the shared FRF axis over Reference in linear and log views");
+            WndProc(g.main,WM_MOUSEHWHEEL,MAKEWPARAM(0,WHEEL_DELTA),wheel_position);
+            near(logarithmic ? g.frf.log_start : g.frf.frequency_start,before,
+                "native horizontal wheel returns the FRF axis without changing its scale");
+        }
+        g.frf.logarithmic_frequency_axis=logarithmic_before_wheel;
+        g.frf.frequency_start=low_before_wheel;g.frf.frequency_end=high_before_wheel;
+        g.frf.log_start=log_low_before_wheel;g.frf.log_end=log_high_before_wheel;
+        require(g.frf.generation==generation_before_wheel,"FRF wheel navigation does not recalculate the result");
         const double frequency_start_before_reference_drag=g.frf.frequency_start;
         const double frequency_end_before_reference_drag=g.frf.frequency_end;
         const double log_start_before_reference_drag=g.frf.log_start;
@@ -1081,6 +1593,49 @@ void frf_integration() {
                 g.frf.log_start!=log_start_before_reference_drag ||
                 g.frf.log_end!=log_end_before_reference_drag,
                 "dragging averaged Reference pans the shared frequency view with KD");
+        const bool vertical_pan_before_reference_drag=g.vertical_pan;
+        const bool snap_before_reference_drag=g.snap_to_data;
+        const bool coefficient_auto_before_reference_drag=g.frf.auto_y;
+        const double coefficient_min_before_reference_drag=g.frf.y_min;
+        const double coefficient_max_before_reference_drag=g.frf.y_max;
+        for(bool logarithmic:{false,true})for(bool snap:{false,true}) {
+            g.frf.logarithmic_frequency_axis=logarithmic;g.snap_to_data=snap;g.vertical_pan=snap;
+            double *lo=nullptr,*hi=nullptr,minb=0,maxb=0,minw=0;
+            require(active_axis(lo,hi,minb,maxb,minw),"point-mode Reference drag has a valid frequency axis");
+            *lo=minb+(maxb-minb)*.25;*hi=minb+(maxb-minb)*.75;sync_frf_frequency_limits();
+            const double start=*lo,end=*hi;
+            g.frf.reference_auto_y=true;g.measure_mode=true;
+            double initial_low=0,initial_high=1;frf_reference_y_range(initial_low,initial_high);
+            const auto group_count=g.point_groups.size(),undo_count=g_undo.size();
+            const auto generation=g.frf.generation;
+            handle_frf_input(g.main,WM_LBUTTONDOWN,0,MAKELPARAM(reference_x,reference_y));
+            require(g.point_click_pending && g.point_click_reference_axis,
+                "Reference starts a deferred point click on its own amplitude axis");
+            handle_frf_input(g.main,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(reference_x+2,reference_y+2));
+            require(g.point_click_pending && g.frf.reference_auto_y,
+                "small point-mode mouse jitter does not change the Reference scale");
+            handle_frf_input(g.main,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(reference_x,reference_y+12));
+            near(g.frf.reference_y_max,initial_high+12.0/(reference_chart.bottom-reference_chart.top)*(initial_high-initial_low),
+                "the first point-mode drag movement immediately scales Reference using its own height and initial Y range");
+            require(*lo==start && *hi==end && !g.frf.reference_auto_y && g.frf.reference_y_min==0,
+                "a purely vertical Reference gesture retains the shared frequency window and zero baseline");
+            handle_frf_input(g.main,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(reference_x+20,reference_y+20));
+            near(g.frf.reference_y_max,initial_high+20.0/(reference_chart.bottom-reference_chart.top)*(initial_high-initial_low),
+                "continued point-mode motion uses the same Reference drag snapshot");
+            require(*lo!=start && *hi!=end,"point-mode Reference dragging also pans the shared frequency window");
+            handle_frf_input(g.main,WM_LBUTTONUP,0,MAKELPARAM(reference_x+20,reference_y+20));
+            require(g.measure_mode && !g.point_click_pending && !g.point_click_reference_axis && !g.dragging && GetCapture()!=g.main &&
+                g.point_groups.size()==group_count && g_undo.size()==undo_count,
+                "Reference navigation keeps point mode enabled without inserting points or adding annotation history");
+            require(g.frf.auto_y==coefficient_auto_before_reference_drag && g.frf.y_min==coefficient_min_before_reference_drag &&
+                g.frf.y_max==coefficient_max_before_reference_drag && g.frf.generation==generation,
+                "point-mode Reference navigation leaves the upper FRF Y scale and numerical result unchanged");
+            const double released_max=g.frf.reference_y_max;
+            handle_frf_input(g.main,WM_MOUSEMOVE,0,MAKELPARAM(reference_x,reference_y));
+            require(g.frf.reference_y_max==released_max,"releasing the mouse ends the Reference drag");
+        }
+        g.measure_mode=false;g.vertical_pan=vertical_pan_before_reference_drag;g.snap_to_data=snap_before_reference_drag;
+        g.frf.logarithmic_frequency_axis=logarithmic_before_wheel;
         // The following annotation scenarios use the original centered view.
         // Restore it after this navigation-specific assertion so they remain
         // independent from the drag test.
@@ -1164,7 +1719,7 @@ void frf_integration() {
         g_theme=&kLightTheme;
         update_theme_brushes();
         wchar_t range_text[80]{};
-        require(GetWindowTextW(GetDlgItem(g.frf_panel,7107),range_text,80)>0,"FRF range edit displays calculated limit");
+        require(GetWindowTextW(g.side_frequency_low,range_text,80)>0,"shared FRF range edit displays calculated limit");
         RECT panel; GetClientRect(g.frf_panel,&panel);
         require(panel.right==kRightPanel && panel.bottom>=354,"FRF controls fit below the FRF tab strip");
         SendMessageW(GetDlgItem(g.frf_panel,7122),CB_SETCURSEL,0,0);
@@ -1458,12 +2013,92 @@ void save_hotkeys() {
     const auto* project = find(IDC_SAVE_PROJECT);
     const auto* save_as = find(IDC_SAVECSV);
     const auto* png = find(IDC_SAVEPNG);
+    require(find(IDM_MODE_FRF) && find(IDM_MODE_FRF)->key=='R' && find(IDM_MODE_FRF)->fvirt==FVIRTKEY,
+            "FRF defaults to plain R");
+    require(find(IDM_MODE_TIME) && find(IDM_MODE_TIME)->key=='S' && find(IDM_MODE_TIME)->fvirt==FVIRTKEY,
+            "Signal defaults to plain S");
+    require(find(IDM_MODE_FREQ) && find(IDM_MODE_FREQ)->key=='F' && find(IDM_MODE_FREQ)->fvirt==FVIRTKEY,
+            "FFT keeps plain F");
     require(project && project->fvirt == (FVIRTKEY | FCONTROL) && project->key == 'S',
             "Ctrl+S saves the project");
     require(save_as && save_as->fvirt == (FVIRTKEY | FCONTROL | FSHIFT) && save_as->key == 'S',
             "Ctrl+Shift+S opens Save as");
     require(png && png->fvirt == (FVIRTKEY | FCONTROL | FALT) && png->key == 'S',
             "Ctrl+Alt+S saves PNG");
+}
+
+LRESULT CALLBACK shortcut_test_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
+    if(message==WM_COMMAND)return WndProc(hwnd,message,wp,lp);
+    return DefSubclassProc(hwnd,message,wp,lp);
+}
+void additional_mode_hotkeys() {
+    reset_document({"A"},{0,.01,.02,.03},{{1,2,3,4}});
+    const auto defaults=default_hotkeys();const auto order=hotkey_command_order();
+    for(std::size_t i=0;i<defaults.size();++i) {
+        const auto& a=defaults[i];
+        require(a.key!=0 && std::count(order.begin(),order.end(),a.command)==1,"every default is listed once in shortcut settings");
+        for(std::size_t j=0;j<i;++j)
+            require(a.command!=defaults[j].command && (a.key!=defaults[j].key || a.fvirt!=defaults[j].fvirt),"default shortcuts and command IDs are unique");
+    }
+    g.hotkeys=defaults;
+    for(const auto* language:{&kRu,&kEn}) {
+        g_str=language;const auto help=hotkeys_body_text();
+        for(const auto& binding:defaults)require(command_name(binding.command)!=L"?" && help.find(command_name(binding.command))!=std::wstring::npos,
+            "default shortcuts have localized settings and help entries");
+    }
+    g_str=&kEn;HACCEL accel=make_accelerators();
+    const int count=CopyAcceleratorTableW(accel,nullptr,0);std::vector<ACCEL> table(count);
+    CopyAcceleratorTableW(accel,table.data(),count);DestroyAcceleratorTable(accel);
+    require(count==static_cast<int>(defaults.size()),"native accelerator table includes every default");
+    for(const auto& binding:defaults)require(std::count_if(table.begin(),table.end(),[&](const ACCEL& a){
+        return a.cmd==binding.command && a.key==binding.key && (a.fVirt&~FNOINVERT)==binding.fvirt;})==1,
+        "native accelerator preserves its command and modifiers");
+    g.hotkeys={{IDM_MODE_TIME,FVIRTKEY,'T'}};ensure_hotkeys_initialized();
+    require(find_hotkey_binding(IDM_MODE_TIME)->key=='S',"old Signal default migrates to S");
+    g.hotkeys={{IDM_MODE_TIME,FVIRTKEY,'T'},{IDC_CURSOR_TOOL,FVIRTKEY,'S'}};ensure_hotkeys_initialized();
+    require(find_hotkey_binding(IDM_MODE_TIME)->key=='T' && find_hotkey_binding(IDC_CURSOR_TOOL)->key=='S',
+        "Signal migration preserves an existing custom S assignment");
+    g.hotkeys={{IDM_MODE_FRF,FVIRTKEY|FCONTROL,'R'}};ensure_hotkeys_initialized();
+    require(find_hotkey_binding(IDM_MODE_FRF)->fvirt==FVIRTKEY,"old FRF default migrates to plain R");
+    g.hotkeys={{IDM_MODE_FRF,FVIRTKEY|FCONTROL,'R'},{IDC_CURSOR_TOOL,FVIRTKEY,'R'}};ensure_hotkeys_initialized();
+    require(find_hotkey_binding(IDM_MODE_FRF)->fvirt==(FVIRTKEY|FCONTROL) && find_hotkey_binding(IDC_CURSOR_TOOL)->key=='R',
+        "FRF migration preserves an existing custom R assignment");
+    g.hotkeys={{IDM_MODE_TIME,FVIRTKEY,'G'},{IDC_CURSOR_TOOL,FVIRTKEY,0}};ensure_hotkeys_initialized();
+    require(find_hotkey_binding(IDC_MAGNET_TOOL)->key==0 && find_hotkey_binding(IDM_MODE_TIME)->key=='G',"new defaults do not steal custom assignments");
+    require(find_hotkey_binding(IDC_CURSOR_TOOL)->key==0 && find_hotkey_binding(IDC_LOCK_ANNOTATIONS)->key=='L',"migration preserves disabled commands and adds free defaults");
+    const auto config_before=g_config_path;g_config_path=(test_dir/"new-mode-hotkeys.ini").wstring();
+    save_runtime_settings_now();g.hotkeys.clear();load_runtime_settings();
+    require(find_hotkey_binding(IDC_MAGNET_TOOL)->key==0 && find_hotkey_binding(IDC_CURSOR_TOOL)->key==0 &&
+        find_hotkey_binding(IDM_MODE_TIME)->key=='G',"custom and disabled shortcuts survive INI reload");
+    WritePrivateProfileStringW(L"hotkeys",nullptr,nullptr,g_config_path.c_str());
+    WritePrivateProfileStringW(L"hotkeys",L"cmd_1700",L"1,71",g_config_path.c_str());load_runtime_settings();
+    require(find_hotkey_binding(IDM_MODE_TIME)->key=='G' && find_hotkey_binding(IDC_MAGNET_TOOL)->key==0 &&
+        find_hotkey_binding(IDC_CURSOR_TOOL)->key=='N',"old INI custom assignments take precedence over new defaults");
+    g_config_path=config_before;g.hotkeys=defaults;
+    struct Window {
+        HWND hwnd=CreateWindowExW(0,L"STATIC",L"Mode shortcuts",WS_POPUP,0,0,980,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+        ~Window(){g.main=nullptr;if(hwnd)DestroyWindow(hwnd);}
+    } window;
+    require(window.hwnd!=nullptr,"mode shortcut test window");g.main=window.hwnd;SetWindowSubclass(g.main,shortcut_test_proc,1,0);
+    const auto invoke=[&](int command){SendMessageW(g.main,WM_COMMAND,MAKEWPARAM(command,1),0);};
+    g.measure_mode=true;g.pending_line=1;g.pending_marker=true;invoke(IDC_CURSOR_TOOL);
+    require(!g.measure_mode && !g.pending_line && !g.pending_marker,"cursor accelerator restores navigation");
+    const bool snap=g.snap_to_data;invoke(IDC_MAGNET_TOOL);require(g.snap_to_data!=snap,"magnet accelerator toggles snapping");
+    invoke(IDC_LOCK_ANNOTATIONS);require(g.annotations_locked,"lock accelerator locks annotations");
+    invoke(IDC_LOCK_ANNOTATIONS);require(!g.annotations_locked,"lock accelerator unlocks annotations");
+    for(int tab=0;tab<3;++tab) {g.side_panel_visible=false;invoke(IDC_SIDE_TAB_CHANNELS+tab);
+        require(g.side_panel_visible && g.side_panel_tab==tab,"panel accelerator reveals the requested hidden tab");}
+    invoke(IDC_SIDEPANEL);require(!g.side_panel_visible,"panel accelerator hides the panel");
+    const bool filter=g.noise_threshold_enabled;invoke(IDC_SIDE_FILTER_ENABLE);
+    require(g.noise_threshold_enabled!=filter,"filter accelerator toggles state without a checkbox HWND");
+    invoke(IDC_SIDE_FILTER_ENABLE);require(g.noise_threshold_enabled==filter,"filter accelerator restores its state");
+    const bool stitch=g.stitch_time_gaps;invoke(IDC_SIDE_STITCH_GAPS);require(g.stitch_time_gaps!=stitch,"gap accelerator toggles hidden gaps");
+    const bool values=g.show_marker_values;invoke(IDM_MARKER_VALUES);require(g.show_marker_values!=values,"marker accelerator toggles readouts");
+    const bool legend=g.show_channel_legend;invoke(IDM_CHANNEL_LEGEND);require(g.show_channel_legend!=legend,"legend accelerator toggles legend");
+    const bool symbols=g.distinguish_curves;invoke(IDM_CURVE_SYMBOLS);require(g.distinguish_curves!=symbols,"symbol accelerator toggles curve symbols");
+    g.win_start=.01;g.win_end=.02;invoke(IDM_ANALYSIS_VISIBLE);require(has_fft_window(),"analysis accelerator selects the visible interval");
+    near(g.fft_window_start,.01,"visible analysis interval lower bound");near(g.fft_window_end,.02,"visible analysis interval upper bound");
+    invoke(IDM_ANALYSIS_ENTIRE);require(!has_fft_window(),"entire-recording accelerator clears the analysis selection");
 }
 
 void channel_coefficient_fields() {
@@ -1508,6 +2143,233 @@ void mode_button_text() {
     g_str = &kEn;
 }
 
+LRESULT CALLBACK frequency_test_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
+    if(message==WM_COMMAND && handle_frequency_view_command(hwnd,wp))return 0;
+    return DefSubclassProc(hwnd,message,wp,lp);
+}
+void frequency_view_controls() {
+    std::vector<double> t,x,y;
+    for(int i=0;i<256;++i) {t.push_back(i/256.0);x.push_back(std::sin(2*std::acos(-1.0)*16*t.back()));y.push_back(2*x.back());}
+    reset_document({"Reference","Response"},t,{x,y});
+    compute_spectrum_for_window(t.front(),t.back(),false);g.mode=AnalysisMode::FFT;
+    require(g.spec_valid && g.spec.ok,"frequency view fixture has a real spectrum");
+    g.freq_start=0;g.freq_end=g.spec.nyquist;
+    struct Window {
+        HWND hwnd=CreateWindowExW(0,L"STATIC",L"Frequency view",WS_POPUP,0,0,980,650,
+            nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+        ~Window(){g.main=nullptr;if(hwnd)DestroyWindow(hwnd);}
+    } window;
+    require(window.hwnd!=nullptr,"frequency view test window");
+    g.main=window.hwnd;g.side_panel_visible=true;
+    g.ui_font=reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    SetWindowSubclass(g.main,frequency_test_proc,1,0);
+    create_frequency_view_controls(g.main,GetModuleHandleW(nullptr));
+    create_frf_panel(g.main,GetModuleHandleW(nullptr));
+    const auto shown=[](HWND h){return (GetWindowLongPtrW(h,GWL_STYLE)&WS_VISIBLE)!=0;};
+    const auto label=[](HWND h){wchar_t value[160]{};GetWindowTextW(h,value,160);return std::wstring(value);};
+    const auto generation=g.spec_generation,revision=g.numerical_revision;
+    const auto bins=g.spec.bin_count();
+    for(int tab:{0,1}) {
+        set_side_panel_tab(tab);layout();
+        g.side_scroll_y=g.side_scroll_max;layout();
+        require(shown(g.side_frequency_apply) && IsWindowEnabled(g.side_frequency_apply),"spectrum frequency range is available on Channels and Points");
+    }
+    require(!(GetWindowLongPtrW(g.side_frequency_low,GWL_EXSTYLE)&WS_EX_CLIENTEDGE),"frequency edits use the application's compact border");
+    SetWindowTextW(g.side_frequency_low,L"8");SetWindowTextW(g.side_frequency_high,L"64");
+    g.freq_start=2;set_status();
+    require(label(g.side_frequency_low)==L"8","status refresh preserves a pending frequency edit");
+    SendMessageW(g.side_frequency_low,WM_KEYDOWN,VK_RETURN,0);
+    near(g.freq_start,8,"Enter applies spectrum view start");near(g.freq_end,64,"Enter applies spectrum view end");
+    require(g.spec_generation==generation && g.numerical_revision==revision && g.spec.bin_count()==bins && g_undo.empty(),
+        "view range leaves FFT data, numerical revision and annotation history unchanged");
+    require(!set_visible_frequency_range(64,8) && !set_visible_frequency_range(-1,64) && !set_visible_frequency_range(0,1000) &&
+        !set_visible_frequency_range(0,std::numeric_limits<double>::quiet_NaN()),"spectrum view rejects reversed, unavailable and nonfinite ranges");
+    require(set_visible_frequency_range(0,128),"spectrum view includes DC and Nyquist");
+    g.spec_pending=true;sync_frequency_view_controls();
+    require(!IsWindowEnabled(g.side_frequency_apply) && !set_visible_frequency_range(8,64),"pending spectrum cannot change a stale range");
+    g.spec_pending=false;
+    set_side_panel_tab(2);layout();require(!shown(g.side_frequency_apply),"Filter hides the frequency view block");
+    g.mode=AnalysisMode::Time;set_side_panel_tab(1);g.side_scroll_y=g.side_scroll_max;layout();
+    require(shown(g.side_frequency_apply) && label(g.side_frequency_low_label)==L"From, s","Signal uses the same bottom block with time units");
+    const auto time_generation=g.spec_generation,time_revision=g.numerical_revision;
+    const bool selected_before=has_fft_window();g.stitch_time_gaps=true;
+    SetWindowTextW(g.side_frequency_low,L"0.1");SetWindowTextW(g.side_frequency_high,L"0.8");
+    SendMessageW(g.side_frequency_high,WM_KEYDOWN,VK_RETURN,0);
+    near(g.win_start,.1,"Signal view accepts the original-time lower endpoint");near(g.win_end,.8,"Signal view accepts the original-time upper endpoint");
+    require(g.spec_generation==time_generation && g.numerical_revision==time_revision && has_fft_window()==selected_before && g_undo.empty(),
+        "Signal viewport changes preserve analysis selection, computed data and history");
+    require(!set_visible_frequency_range(-1,.8) && !set_visible_frequency_range(.1,2),"Signal view rejects endpoints outside the recording");
+    g.stitch_time_gaps=false;
+    require(set_frf_channels({0},{1}),"frequency view selects real FRF roles");
+    // A real main HWND selects the asynchronous worker path; prepare this small fixture synchronously.
+    g.frf.options.estimator=lvm::FrfEstimator::Direct;g.main=nullptr;set_mode(AnalysisMode::FRF);g.main=window.hwnd;
+    require(g.frf.result.ok,"frequency view fixture has a real FRF");
+    const auto frf_generation=g.frf.generation;const auto transfer=g.frf.result.common().transfer;
+    set_side_panel_tab(1);layout();
+    g.side_scroll_y=g.side_scroll_max;layout();
+    require(shown(g.side_frequency_apply) && !shown(g.frf_panel),"FRF Points exposes frequency range without the calculation panel");
+    SetWindowTextW(g.side_frequency_low,L"4");SetWindowTextW(g.side_frequency_high,L"32");
+    SendMessageW(g.side_frequency_apply,BM_CLICK,0,0);
+    near(g.frf.frequency_start,4,"Points changes the shared FRF view start");near(g.frf.frequency_end,32,"Points changes the shared FRF view end");
+    require(g.frf.generation==frf_generation && g.frf.result.common().transfer==transfer,"FRF view range preserves calculated transfer values");
+    require(!set_visible_frequency_range(0,32),"FRF range preserves the non-DC lower limit");
+    for(const Strings* language:{&kRu,&kEn}) {
+        g_str=language;refresh_frf_controls();set_side_panel_tab(0);layout();g.side_scroll_y=g.side_scroll_max;layout();
+        require(shown(g.frf_panel) && shown(g.side_frequency_apply),"FRF Channels uses the same bottom range block");
+        require(!GetDlgItem(g.frf_panel,7110) && label(g.side_frequency_apply)==frequency_view_apply_text(),"FRF has no duplicate native range controls");
+        require(label(g.side_frequency_title)==(language==&kRu ? L"Видимый диапазон" : L"Visible range"),"common range heading is localized");
+    }
+    set_side_panel_tab(1);g.side_panel_visible=false;layout();
+    require(!shown(g.side_frequency_apply),"hiding the side panel hides the common range controls");
+    g_str=&kEn;
+}
+
+LRESULT CALLBACK channel_panel_test_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) {
+    if(message==WM_NCCREATE)g.main=hwnd;
+    // Keep production creation/painting, but avoid exit persistence and WM_QUIT in this fixture.
+    if(message==WM_DESTROY) {KillTimer(hwnd,2);KillTimer(hwnd,3);return 0;}
+    return WndProc(hwnd,message,wp,lp);
+}
+LRESULT CALLBACK observe_track_paint(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR data) {
+    if(msg==WM_PAINT)++*reinterpret_cast<int*>(data);
+    return DefSubclassProc(hwnd,msg,wp,lp);
+}
+void verify_filter_slider_paint(HWND window) {
+    Gdiplus::GdiplusStartupInput startup;ULONG_PTR token=0;
+    require(Gdiplus::GdiplusStartup(&token,&startup,nullptr)==Gdiplus::Ok,"GDI+ starts for complete filter slider paint checks");
+    RECT owner_rect{};GetWindowRect(window,&owner_rect);const bool owner_visible=IsWindowVisible(window)!=FALSE;
+    SetWindowPos(window,nullptr,-16000,-16000,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+    ShowWindow(window,SW_SHOWNOACTIVATE);
+    HDC dc=CreateCompatibleDC(nullptr);BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth=320;info.bmiHeader.biHeight=-24;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+    void* pixels=nullptr;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&pixels,nullptr,0);const auto old=SelectObject(dc,bitmap);
+    const auto theme_before=g_theme;
+    set_side_panel_tab(2);g.noise_threshold_enabled=true;
+    for(const auto* theme:{&kLightTheme,&kDarkTheme}) {
+        g_theme=theme;update_theme_brushes();
+        for(int mode:{FilterModeLowPass,FilterModeHighPass,FilterModeBandPass,FilterModeBandStop}) {
+            SendMessageW(g.side_filter_mode,CB_SETCURSEL,mode,0);
+            WndProc(window,WM_COMMAND,MAKEWPARAM(IDC_SIDE_FILTER_MODE,CBN_SELCHANGE),reinterpret_cast<LPARAM>(g.side_filter_mode));
+            for(int position:{0,310,1000,680})for(HWND track:{g.side_filter_low_track,g.side_filter_high_track}) {
+                SendMessageW(track,TBM_SETPOS,TRUE,position);
+                WndProc(window,WM_HSCROLL,MAKEWPARAM(TB_THUMBPOSITION,position),reinterpret_cast<LPARAM>(track));
+                refresh_side_panel_controls();
+                require((GetWindowLongPtrW(track,GWL_STYLE)&WS_VISIBLE)!=0,"filter track remains visible after cutoff commit and panel refresh");
+                RECT rail{},thumb{};SendMessageW(track,TBM_GETCHANNELRECT,0,reinterpret_cast<LPARAM>(&rail));
+                SendMessageW(track,TBM_GETTHUMBRECT,0,reinterpret_cast<LPARAM>(&thumb));
+                const int center=(thumb.top+thumb.bottom)/2;
+                const int x=(thumb.left+thumb.right)<(rail.left+rail.right) ? (thumb.right+rail.right)/2 : (rail.left+thumb.left)/2;
+                RECT canvas{0,0,320,24};FillRect(dc,&canvas,g_panel_brush);
+                NMCUSTOMDRAW draw{};draw.hdr.hwndFrom=track;draw.hdr.code=NM_CUSTOMDRAW;draw.hdc=dc;draw.dwDrawStage=CDDS_PREPAINT;
+                require(draw_themed_trackbar(draw)==CDRF_SKIPDEFAULT,"one prepaint stage paints the entire slider without native cached-item callbacks");
+                GdiFlush();
+                require(GetPixel(dc,x,center)!=theme->bg_panel && GetPixel(dc,(thumb.left+thumb.right)/2,thumb.top+1)!=theme->bg_panel,
+                    "both channel and thumb survive each cutoff change in both themes");
+                FillRect(dc,&canvas,g_panel_brush);
+                SendMessageW(track,WM_PRINTCLIENT,reinterpret_cast<WPARAM>(dc),PRF_CLIENT|PRF_ERASEBKGND);GdiFlush();
+                require(GetPixel(dc,x,center)!=theme->bg_panel,"native slider printing routes the complete themed channel after updates");
+            }
+            for(HWND track:{g.side_filter_low_track,g.side_filter_high_track}) {
+                int paints=0;SetWindowSubclass(track,observe_track_paint,0x5041494e,reinterpret_cast<DWORD_PTR>(&paints));
+                struct CaptureCleanup {HWND track;~CaptureCleanup(){
+                    if(GetCapture()==track)ReleaseCapture();
+                    RemoveWindowSubclass(track,observe_track_paint,0x5041494e);}
+                } capture_cleanup{track};
+                RECT thumb{},client{};SendMessageW(track,TBM_GETTHUMBRECT,0,reinterpret_cast<LPARAM>(&thumb));GetClientRect(track,&client);
+                const auto revision=g.numerical_revision;const auto undo_count=g_undo.size();
+                const double low=g.noise_threshold_min,high=g.noise_threshold_max;
+                const int y=(thumb.top+thumb.bottom)/2;
+                SendMessageW(track,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM((thumb.left+thumb.right)/2,y));
+                require(GetCapture()==track,"native filter slider captures a held thumb drag");
+                for(int step=0;step<16;++step) {
+                    const int before=paints;
+                    const int x=step%2 ? 15+step : client.right-15-step;
+                    SendMessageW(track,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(x,y));
+                    require(GetCapture()==track && paints>before,"each abrupt held move finishes a synchronous slider paint before release");
+                    require(g.noise_threshold_min==low && g.noise_threshold_max==high && g.numerical_revision==revision && g_undo.size()==undo_count,
+                        "rapid held slider previews do not apply filtering or add history");
+                    for(HWND displayed:{g.side_filter_low_track,g.side_filter_high_track}) {
+                        RECT rail{},current{};SendMessageW(displayed,TBM_GETCHANNELRECT,0,reinterpret_cast<LPARAM>(&rail));
+                        SendMessageW(displayed,TBM_GETTHUMBRECT,0,reinterpret_cast<LPARAM>(&current));
+                        RECT canvas{0,0,320,24};FillRect(dc,&canvas,g_panel_brush);
+                        SendMessageW(displayed,WM_PRINTCLIENT,reinterpret_cast<WPARAM>(dc),PRF_CLIENT);GdiFlush();
+                        const int cy=(current.top+current.bottom)/2;
+                        const COLORREF rail_color=GetPixel(dc,rail.right-5,cy);
+                        bool clean=true;
+                        for(int px=current.right+4;px<rail.right-4;++px)if(GetPixel(dc,px,cy)!=rail_color){clean=false;break;}
+                        require(clean,"both sliders have a continuous unfilled rail without old blue segments while capture is held");
+                    }
+                }
+                SendMessageW(track,WM_LBUTTONUP,0,MAKELPARAM(30,y));
+                require(GetCapture()!=track,"native filter slider releases capture after the final move");
+            }
+        }
+    }
+    ShowWindow(window,owner_visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+    SetWindowPos(window,nullptr,owner_rect.left,owner_rect.top,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_NOREDRAW);
+    g_theme=theme_before;update_theme_brushes();SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);Gdiplus::GdiplusShutdown(token);
+}
+
+void channel_panel_layout_regression() {
+    reset_document({"X","Y","Z"},{0,.01,.02,.03},{{1,2,3,4},{2,3,4,5},{3,4,5,6}});
+    compute_spectrum_for_window(0,.03,false);
+    WNDCLASSW cls{};cls.lpfnWndProc=channel_panel_test_proc;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"ChannelPanelRegression";
+    RegisterClassW(&cls);
+    struct Window {
+        HWND hwnd=CreateWindowExW(0,L"ChannelPanelRegression",L"Channel panel regression",WS_POPUP|WS_CLIPCHILDREN,
+            0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+        ~Window(){DestroyWindow(hwnd);release_backbuffer();
+            for(HFONT font:{g.ui_font,g.menu_font,g.bold_font,g.title_font,g.axis_font})if(font)DeleteObject(font);
+            g.main=nullptr;}
+    } window;
+    require(window.hwnd!=nullptr,"channel regression creates all production panel controls");
+    rebuild_checks();g.side_panel_visible=true;g.side_panel_tab=0;
+    const auto shown=[](HWND h){return h && (GetWindowLongPtrW(h,GWL_STYLE)&WS_VISIBLE)!=0;};
+    const auto bounds=[&](HWND h){RECT r{};GetWindowRect(h,&r);MapWindowPoints(nullptr,window.hwnd,reinterpret_cast<POINT*>(&r),2);return r;};
+    const auto validate=[&] {
+        RECT client{};GetClientRect(window.hwnd,&client);
+        std::vector<HWND> controls=g.side_channel_controls;
+        controls.insert(controls.end(),g.side_frequency_controls.begin(),g.side_frequency_controls.end());
+        controls.insert(controls.end(),g.checks.begin(),g.checks.end());controls.insert(controls.end(),g.check_labels.begin(),g.check_labels.end());
+        controls.insert(controls.end(),g.channel_coefficient_edits.begin(),g.channel_coefficient_edits.end());
+        std::vector<RECT> visible;
+        for(HWND h:controls)if(shown(h)) {
+            const RECT r=bounds(h);
+            require(r.top>=kTopBar+78 && r.bottom<=client.bottom-kBottomBar-6,"visible Channels controls stay inside the scrolling viewport");
+            for(const auto& other:visible){RECT intersection{};require(!IntersectRect(&intersection,&r,&other),"channel labels, frequency fields and formula controls never overlap");}
+            visible.push_back(r);
+        }
+    };
+    for(AnalysisMode mode:{AnalysisMode::FFT,AnalysisMode::Time,AnalysisMode::FFT}) {
+        g.mode=mode;g.side_scroll_y=0;refresh_side_panel_controls();validate();
+        require(bounds(g.side_frequency_title).top>bounds(g.side_channel_color).bottom,"visible range is below the channel list and channel settings in every mode");
+        require(bounds(g.check_labels.front()).top>=bounds(g.side_channel_formula_label).bottom,"channel rows are below the formula heading");
+        for(int offset:{17,g.side_scroll_max}) {
+            scroll_side_panel(offset);validate();refresh_side_panel_controls();validate();
+        }
+    }
+    // A shorter mode and a taller window both reduce the old scroll limit.
+    g.mode=AnalysisMode::Time;refresh_side_panel_controls();validate();
+    MoveWindow(window.hwnd,0,0,1000,420,FALSE);g.side_scroll_y=g.side_scroll_max;layout();refresh_side_panel_controls();validate();
+    MoveWindow(window.hwnd,0,0,1000,850,FALSE);refresh_side_panel_controls();validate();
+    g.mode=AnalysisMode::FRF;
+    for(int height:{420,650,850}) {
+        MoveWindow(window.hwnd,0,0,1000,height,FALSE);g.side_scroll_y=0;set_side_panel_tab(0);
+        g.side_scroll_y=g.side_scroll_max;layout();
+        require(shown(g.side_frequency_apply),"FRF bottom range remains reachable at every window height");
+        const RECT range=bounds(g.side_frequency_title),frf=bounds(g.frf_panel),apply=bounds(g.side_frequency_apply);
+        require(range.top>=frf.bottom+12 && apply.bottom<=height-kBottomBar-6,"FRF settings and common bottom range never overlap");
+        HRGN clip=CreateRectRgn(0,0,0,0);RECT region{};
+        require(GetWindowRgn(g.frf_panel,clip)!=ERROR && GetRgnBox(clip,&region)!=ERROR && frf.top+region.top>=kTopBar+44,
+            "scrolling FRF clips its native settings below the tabs");DeleteObject(clip);
+    }
+    g.mode=AnalysisMode::Time;g.side_scroll_y=0;refresh_side_panel_controls();
+    verify_filter_slider_paint(window.hwnd);
+    for(int tab:{1,2}) {set_side_panel_tab(tab);for(HWND h:g.side_channel_controls)require(!shown(h),"other tabs hide channel controls");}
+    set_side_panel_tab(0);g.side_panel_visible=false;refresh_side_panel_controls();
+    for(HWND h:g.side_channel_controls)require(!shown(h),"hidden panel does not expose channel controls during refresh");
+}
+
 void frf_filter_tab() {
     reset_document({"Reference", "Response"}, {0, .01, .02, .03}, {{1,2,3,4},{2,4,6,8}});
     struct Window {
@@ -1533,9 +2395,12 @@ void frf_filter_tab() {
     create_frf_panel(g.main,GetModuleHandleW(nullptr));
     const auto shown=[](HWND h) { return (GetWindowLongPtrW(h,GWL_STYLE)&WS_VISIBLE)!=0; };
     // No roles are selected, so changing modes/settings does not launch a worker.
+    g.side_panel_visible=false;
     g.side_panel_tab=2;
     set_mode(AnalysisMode::FRF);
-    require(g.side_panel_tab==2 && shown(g.side_tab_filter),"FRF preserves and exposes the selected filter tab");
+    require(g.side_panel_visible && g.side_panel_tab==0 && shown(g.frf_panel),
+        "FRF opens Channels when channel roles have not been selected");
+    WndProc(g.main,WM_COMMAND,IDC_SIDE_TAB_FILTER,0);
     require(shown(g.side_filter_enable) && !shown(g.frf_panel),"filter tab shows document controls without the FRF panel");
     RECT channels{},points{},filter{};
     GetWindowRect(g.side_tab_channels,&channels); GetWindowRect(g.side_tab_points,&points); GetWindowRect(g.side_tab_filter,&filter);
@@ -1737,6 +2602,16 @@ void document_source_and_resources() {
     require(set_resource_policy(false,1024) && g.numerical_revision==before,"manual resource policy does not invalidate numerical input");
     save_runtime_settings_now();g.resource_policy={true,2048};load_runtime_settings();
     require(!g.resource_policy.automatic && g.resource_policy.manual_mib==1024,"manual memory limit persists in INI");
+    require(set_disk_cache_policy(false,4096) && g.numerical_revision==before,
+        "disk cache policy is independent of RAM and numerical inputs");
+    save_runtime_settings_now();g.disk_cache_mib=2048;load_runtime_settings();
+    require(!g.disk_cache_unlimited && g.disk_cache_mib==4096 && !g.resource_policy.automatic &&
+        g.resource_policy.manual_mib==1024,"independent RAM and disk preferences survive INI reload");
+    require(set_disk_cache_policy(true,4096),"disk cache can use no fixed byte limit");
+    save_runtime_settings_now();g.disk_cache_unlimited=false;load_runtime_settings();
+    require(g.disk_cache_unlimited && g.disk_cache_mib==4096,"unlimited disk mode retains the manual value across reload");
+    require(!set_disk_cache_policy(false,0) && g.disk_cache_unlimited,"zero disk quota is rejected without changing the policy");
+    require(set_disk_cache_policy(false,2048),"default disk quota can be restored");
     WritePrivateProfileStringW(L"ui",L"stitch_time_gaps",L"1",g_config_path.c_str());
     WritePrivateProfileStringW(L"ui",L"light_mode",L"1",g_config_path.c_str());load_runtime_settings();
     require(!g.stitch_time_gaps,"legacy global INI stitching does not override the active document");
@@ -1944,6 +2819,44 @@ void overview_renderer() {
     require(request_overview_snap(x,y,accept),"replacement fixture starts an old Snap");
     require(request_overview_snap(time[7025],-.1,accept),"replacement fixture starts the latest Snap");wait_snap();
     require(accepted==2 && picked.sample>=7000 && picked.sample<=7030,"only the replacement Snap can invoke its publication callback");
+    {
+        const auto before_range=capture_settings_snapshot();const RECT before_rect=g.vrect;
+        const RECT range_plot=plot_rect();g.vrect=range_plot;
+        const int target_x=range_plot.left+(range_plot.right-range_plot.left)*2/5;
+        const int target_y=(range_plot.top+range_plot.bottom)/2;
+        double target_time=0,target_value=0;
+        require(px_to_data(target_x,target_y,target_time,target_value),"range magnet has an exact source viewport mapping");
+        lvm::RecordingSnapResult exact;
+        g.annotations_locked=true;g.measure_mode=true;
+        require(request_overview_snap(target_time,target_value,[&](const auto& point){exact=point;},true),
+            "range snapping remains available when annotations are locked");wait_snap();
+        require(exact.found && exact.time>time[7001] && exact.time<time[7029],
+            "disk range snap finds a real sample outside the unrelated resident fragment");
+        for(int edge:{1,2}) {
+            set_fft_window(time[7001],time[7029]);g_undo.clear();g_redo.clear();
+            const int edge_x=analysis_range_edge_x(edge==1 ? g.fft_window_start : g.fft_window_end,range_plot);
+            require(begin_analysis_range_edge_drag(g.main,edge_x,target_y),"both disk-backed boundaries can begin a magnetic drag");
+            handle_input_message(g.main,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(target_x,target_y));
+            require(g.overview.snap_pending && g_undo.empty() && g.fft_window_start==time[7001] && g.fft_window_end==time[7029],
+                "disk magnetic preview performs asynchronous source I/O without changing analysis input");wait_snap();
+            require(g.fft_select_current_t==exact.time,"the disk-backed boundary preview uses the exact original sample time");
+            handle_input_message(g.main,WM_LBUTTONUP,0,MAKELPARAM(target_x,target_y));
+            require(g.overview.snap_pending && g_undo.empty(),"release waits for the final exact source point before committing");wait_snap();
+            require((edge==1 ? g.fft_window_start : g.fft_window_end)==exact.time && g_undo.size()==1,
+                "final disk range snap commits one exact boundary and one Undo entry");
+            pop_undo();require(g.fft_window_start==time[7001] && g.fft_window_end==time[7029],"Undo restores the disk-backed interval");
+            pop_redo();require((edge==1 ? g.fft_window_start : g.fft_window_end)==exact.time,"Redo restores the snapped disk-backed edge");
+        }
+        set_fft_window(time[7001],time[7029]);g_undo.clear();g_redo.clear();
+        const int edge_x=analysis_range_edge_x(g.fft_window_start,range_plot);
+        require(begin_analysis_range_edge_drag(g.main,edge_x,target_y),"disk cancellation starts a range drag");
+        handle_input_message(g.main,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(target_x,target_y));
+        handle_input_message(g.main,WM_LBUTTONUP,0,MAKELPARAM(target_x,target_y));
+        handle_input_message(g.main,WM_KEYDOWN,VK_ESCAPE,0);wait_snap();
+        require(g.fft_window_start==time[7001] && g.fft_window_end==time[7029] && g_undo.empty(),
+            "Escape cancels a pending final disk range snap without changing the analysis interval");
+        g.annotations_locked=false;apply_settings_snapshot(before_range);g.vrect=before_rect;
+    }
     g.markers.clear();g.guides.clear();g.point_groups.clear();g_undo.clear();g_redo.clear();
     const auto click=[&](int px,int py) {
         g.point_click_pending=true;g.point_click_x=px;g.point_click_y=py;
@@ -2030,7 +2943,7 @@ void resource_settings_and_load_ownership() {
     RegisterClassW(&cls);
     for(const auto* language:{&kEn,&kRu}) {
         g_str=language;
-        g.settings_wnd=CreateWindowExW(WS_EX_TOOLWINDOW,cls.lpszClassName,L"",WS_POPUP,0,0,540,568,nullptr,nullptr,inst,nullptr);
+        g.settings_wnd=CreateWindowExW(WS_EX_TOOLWINDOW,cls.lpszClassName,L"",WS_POPUP,0,0,540,748,nullptr,nullptr,inst,nullptr);
         require(g.settings_wnd!=nullptr,"resource settings can be created in both languages without visible windows");
         require(!GetDlgItem(g.settings_wnd,1800),"obsolete Light Mode control is absent in both languages");
         refresh_settings_controls();
@@ -2050,9 +2963,39 @@ void resource_settings_and_load_ownership() {
         SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_MEMORY_AUTO,BN_CLICKED),0);
         require(g.resource_policy.automatic && g.resource_policy.manual_mib==1536,"Auto restores automatic admission and retains manual preference");
         require(is_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_AUTO)),"Auto checkbox returns after switching back");
+        SetDlgItemTextW(g.settings_wnd,IDC_SET_DISK_EDIT,L"4096");
+        SendDlgItemMessageW(g.settings_wnd,IDC_SET_DISK_EDIT,WM_KEYDOWN,VK_RETURN,0);
+        require(!g.disk_cache_unlimited && g.disk_cache_mib==4096 && g.resource_policy.automatic,
+            "Enter applies the disk quota independently of Auto RAM in both languages");
+        SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_DISK_UNLIMITED,BN_CLICKED),0);
+        require(g.disk_cache_unlimited && is_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_DISK_UNLIMITED)) &&
+            !IsWindowEnabled(GetDlgItem(g.settings_wnd,IDC_SET_DISK_EDIT)),"unlimited disk mode checks its control and disables manual input");
+        SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_DISK_UNLIMITED,BN_CLICKED),0);
+        require(!g.disk_cache_unlimited && g.disk_cache_mib==4096 && IsWindowEnabled(GetDlgItem(g.settings_wnd,IDC_SET_DISK_EDIT)),
+            "switching back from unlimited disk mode restores the remembered manual quota");
+        RECT disk_rect{};GetWindowRect(GetDlgItem(g.settings_wnd,IDC_SET_DISK_EDIT),&disk_rect);
+        require(disk_rect.top>memory_rect.bottom && disk_rect.bottom<hotkeys_rect.top,
+            "disk controls fit between RAM controls and hotkeys in both languages");
+        HWND cursor_size=GetDlgItem(g.settings_wnd,IDC_SET_POINT_CURSOR_SIZE);
+        require(SendMessageW(cursor_size,CB_GETCOUNT,0,0)==static_cast<LRESULT>(std::size(point_cursor_sizes)),
+            "cursor settings expose the supported sizes in both languages");
+        SendMessageW(cursor_size,CB_SETCURSEL,0,0);
+        SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_POINT_CURSOR_SIZE,CBN_SELCHANGE),reinterpret_cast<LPARAM>(cursor_size));
+        require(g.point_cursor_size==17,"choosing a smaller cursor applies it immediately");
+        SendMessageW(cursor_size,CB_SETCURSEL,std::size(point_cursor_sizes)-1,0);
+        SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_POINT_CURSOR_SIZE,CBN_SELCHANGE),reinterpret_cast<LPARAM>(cursor_size));
+        require(g.point_cursor_size==63,"choosing the largest cursor applies it immediately");
+        SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_POINT_CURSOR_RESET,BN_CLICKED),0);
+        require(g.point_cursor_size==31 && SendMessageW(cursor_size,CB_GETCURSEL,0,0)==3,
+            "cursor reset restores the current 31 px default and its selected entry");
+        RECT cursor_rect{},client{};GetWindowRect(cursor_size,&cursor_rect);GetClientRect(g.settings_wnd,&client);
+        POINT bottom{cursor_rect.right,cursor_rect.bottom};ScreenToClient(g.settings_wnd,&bottom);
+        require(cursor_rect.top>hotkeys_rect.bottom && bottom.y<client.bottom,
+            "cursor size settings sit below hotkeys without clipping in either language");
         DestroyWindow(g.settings_wnd);
     }
     g_str=&kEn;
+    require(set_disk_cache_policy(false,2048),"settings checks restore the default disk quota");
     const auto path=test_dir/"reserved_load.lvm";
     {std::ofstream f(path);f<<"Time\tA\n0\t4\n1\t5\n2\t6\n";}
     g.main=CreateWindowExW(0,L"STATIC",L"Reserved load",WS_POPUP,0,0,640,480,nullptr,nullptr,inst,nullptr);
@@ -2075,6 +3018,46 @@ void resource_settings_and_load_ownership() {
     handle_loading_message(g.main,WM_APP_ASYNC_LOAD_DONE,0,reinterpret_cast<LPARAM>(stale.release()));
     require(budget->reserved()==0 && g.ds.rows()==3,"stale load result frees its owned buffers without replacing document");
     DestroyWindow(g.main);g.main=nullptr;
+}
+
+void configurable_point_cursor() {
+    reset_document({"A"},{0,1},{{0,1}});
+    HDC screen=GetDC(nullptr),dc=CreateCompatibleDC(screen);HBITMAP bitmap=CreateCompatibleBitmap(screen,64,64);
+    ReleaseDC(nullptr,screen);const auto old=SelectObject(dc,bitmap);
+    struct Cleanup {HDC dc;HBITMAP bitmap;HGDIOBJ old;~Cleanup(){SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);}} cleanup{dc,bitmap,old};
+    const COLORREF background=RGB(63,92,117);HBRUSH brush=CreateSolidBrush(background);
+    for(int size:point_cursor_sizes) {
+        require(set_point_cursor_size(size),"every offered cursor size is accepted");
+        HCURSOR cursor=point_placement_cursor();ICONINFO info{};
+        require(cursor && cursor==point_placement_cursor() && GetIconInfo(cursor,&info),"each cursor size reuses its owned native handle");
+        const int dimension=size<=31 ? 32 : 64,center=dimension/2;
+        require(info.xHotspot==static_cast<DWORD>(center) && info.yHotspot==static_cast<DWORD>(center),
+            "all cursor sizes keep the click hotspot at the exact center");
+        if(info.hbmMask)DeleteObject(info.hbmMask);
+        if(info.hbmColor)DeleteObject(info.hbmColor);
+        RECT canvas{0,0,64,64};FillRect(dc,&canvas,brush);DrawIconEx(dc,0,0,cursor,dimension,dimension,0,nullptr,DI_NORMAL);
+        bool center_filled=true;
+        for(int y=center-1;y<=center+1;++y)for(int x=center-1;x<=center+1;++x)
+            center_filled=center_filled && GetPixel(dc,x,y)==RGB(0,0,0);
+        require(center_filled && GetPixel(dc,center+3,center)==background,
+            "the slightly larger 3x3 center retains an open gap around the target");
+        const int arm=center+(size-1)/2-2;
+        require(GetPixel(dc,center,arm)==RGB(0,0,0) && GetPixel(dc,center+1,arm)==RGB(255,255,255) &&
+            GetPixel(dc,center+2,arm)==background,"cursor arms stay one black pixel wide with a one-pixel white outline");
+        int left=64,top=64,right=-1,bottom=-1;
+        for(int y=0;y<dimension;++y)for(int x=0;x<dimension;++x)if(GetPixel(dc,x,y)!=background) {
+            left=std::min(left,x);top=std::min(top,y);right=std::max(right,x);bottom=std::max(bottom,y);
+        }
+        require(right-left+1==size && bottom-top+1==size,"the selected size matches the actual visible cursor bounds");
+    }
+    DeleteObject(brush);
+    require(!set_point_cursor_size(0) && !set_point_cursor_size(18) && g.point_cursor_size==63,
+        "unsupported cursor sizes cannot replace the current choice");
+    require(set_point_cursor_size(49),"a nondefault size can be saved");save_runtime_settings_now();
+    g.point_cursor_size=31;load_runtime_settings();require(g.point_cursor_size==49,"cursor size persists in INI");
+    WritePrivateProfileStringW(L"ui",L"point_cursor_size",L"18",g_config_path.c_str());load_runtime_settings();
+    require(g.point_cursor_size==31,"invalid saved cursor sizes fall back to 31 px");
+    set_point_cursor_size(31);
 }
 
 void analysis_admission_and_publication() {
@@ -2118,6 +3101,24 @@ void persistent_recording_cache() {
     reset_document({"existing"},{0,1},{{2,3}});
     const auto root=std::filesystem::absolute(test_dir/"managed_cache");
     std::filesystem::remove_all(root);configure_recording_disk_cache(root,1024ULL*1024*1024);
+    {
+        auto cache=recording_disk_cache();
+        auto pending=cache->begin_write("1122334455667788",lvm::CacheKind::Overview,128ULL*1024*1024);
+        require(!set_disk_cache_policy(false,64) && g.disk_cache_mib==2048 && cache->used_bytes()==128ULL*1024*1024,
+            "reducing the disk quota below a live reservation is rejected without invalidating its lease");
+        require(set_disk_cache_policy(true,2048) && recording_disk_cache()==cache,
+            "unlimited disk mode keeps the existing manager and active leases");
+        auto larger=cache->begin_write("8877665544332211",lvm::CacheKind::Overview,96ULL*1024*1024);
+        require(cache->used_bytes()==224ULL*1024*1024,"unlimited disk mode admits another bounded output reservation");
+    }
+    require(set_disk_cache_policy(false,64),"disk quota can shrink once pending outputs release their leases");
+    {
+        bool denied=false;
+        try { recording_disk_cache()->begin_write("1122334455667788",lvm::CacheKind::Overview,65ULL*1024*1024); }
+        catch(const lvm::RecordingFailure& e){denied=e.error==lvm::RecordingError::ResourceLimit;}
+        require(denied,"the selected disk quota is enforced on actual cache admission");
+    }
+    require(set_disk_cache_policy(false,2048),"cache admission checks restore the default disk quota");
     const auto path=std::filesystem::absolute(test_dir/"cached_scan.lvm");
     {std::ofstream out(path);out<<"Time\tA\n";for(int i=0;i<10000;++i)out<<i<<'\t'<<i%17<<'\n';}
     g.main=CreateWindowExW(0,L"STATIC",L"Cached scan",WS_POPUP,0,0,640,480,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
@@ -2722,6 +3723,63 @@ void unified_source_opening(const std::filesystem::path& external={}) {
     g.overview={};DestroyWindow(g.main);g.main=nullptr;
 }
 
+void global_gap_markers_setting() {
+    reset_document({"A"},{0,1,101},{{0,1,2}});
+    mark_active_document_saved();
+    g.file_name=L"first.lvm";g.gap_details_visible=true;g.gap_details_duration=100;
+    g.visible_gap_markers.push_back({{10,10,20,100},100,99});
+    DocumentState second=static_cast<const DocumentState&>(g);second.file_name=L"second.lvm";
+    g.inactive_documents.push_back(std::move(second));
+    g.gap_click_pending=true;g.gap_click_index=0;
+    const auto instance=GetModuleHandleW(nullptr);
+    WNDCLASSW cls{};cls.lpfnWndProc=SettingsProc;cls.hInstance=instance;cls.lpszClassName=L"GlobalGapsSettingsRegression";
+    require(RegisterClassW(&cls)!=0,"global gap setting has a native settings window");
+    g.settings_wnd=CreateWindowExW(0,cls.lpszClassName,L"",WS_POPUP,0,0,540,748,nullptr,nullptr,instance,nullptr);
+    struct Cleanup {~Cleanup(){if(g.settings_wnd)DestroyWindow(g.settings_wnd);g.settings_wnd=nullptr;}} cleanup;
+    require(g.settings_wnd!=nullptr,"global gap settings controls can be created");
+    const auto click=[&] {
+        SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_GAP_MARKERS,BN_CLICKED),
+            reinterpret_cast<LPARAM>(GetDlgItem(g.settings_wnd,IDC_SET_GAP_MARKERS)));
+    };
+    const auto revision=g.numerical_revision,serial=g.plot_analysis_serial;
+    click();
+    require(!g.show_gap_markers && !is_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_GAP_MARKERS)),
+        "the settings checkbox disables the application-wide gap preference");
+    require(!g.gap_details_visible && g.visible_gap_markers.empty() && !g.gap_click_pending && g.gap_click_index==-1 &&
+        !g.inactive_documents[0].gap_details_visible && g.inactive_documents[0].visible_gap_markers.empty(),
+        "disabling gaps clears active and inactive cards and pending gap interactions");
+    require(!g.project_dirty && !g.inactive_documents[0].project_dirty && g_undo.empty() &&
+        g.numerical_revision==revision && g.plot_analysis_serial==serial,
+        "a global display preference does not dirty documents, enter Undo or invalidate numerical caches");
+    require(switch_to_document(1) && !g.show_gap_markers,"hidden gaps stay hidden when switching to another open file");
+    click();
+    require(g.show_gap_markers && switch_to_document(1) && g.show_gap_markers,
+        "enabling gaps applies equally when returning to an already open file");
+    require(!g.gap_details_visible,"reenabling global gaps does not restore stale per-document detail cards");
+    set_gap_markers_visible(false);
+    apply_export_metadata_from_comments({"[graph_settings]","show_gap_markers=1"});
+    require(!g.show_gap_markers,"legacy projects cannot enable globally hidden gap markers");
+    set_gap_markers_visible(true);
+    apply_export_metadata_from_comments({"[graph_settings]","show_gap_markers=0"});
+    require(g.show_gap_markers,"legacy projects cannot disable globally visible gap markers");
+    ExportOptions options;std::ostringstream metadata;
+    write_export_metadata(metadata,options,false,0,101,false,{0});
+    require(metadata.str().find("show_gap_markers")==std::string::npos,
+        "project and export graph metadata no longer stores an application preference");
+    set_gap_markers_visible(false);save_runtime_settings_now();g.show_gap_markers=true;load_runtime_settings();
+    require(!g.show_gap_markers,"globally hidden gaps persist in the existing INI key across a settings reload");
+    const auto snapshot=capture_settings_snapshot();set_gap_markers_visible(true);apply_settings_snapshot(snapshot);
+    require(g.show_gap_markers,"restoring document history cannot overwrite the global gap preference");
+    set_gap_markers_visible(false);mark_active_document_saved();
+    begin_loaded_document();
+    require(!has_data() && !g.show_gap_markers,"starting a new file retains the shared preference");
+    static_cast<DocumentState&>(g)=g.inactive_documents.back();
+    while(has_data()) {
+        mark_active_document_saved();
+        require(close_active_document() && !g.show_gap_markers,"closing any file, including the last, preserves the global gap preference");
+    }
+}
+
 void multiple_open_documents() {
     reset_document({"first"}, {0, 1, 2}, {{1, 2, 3}});
     g.file_name = L"first.lvm";
@@ -2794,15 +3852,15 @@ int main(int argc,char** argv) {
             if(job)CloseHandle(job);
             std::cout<<checks<<" source opening checks passed\n";return 0;
         }
-        document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); multiple_open_documents(); processing(); fft_recording_recovery();
-        display_load_budget(); loading_window_ownership(); bounded_load_recovery(); document_source_and_resources(); background_document_overview(); overview_renderer(); resource_settings_and_load_ownership(); analysis_admission_and_publication(); persistent_recording_cache(); resident_envelope_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
+        document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); global_gap_markers_setting(); multiple_open_documents(); processing(); fft_recording_recovery();
+        display_load_budget(); loading_window_ownership(); bounded_load_recovery(); document_source_and_resources(); background_document_overview(); overview_renderer(); resource_settings_and_load_ownership(); configurable_point_cursor(); analysis_admission_and_publication(); persistent_recording_cache(); filter_bound_crossing(); resident_envelope_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
         persistent_filter_continuations();background_filtered_resident_view();adaptive_opening_and_cache();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
         user_axis_names_outside_plot();
         spectrum_pending_message();
         channel_legend_visibility();
-        shift_range_with_point_mode();playback_timeline_controls();routed_window_messages();
+        shift_range_with_point_mode();analysis_range_edge_editing();analysis_range_edge_magnet();exact_line_dialog();offscreen_marker_lines();marker_value_readouts();playback_timeline_controls();routed_window_messages();
         measurement_label_units();
-        frf_filter_tab();
+        additional_mode_hotkeys();frequency_view_controls();channel_panel_layout_regression();frf_filter_tab();
         frf_integration();
         frf_multi_channels();
         frf_gap_stitching();

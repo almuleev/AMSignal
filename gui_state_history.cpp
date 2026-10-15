@@ -409,6 +409,7 @@ SettingsSnapshot capture_settings_snapshot() {
     snapshot.y_amp_max = g.y_amp_max;
     snapshot.distinguish_curves = g.distinguish_curves;
     snapshot.show_channel_legend = g.show_channel_legend;
+    snapshot.show_marker_values = g.show_marker_values;
     return snapshot;
 }
 
@@ -490,7 +491,8 @@ bool settings_snapshot_differs(const SettingsSnapshot& a, const SettingsSnapshot
            a.auto_y_amp != b.auto_y_amp ||
            a.y_amp_max != b.y_amp_max ||
            a.distinguish_curves != b.distinguish_curves ||
-           a.show_channel_legend != b.show_channel_legend;
+           a.show_channel_legend != b.show_channel_legend ||
+           a.show_marker_values != b.show_marker_values;
 }
 
 void sync_channel_controls_from_state() {
@@ -577,6 +579,7 @@ void apply_settings_snapshot(const SettingsSnapshot& snapshot) {
     g.y_amp_max = snapshot.y_amp_max;
     g.distinguish_curves = snapshot.distinguish_curves;
     g.show_channel_legend = snapshot.show_channel_legend;
+    g.show_marker_values = snapshot.show_marker_values;
     sync_channel_controls_from_state();
     if(formulas_changed || filter_changed)recompute_transforms_from_state();
     else {

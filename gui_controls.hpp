@@ -19,6 +19,10 @@ void install_themed_combo(HWND combo);
 // Applies the compact input-frame treatment used by small numeric fields.
 void install_compact_themed_edit(HWND edit);
 
+// Native trackbar geometry/input with the application's panel/accent palette.
+LRESULT draw_themed_trackbar(const NMCUSTOMDRAW& draw);
+void install_themed_trackbar(HWND track);
+
 bool is_channel_checkbox_id(int id);
 
 bool is_side_toggle_id(int id);

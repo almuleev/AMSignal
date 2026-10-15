@@ -1,6 +1,7 @@
 // Layout: native viewer implementation.
 #include "gui_layout.hpp"
 #include "gui_frf.hpp"
+#include "gui_frequency_view.hpp"
 #include "gui_ids.hpp"
 #include "gui_side_panel.hpp"
 #include "gui_state.hpp"
@@ -48,12 +49,15 @@ void layout() {
     // Playback and reset remain accessible through View and their hotkeys.
     for (HWND h : {g.play, g.reset, g.vline_btn, g.hline_btn}) ShowWindow(h, SW_HIDE);
 
-    // Row 2: graph tools and side panel
+    // Row 2: cursor/points, marker/line, then shared magnet/lock.
     x = 8;
     place(g.cursor_btn, text_button_width(g.cursor_btn, 76, 24), 40);
     place(g.measure, text_button_width(g.measure, 72, 28), 40);
+    x += 20;
     place(g.marker_btn, text_button_width(g.marker_btn, 72, 30), 40);
     place(g.line_menu_btn, text_button_width(g.line_menu_btn, 90, 28), 40);
+    x += 20;
+    place(g.magnet_btn, 30, 40);
     place(g.annotation_lock_btn, 30, 40);
     // View controls share the right edge as a vertical pair.
     const int auto_w = text_button_width(g.autoy, 108, 34);
@@ -78,13 +82,17 @@ void layout() {
     if (g.side_tab_channels) MoveWindow(g.side_tab_channels, panel_x, kTopBar + 8, tab_w, 28, FALSE);
     if (g.side_tab_points) MoveWindow(g.side_tab_points, panel_x + tab_w + tab_gap, kTopBar + 8, tab_w, 28, FALSE);
     if (g.side_tab_filter) MoveWindow(g.side_tab_filter, panel_x + (tab_w + tab_gap) * 2, kTopBar + 8, tab_w, 28, FALSE);
-    apply_side_panel_visibility();
+    const bool show_panel=g.side_panel_visible && !welcome_visible();
+    for(HWND tab:{g.side_tab_channels,g.side_tab_points,g.side_tab_filter})
+        if(tab)ShowWindow(tab,show_panel ? SW_SHOW : SW_HIDE);
 
     const bool show_channels = g.side_panel_visible && g.side_panel_tab == 0 && !welcome_visible() && g.mode != AnalysisMode::FRF;
     const bool show_points = g.side_panel_visible && g.side_panel_tab == 1 && !welcome_visible() &&
         (g.mode != AnalysisMode::FRF || g.frf_point_settings_open);
     const bool show_filter = g.side_panel_visible && g.side_panel_tab == 2 && !welcome_visible();
-    const int channels_content_top = channels_viewport_top;
+    if(g.show_all_btn)ShowWindow(g.show_all_btn,show_channels ? SW_SHOW : SW_HIDE);
+    if(g.hide_all_btn)ShowWindow(g.hide_all_btn,show_channels ? SW_SHOW : SW_HIDE);
+    const int channels_content_top = g.mode==AnalysisMode::FRF ? kTopBar+44 : channels_viewport_top;
     const int points_content_top = points_viewport_top;
     const int filter_viewport_top = points_viewport_top;
     const int active_viewport_top = (g.side_panel_tab == 0) ? channels_content_top : (g.side_panel_tab == 1 ? points_content_top : filter_viewport_top);
@@ -92,9 +100,9 @@ void layout() {
     auto place_scrolled = [&](HWND ctl, int x0, int y_rel, int w, int h, int viewport_top, bool visible_in_tab) {
         if (!ctl) return;
         const int y_abs = viewport_top + y_rel - g.side_scroll_y;
-        const bool visible = visible_in_tab && y_abs + h > viewport_top && y_abs < viewport_bottom;
-        ShowWindow(ctl, visible ? SW_SHOW : SW_HIDE);
+        const bool visible = visible_in_tab && y_abs >= viewport_top && y_abs + h <= viewport_bottom;
         if (visible) MoveWindow(ctl, x0, y_abs, max(1, w), max(1, h), FALSE);
+        ShowWindow(ctl, visible ? SW_SHOW : SW_HIDE);
     };
 
     int y = 0;
@@ -137,8 +145,9 @@ void layout() {
     if (g.side_channel_color) {
         int cy = y + 8;
         place_scrolled(g.side_channel_color, panel_x, cy, content_w, 28, channels_content_top, show_channels);
-        g.side_content_height_channels = cy + 28;
     }
+    const int channels_range_y=g.mode==AnalysisMode::FRF ? kFrfChannelContentHeight+12 : y+52;
+    g.side_content_height_channels=channels_range_y+kFrequencyViewHeight;
 
     int fy = 0;
     place_scrolled(g.side_channel_hint, panel_x, fy, content_w, 20, filter_viewport_top, show_filter);
@@ -185,7 +194,6 @@ void layout() {
     place_side(IDC_SIDE_PT_INVDT, checkbox_col2_x, py, checkbox_col_w, 22);
     py += 24;
     place_side(IDC_SIDE_PT_DIST, points_left, py, checkbox_col_w, 22);
-    place_side(IDC_SIDE_PT_SNAP, checkbox_col2_x, py, checkbox_col_w, 22);
     py += 30;
     place_side(IDC_SIDE_POINT_COLOR_CURRENT, points_left, py, content_w, 28);
     py += 38;
@@ -203,14 +211,25 @@ void layout() {
     py += 36;
     if (g.side_point_group_new) place_scrolled(g.side_point_group_new, points_left, py, (content_w - 6) / 2, 28, points_viewport_top, show_points);
     if (g.side_point_group_delete) place_scrolled(g.side_point_group_delete, points_left + (content_w - 6) / 2 + 6, py, (content_w - 6) / 2, 28, points_viewport_top, show_points);
-    g.side_content_height_points = py + 28;
+    const int points_range_y=py+44;
+    g.side_content_height_points = points_range_y+kFrequencyViewHeight;
+    const bool show_frequency=show_panel && (g.side_panel_tab==0 || show_points);
+    const int range_y=g.side_panel_tab==0 ? channels_range_y : points_range_y;
+    layout_frequency_view_controls(panel_x,active_viewport_top+range_y-g.side_scroll_y,content_w,
+        active_viewport_top,viewport_bottom,show_frequency);
 
+    const int previous_scroll=g.side_scroll_y;
     update_side_panel_scrollbar(active_viewport_top,
                                 g.side_panel_tab == 0 ? g.side_content_height_channels :
                                 (g.side_panel_tab == 1 ? g.side_content_height_points : g.side_content_height_filter));
+    // A shorter panel can clamp the old scroll offset after a mode/size change.
+    // Place every child using that final offset before repainting the panel.
+    if(g.side_scroll_y!=previous_scroll) {layout();return;}
 
     layout_frf_panel();
     MoveWindow(g.status, 8, ch - kBottomBar + 4, cw - 16, 20, FALSE);
+    RECT panel_area{panel_left,kTopBar,cw,ch-kBottomBar};
+    RedrawWindow(g.main,&panel_area,nullptr,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN);
 }
 
 RECT plot_rect() {

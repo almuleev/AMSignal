@@ -1,5 +1,6 @@
 // Status: native viewer implementation.
 #include "gui_status.hpp"
+#include "gui_frequency_view.hpp"
 #include "gui_frf.hpp"
 #include "gui_analysis_source.hpp"
 #include "gui_ids.hpp"
@@ -52,6 +53,7 @@ bool marker_status_detail(std::wstring& text, COLORREF& color) {
 }
 
 void set_status() {
+    sync_frequency_view_controls();
     if (g.mode == AnalysisMode::FRF) {
         g.status_text = frf_status_text();
         std::size_t lines=0, markers=0;
@@ -148,6 +150,9 @@ void set_status() {
 std::wstring toolbar_hover_text(HWND btn) {
     if (btn == g.cursor_btn) return g_str == &kEn ? L"Cursor: navigate and select the graph" : L"Курсор: навигация и выделение на графике";
     if (btn == g.line_menu_btn) return g_str == &kEn ? L"Choose a vertical or horizontal guide line" : L"Выбрать вертикальную или горизонтальную линию";
+    if (btn == g.magnet_btn) return g_str == &kEn
+        ? L"Magnet: snap points, markers and lines to the graph"
+        : L"Магнит: привязка точек, маркеров и линий к графику";
     const bool en = (g_str == &kEn);
     if (btn == g.open) return g_str->hover_open;
     if (btn == g.document_close) return en ? L"Close the active file" : L"Закрыть активный файл";

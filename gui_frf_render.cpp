@@ -1,6 +1,7 @@
 #include "gui_frf_render.hpp"
 #include "gui_frf.hpp"
 #include "gui_input.hpp"
+#include "gui_marker_values.hpp"
 #include "gui_side_panel.hpp"
 #include "gui_state_history.hpp"
 #include "gui_state.hpp"
@@ -639,6 +640,7 @@ void draw_frf(HDC dc, const RECT& p) {
     };
     redraw_plot_frame(coefficient_plot);
     if (g.frf.show_reference_amplitude) redraw_plot_frame(reference_plot);
+    draw_marker_values(dc);
     SelectObject(dc, previous_font);
 }
 
@@ -700,11 +702,33 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g.annotation_drag_point_before=g.point_groups[static_cast<std::size_t>(group_index)].points[static_cast<std::size_t>(point_index)];
         SetCapture(hwnd); return true;
     };
+    const auto drag_reference_plot = [&](int x,int y) {
+        // Both plots share X, while only the lower plot's Y scale changes.
+        double *lo,*hi,minb,maxb,minw;
+        if(!active_axis(lo,hi,minb,maxb,minw))return;
+        const double x_shift=static_cast<double>(x-g.drag_x)/(p.right-p.left)*(g.drag_hi-g.drag_lo);
+        *lo=g.drag_lo-x_shift;*hi=g.drag_hi-x_shift;
+        clamp_range(*lo,*hi,minb,maxb,minw);
+        sync_frf_frequency_limits();
+        const double y_shift=static_cast<double>(y-g.drag_y)/(reference.bottom-reference.top)*(g.drag_y_hi-g.drag_y_lo);
+        g.frf.reference_y_min=0.0;
+        g.frf.reference_y_max=std::max(1e-12,g.drag_y_hi+y_shift);
+        g.frf.reference_auto_y=false;
+        changed();
+    };
     switch (msg) {
-        case WM_MOUSEWHEEL: {
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}; ScreenToClient(hwnd, &pt);
             if ((!inside(pt.x, pt.y) && !inside_reference(pt.x, pt.y)) || !g.frf.result.ok) return 0;
             const bool up = GET_WHEEL_DELTA_WPARAM(wp) > 0;
+            if (GET_WHEEL_DELTA_WPARAM(wp) == 0) return 0;
+            if (msg == WM_MOUSEHWHEEL) {
+                pan_by(up ? .1 : -.1); return 0;
+            }
+            if ((GET_KEYSTATE_WPARAM(wp) & MK_SHIFT) || (GetKeyState(VK_SHIFT) & 0x8000)) {
+                pan_by(up ? -.1 : .1); return 0;
+            }
             if (inside_reference(pt.x,pt.y) && (GetKeyState(VK_CONTROL) & 0x8000)) {
                 double low=0, high=1;
                 frf_reference_y_range(low,high);
@@ -726,8 +750,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.frf.reference_auto_y=false;
                 set_status(); invalidate_plot(); return 0;
             }
-            if (GetKeyState(VK_SHIFT) & 0x8000) pan_by(up ? -.1 : .1);
-            else if (inside(pt.x,pt.y) && (GetKeyState(VK_CONTROL) & 0x8000)) zoom_y_at(
+            if (inside(pt.x,pt.y) && (GetKeyState(VK_CONTROL) & 0x8000)) zoom_y_at(
                 static_cast<double>(p.bottom-pt.y)/(p.bottom-p.top), up ? .85 : 1/.85);
             else if (inside(pt.x,pt.y) && (GetKeyState(VK_MENU) & 0x8000)) pan_y_by(up ? -.1 : .1);
             else zoom_at(static_cast<double>(pt.x-p.left)/(p.right-p.left), up ? .8 : 1.25);
@@ -737,6 +760,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // See the common graph handler: annotation keyboard commands must
             // regain focus when the user clicks an FRF plot.
             if (GetFocus()!=hwnd) SetFocus(hwnd);
+            if(handle_marker_values_click(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp)))return 0;
             if (on_reference_divider(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)) && g.frf.result.ok) {
                 g_dragging_reference_divider=true; SetCapture(hwnd); return 0;
             }
@@ -752,6 +776,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.point_click_reference_axis=lower_reference;
                 g.point_click_x=GET_X_LPARAM(lp);
                 g.point_click_y=GET_Y_LPARAM(lp);
+                if(lower_reference)frf_reference_y_range(g.drag_y_lo,g.drag_y_hi);
                 SetCapture(hwnd);
                 return 0;
             }
@@ -774,20 +799,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     static_cast<double>(full.bottom-GET_Y_LPARAM(lp))/available,.12,.55);
                 invalidate_plot();
             } else if (g_dragging_reference_plot) {
-                // The averaged Reference and KD must always show the same
-                // frequency window. Dragging the lower plot pans that shared
-                // X view, while its vertical component affects Reference Y.
-                double *lo, *hi, minb, maxb, minw;
-                if (!active_axis(lo,hi,minb,maxb,minw)) return 0;
-                const double x_shift=static_cast<double>(GET_X_LPARAM(lp)-g.drag_x)/(p.right-p.left)*(g.drag_hi-g.drag_lo);
-                *lo=g.drag_lo-x_shift; *hi=g.drag_hi-x_shift;
-                clamp_range(*lo,*hi,minb,maxb,minw);
-                sync_frf_frequency_limits();
-                const double y_shift=static_cast<double>(GET_Y_LPARAM(lp)-g.drag_y)/(reference.bottom-reference.top)*(g.drag_y_hi-g.drag_y_lo);
-                g.frf.reference_y_min=0.0;
-                g.frf.reference_y_max=std::max(1e-12,g.drag_y_hi+y_shift);
-                g.frf.reference_auto_y=false;
-                changed();
+                drag_reference_plot(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
             } else if (g.annotation_drag_kind!=App::AnnotationDragKind::None) {
                 if (g.annotation_drag_reference_axis) {
                     double frequency=0, amplitude=0;
@@ -805,8 +817,14 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 const int dx=GET_X_LPARAM(lp)-g.point_click_x;
                 const int dy=GET_Y_LPARAM(lp)-g.point_click_y;
                 if (std::abs(dx)<4 && std::abs(dy)<4) return 0;
+                const bool reference_axis=g.point_click_reference_axis;
                 g.point_click_pending=false;
                 g.point_click_reference_axis=false;
+                if(reference_axis) {
+                    g_dragging_reference_plot=true;
+                    drag_reference_plot(GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
+                    return 0;
+                }
                 g.dragging=true;
             }
             if (g.dragging) {
@@ -822,6 +840,7 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 changed();
             } else if (g.frf.result.ok && inside(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) {
+                update_marker_values_hover(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
                 const double f = frf_frequency_at_fraction(static_cast<double>(GET_X_LPARAM(lp)-p.left)/(p.right-p.left));
                 const auto& fs = g.frf.result.common().frequencies;
                 auto it = std::lower_bound(fs.begin(), fs.end(), f);
@@ -963,6 +982,9 @@ LRESULT handle_frf_input(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SETCURSOR:
             if (reinterpret_cast<HWND>(wp) == hwnd && LOWORD(lp) == HTCLIENT) {
                 POINT pt{}; GetCursorPos(&pt); ScreenToClient(hwnd,&pt);
+                if(marker_values_hit_test(pt.x,pt.y)) {
+                    SetCursor(LoadCursor(nullptr,PtInRect(&g.marker_values_close_rect,pt) ? IDC_HAND : IDC_ARROW));return TRUE;
+                }
                 SetCursor(on_reference_divider(pt.x,pt.y) ? LoadCursor(nullptr, IDC_SIZENS) :
                     ((g.pending_line || g.pending_marker || g.measure_mode)
                         ? point_placement_cursor() : LoadCursor(nullptr, IDC_HAND))); return TRUE;

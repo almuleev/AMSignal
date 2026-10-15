@@ -3,6 +3,7 @@
 #include "frf_worker.hpp"
 
 namespace gui {
+inline constexpr int kFrfChannelContentHeight=354;
 extern lvm::FrfWorker g_frf_worker;
 void invalidate_frf(bool reset_view = false);
 void compute_frf_from_current_source();

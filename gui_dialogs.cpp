@@ -325,9 +325,8 @@ const wchar_t* speed_prompt_invalid_text() {
         : L"Введите положительное число, например 0.5, 1 или 2.75.";
 }
 
-const wchar_t* guide_prompt_title_text(bool vertical) {
-    if (g_str == &kEn) return vertical ? L"Vertical guide line" : L"Horizontal guide line";
-    return vertical ? L"Вертикальная линия" : L"Горизонтальная линия";
+const wchar_t* guide_prompt_title_text() {
+    return g_str == &kEn ? L"Set line (exact)" : L"Задать линию (точно)";
 }
 
 const wchar_t* guide_prompt_label_text(bool vertical) {
@@ -1325,7 +1324,7 @@ bool prompt_export_options(ExportOptions& out_options) {
     return true;
 }
 
-bool prompt_exact_guide_value(bool vertical, double& out_value) {
+double exact_guide_default_value(bool vertical) {
     double default_value = 0.0;
     if (vertical) {
         default_value = (g.mode == AnalysisMode::FRF) ? std::pow(10.0,0.5*(g.frf.log_start+g.frf.log_end)) :
@@ -1353,15 +1352,7 @@ bool prompt_exact_guide_value(bool vertical, double& out_value) {
         }
         default_value = 0.5 * (ymin + ymax);
     }
-    return prompt_numeric_value(
-        guide_prompt_title_text(vertical),
-        guide_prompt_label_text(vertical),
-        guide_prompt_apply_text(),
-        guide_prompt_cancel_text(),
-        guide_prompt_invalid_text(),
-        default_value,
-        false,
-        out_value);
+    return std::isfinite(default_value) ? default_value : 0.0;
 }
 
 bool prompt_custom_play_speed(double& out_speed) {

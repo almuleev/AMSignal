@@ -1,6 +1,7 @@
 // Side panel: native viewer implementation.
 #include "gui_side_panel.hpp"
 #include "gui_frf.hpp"
+#include "gui_frequency_view.hpp"
 #include "gui_render_data.hpp"
 #include "gui_controls.hpp"
 #include "gui_settings_window.hpp"
@@ -239,6 +240,7 @@ void hide_ui_controls() {
     for (HWND c : g.side_channel_controls) ShowWindow(c, SW_HIDE);
     for (HWND c : g.side_filter_controls) ShowWindow(c, SW_HIDE);
     for (HWND c : g.side_point_controls) ShowWindow(c, SW_HIDE);
+    for (HWND c : g.side_frequency_controls) ShowWindow(c, SW_HIDE);
     if (g.channel_edit) ShowWindow(g.channel_edit, SW_HIDE);
     if (g.status) ShowWindow(g.status, SW_HIDE);
 }
@@ -439,7 +441,6 @@ void load_side_point_group_controls() {
     if (HWND dy = GetDlgItem(g.main, IDC_SIDE_PT_DY)) EnableWindow(dy, TRUE);
     if (HWND invdt = GetDlgItem(g.main, IDC_SIDE_PT_INVDT)) EnableWindow(invdt, TRUE);
     if (HWND dist = GetDlgItem(g.main, IDC_SIDE_PT_DIST)) EnableWindow(dist, TRUE);
-    if (HWND snap = GetDlgItem(g.main, IDC_SIDE_PT_SNAP)) EnableWindow(snap, TRUE);
 }
 
 void populate_side_point_group_list() {
@@ -492,7 +493,6 @@ bool side_panel_hit_test(const POINT& pt) {
 }
 
 void update_side_panel_scrollbar(int viewport_top, int content_height) {
-    if (g.mode == AnalysisMode::FRF && g.side_panel_tab == 0) { g.side_scroll_max = 0; return; }
     g.side_content_height_channels = max(g.side_content_height_channels, 0);
     g.side_content_height_points = max(g.side_content_height_points, 0);
     g.side_content_height_filter = max(g.side_content_height_filter, 0);
@@ -521,14 +521,7 @@ void set_side_panel_tab(int tab) {
     const bool show_points = g.side_panel_visible && g.side_panel_tab == 1 && !welcome_visible() &&
         (g.mode != AnalysisMode::FRF || g.frf_point_settings_open);
     const bool show_filter = g.side_panel_visible && g.side_panel_tab == 2 && !welcome_visible();
-    if (g.show_all_btn) ShowWindow(g.show_all_btn, show_channels ? SW_SHOW : SW_HIDE);
-    if (g.hide_all_btn) ShowWindow(g.hide_all_btn, show_channels ? SW_SHOW : SW_HIDE);
-    for (HWND h : g.side_channel_controls) if (h) ShowWindow(h, show_channels ? SW_SHOW : SW_HIDE);
-    for (HWND h : g.side_filter_controls) if (h) ShowWindow(h, show_filter ? SW_SHOW : SW_HIDE);
-    for (HWND h : g.side_point_controls) if (h) ShowWindow(h, show_points ? SW_SHOW : SW_HIDE);
-    for (HWND h : g.checks) if (h) ShowWindow(h, show_channels ? SW_SHOW : SW_HIDE);
-    for (HWND h : g.check_labels) if (h) ShowWindow(h, show_channels ? SW_SHOW : SW_HIDE);
-    for (HWND h : g.channel_coefficient_edits) if (h) ShowWindow(h, show_channels ? SW_SHOW : SW_HIDE);
+    sync_frequency_view_controls();
     if (!show_channels && g.channel_edit) ShowWindow(g.channel_edit, SW_HIDE);
     if (g.side_tab_channels) InvalidateRect(g.side_tab_channels, nullptr, FALSE);
     if (g.side_tab_points) InvalidateRect(g.side_tab_points, nullptr, FALSE);
@@ -542,6 +535,9 @@ void set_side_panel_tab(int tab) {
     } else if (show_filter) {
         sync_filter_controls_from_state();
     }
+    // Layout owns visibility as well as geometry, including offscreen children.
+    // Showing whole groups here exposed stale positions between refreshes.
+    if(g.main)layout();
 }
 
 void apply_side_panel_visibility() {
@@ -590,7 +586,6 @@ void refresh_side_panel_controls() {
         {IDC_SIDE_PT_DY, g.pdisp.dy, side_pt_dy_text()},
         {IDC_SIDE_PT_INVDT, g.pdisp.inv_dt, side_pt_invdt_text()},
         {IDC_SIDE_PT_DIST, g.pdisp.dist, side_pt_dist_text()},
-        {IDC_SIDE_PT_SNAP, g.snap_to_data, side_pt_snap_text()},
     };
     for (const auto& item : point_toggles) {
         HWND ctl = GetDlgItem(g.main, item.id);
@@ -599,6 +594,7 @@ void refresh_side_panel_controls() {
         set_toggle_checked(ctl, item.value);
     }
     sync_filter_controls_from_state();
+    if (g.magnet_btn) InvalidateRect(g.magnet_btn, nullptr, FALSE);
     apply_side_panel_visibility();
 }
 

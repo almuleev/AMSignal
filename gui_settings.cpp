@@ -10,6 +10,8 @@
 #include "gui_state_history.hpp"
 #include "gui_text.hpp"
 #include "gui_theme.hpp"
+#include "gui_resources.hpp"
+#include "gui_input.hpp"
 
 namespace gui {
 
@@ -119,10 +121,14 @@ void save_runtime_settings_now() {
     WritePrivateProfileStringW(L"ui", L"language", (g_str == &kEn) ? L"en" : L"ru", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"smoothing", g.visual_smooth ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"curve_symbols", g.distinguish_curves ? L"1" : L"0", g_config_path.c_str());
+    WritePrivateProfileStringW(L"ui", L"show_marker_values", g.show_marker_values ? L"1" : L"0", g_config_path.c_str());
+    WritePrivateProfileStringW(L"ui", L"point_cursor_size", std::to_wstring(g.point_cursor_size).c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"vertical_pan", g.vertical_pan ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"snap_to_data", g.snap_to_data ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"resources", L"automatic", g.resource_policy.automatic ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"resources", L"manual_mib", std::to_wstring(g.resource_policy.manual_mib).c_str(), g_config_path.c_str());
+    WritePrivateProfileStringW(L"resources", L"disk_cache_unlimited", g.disk_cache_unlimited ? L"1" : L"0", g_config_path.c_str());
+    WritePrivateProfileStringW(L"resources", L"disk_cache_mib", std::to_wstring(g.disk_cache_mib).c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"show_gap_markers", g.show_gap_markers ? L"1" : L"0", g_config_path.c_str());
     normalize_filter_bounds();
     WritePrivateProfileStringW(L"ui", L"filter_enabled", g.noise_threshold_enabled ? L"1" : L"0", g_config_path.c_str());
@@ -282,6 +288,10 @@ void load_runtime_settings() {
 
     g.visual_smooth = read_ini_int(L"ui", L"smoothing", g.visual_smooth ? 1 : 0) != 0;
     g.distinguish_curves = read_ini_int(L"ui", L"curve_symbols", g.distinguish_curves ? 1 : 0) != 0;
+    g.show_marker_values = read_ini_int(L"ui", L"show_marker_values", g.show_marker_values ? 1 : 0) != 0;
+    const int cursor_size=read_ini_int(L"ui",L"point_cursor_size",31);
+    g.point_cursor_size=31;
+    for(int size:point_cursor_sizes)if(cursor_size==size)g.point_cursor_size=size;
     g.vertical_pan = read_ini_int(L"ui", L"vertical_pan", g.vertical_pan ? 1 : 0) != 0;
     g.snap_to_data = read_ini_int(L"ui", L"snap_to_data", g.snap_to_data ? 1 : 0) != 0;
     g.show_gap_markers = read_ini_int(L"ui", L"show_gap_markers", g.show_gap_markers ? 1 : 0) != 0;
@@ -306,6 +316,10 @@ void load_runtime_settings() {
     const auto manual_mib=read_ini_int(L"resources",L"manual_mib",2048);
     if(manual_mib<64 || manual_mib>65536)g.resource_policy={true,2048};
     else g.resource_policy.manual_mib=static_cast<unsigned>(manual_mib);
+    const auto disk_mib=read_ini_int(L"resources",L"disk_cache_mib",2048);
+    set_disk_cache_policy(disk_mib>=64 && disk_mib<=1048576 &&
+        read_ini_int(L"resources",L"disk_cache_unlimited",0)!=0,
+        disk_mib>=64 && disk_mib<=1048576 ? static_cast<unsigned>(disk_mib) : 2048,false);
 
     g.pdisp.number = read_ini_int(L"points", L"number", g.pdisp.number ? 1 : 0) != 0;
     g.pdisp.x = read_ini_int(L"points", L"x", g.pdisp.x ? 1 : 0) != 0;
@@ -330,8 +344,8 @@ void load_runtime_settings() {
     g.marker_color = static_cast<COLORREF>(read_ini_int(
         L"ui", L"marker_color", static_cast<int>(g_theme->marker_color)));
 
-    g.hotkeys = default_hotkeys();
-    for (auto& hk : g.hotkeys) {
+    g.hotkeys.clear();
+    for (auto hk : default_hotkeys()) {
         wchar_t key_name[32]{};
         swprintf(key_name, 32, L"cmd_%d", hk.command);
         wchar_t value[64]{};
@@ -342,14 +356,11 @@ void load_runtime_settings() {
         if (swscanf(value, L"%u,%u", &fvirt, &key) == 2) {
             hk.fvirt = static_cast<BYTE>(fvirt);
             hk.key = static_cast<WORD>(key);
+            g.hotkeys.push_back(hk);
         }
     }
-    // A settings file that disables every command is not a meaningful user
-    // configuration; recover the built-in bindings on the next launch.
-    if (std::none_of(g.hotkeys.begin(), g.hotkeys.end(),
-            [](const HotkeyBinding& hk) { return hk.key != 0; })) {
-        g.hotkeys = default_hotkeys();
-    }
+    // Load explicit assignments first so new defaults cannot shadow them.
+    ensure_hotkeys_initialized();
     load_recent_files_from_ini();
 }
 

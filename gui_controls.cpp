@@ -212,6 +212,82 @@ void install_compact_themed_edit(HWND edit) {
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
+LRESULT draw_themed_trackbar(const NMCUSTOMDRAW& draw) {
+    const HWND track=draw.hdr.hwndFrom;
+    if(draw.dwDrawStage!=CDDS_PREPAINT)return CDRF_DODEFAULT;
+    // Trackbars may omit channel/item callbacks on incremental redraws. Paint
+    // the complete control in one stage so clearing the background never
+    // erases a channel or thumb that native code elects to leave cached.
+    const int saved=SaveDC(draw.hdc);
+    RECT client{};GetClientRect(track,&client);
+    IntersectClipRect(draw.hdc,client.left,client.top,client.right,client.bottom);
+    HBRUSH background=CreateSolidBrush(g_theme->bg_panel);
+    FillRect(draw.hdc,&client,background);DeleteObject(background);
+    const bool enabled=IsWindowEnabled(track)!=FALSE;
+    const bool focused=GetFocus()==track;
+    const bool pressed=GetCapture()==track || (draw.uItemState&CDIS_SELECTED)!=0;
+    POINT cursor{};GetCursorPos(&cursor);ScreenToClient(track,&cursor);
+    RECT thumb{};SendMessageW(track,TBM_GETTHUMBRECT,0,reinterpret_cast<LPARAM>(&thumb));
+    const bool hot=PtInRect(&thumb,cursor)!=FALSE;
+    const COLORREF accent=enabled ? g_theme->accent : mix_color(g_theme->btn_border,g_theme->bg_panel,80);
+    RECT rail{};SendMessageW(track,TBM_GETCHANNELRECT,0,reinterpret_cast<LPARAM>(&rail));
+    const int center=(thumb.top+thumb.bottom)/2;
+    rail.top=center-2;rail.bottom=center+3;
+    const COLORREF base=mix_color(g_theme->btn_border,g_theme->bg_panel,64);
+    fill_rounded_rect(draw.hdc,rail,base,base,5);
+    RECT filled=rail;filled.right=std::clamp((thumb.left+thumb.right)/2,rail.left,rail.right);
+    if(filled.right>filled.left)fill_rounded_rect(draw.hdc,filled,accent,accent,5);
+    const COLORREF surface=!enabled ? mix_color(g_theme->btn_bg,g_theme->bg_panel,128)
+        : (pressed ? g_theme->btn_active : hot ? g_theme->btn_hover : g_theme->bg_plot);
+    const COLORREF border=enabled && (focused || pressed || hot) ? g_theme->accent_hover : accent;
+    fill_rounded_rect(draw.hdc,thumb,surface,border,6);
+    if(enabled && focused && thumb.right-thumb.left>6 && thumb.bottom-thumb.top>6) {
+        RECT inner=thumb;InflateRect(&inner,-3,-3);
+        fill_rounded_rect(draw.hdc,inner,accent,accent,3);
+    }
+    RestoreDC(draw.hdc,saved);
+    return CDRF_SKIPDEFAULT;
+}
+
+namespace {
+constexpr UINT_PTR kThemedTrackbarSubclassId=0x54524143;
+void paint_themed_track(HWND track,HDC dc) {
+    NMCUSTOMDRAW draw{};draw.hdr.hwndFrom=track;draw.hdc=dc;draw.dwDrawStage=CDDS_PREPAINT;
+    draw_themed_trackbar(draw);
+}
+LRESULT CALLBACK themed_track_proc(HWND track,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR) {
+    if(msg==WM_ERASEBKGND)return 1;
+    if(msg==WM_PRINTCLIENT) {paint_themed_track(track,reinterpret_cast<HDC>(wp));return 0;}
+    if(msg==WM_PAINT) {
+        // Native drag painting clips to old/new thumb fragments and can leave
+        // stale filled-channel pixels. Own the complete paint and its clip.
+        InvalidateRect(track,nullptr,FALSE);
+        PAINTSTRUCT ps{};HDC dc=BeginPaint(track,&ps);RECT client{};GetClientRect(track,&client);
+        HDC buffer=CreateCompatibleDC(dc);
+        HBITMAP bitmap=CreateCompatibleBitmap(dc,std::max(1L,client.right),std::max(1L,client.bottom));
+        if(buffer && bitmap) {
+            const auto old=SelectObject(buffer,bitmap);paint_themed_track(track,buffer);
+            BitBlt(dc,0,0,client.right,client.bottom,buffer,0,0,SRCCOPY);SelectObject(buffer,old);
+        } else paint_themed_track(track,dc);
+        if(bitmap)DeleteObject(bitmap);
+        if(buffer)DeleteDC(buffer);
+        EndPaint(track,&ps);return 0;
+    }
+    if(msg==WM_NCDESTROY)RemoveWindowSubclass(track,themed_track_proc,kThemedTrackbarSubclassId);
+    const bool drag_move=msg==WM_MOUSEMOVE && GetCapture()==track;
+    const LRESULT result=DefSubclassProc(track,msg,wp,lp);
+    if(drag_move || msg==WM_LBUTTONDOWN || msg==WM_LBUTTONUP || msg==WM_KEYDOWN || msg==WM_CAPTURECHANGED ||
+       (msg==TBM_SETPOS && wp) || (msg==TBM_SETRANGE && wp)) {
+        // Finish every input event with a full frame, even while capture is held.
+        RedrawWindow(track,nullptr,nullptr,RDW_INVALIDATE|RDW_UPDATENOW|RDW_NOERASE);
+    }
+    return result;
+}
+}
+void install_themed_trackbar(HWND track) {
+    if(track)SetWindowSubclass(track,themed_track_proc,kThemedTrackbarSubclassId,0);
+}
+
 bool is_channel_checkbox_id(int id) {
     return id >= IDC_CHAN_BASE && id < IDC_CHAN_BASE + static_cast<int>(g.visible.size());
 }
@@ -224,7 +300,6 @@ bool is_side_toggle_id(int id) {
            id == IDC_SIDE_PT_DY ||
            id == IDC_SIDE_PT_INVDT ||
            id == IDC_SIDE_PT_DIST ||
-           id == IDC_SIDE_PT_SNAP ||
            id == IDC_SIDE_FILTER_ENABLE ||
            id == IDC_SIDE_STITCH_GAPS ||
            id == IDC_SIDE_POINT_GROUP_VISIBLE;
@@ -248,7 +323,8 @@ bool is_settings_hotkey_modifier_id(int id) {
 
 bool is_settings_checkbox_id(int id) {
     return id == IDC_SET_GAP_MARKERS ||
-           id == IDC_SET_MEMORY_AUTO;
+           id == IDC_SET_MEMORY_AUTO ||
+           id == IDC_SET_DISK_UNLIMITED;
 }
 
 bool uses_manual_toggle_state(HWND hwnd) {
@@ -258,6 +334,7 @@ bool uses_manual_toggle_state(HWND hwnd) {
            is_side_toggle_id(id) ||
            id == IDC_SET_GAP_MARKERS ||
            id == IDC_SET_MEMORY_AUTO ||
+           id == IDC_SET_DISK_UNLIMITED ||
            id == IDC_EXPORT_APPLY_SETTINGS ||
            id == IDC_EXPORT_APPLY_DATA ||
            id == IDC_EXPORT_INCLUDE_CHANNEL_NAMES ||

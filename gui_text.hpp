@@ -144,7 +144,7 @@ const wchar_t* side_pt_invdt_text();
 
 const wchar_t* side_pt_dist_text();
 
-const wchar_t* side_pt_snap_text();
+const wchar_t* magnet_button_text();
 
 std::wstring to_w(const std::string& s);
 

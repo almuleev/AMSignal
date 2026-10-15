@@ -3,6 +3,8 @@
 #include "gui_disk_spectrum_render.hpp"
 #include "gui_frf_render.hpp"
 #include "gui_analysis_source.hpp"
+#include "gui_analysis_range.hpp"
+#include "gui_marker_values.hpp"
 #include "gui_hotkeys.hpp"
 #include "gui_gap_details.hpp"
 #include "gui_controls.hpp"
@@ -210,6 +212,15 @@ void draw_user_axis_names(HDC dc, const RECT& p, AnalysisMode mode) {
         g.frf.logarithmic_frequency_axis ? (g_str == &kEn ? L"Frequency, Hz (log scale)" : L"Частота, Гц (лог.)") :
         (g_str == &kEn ? L"Frequency, Hz (linear scale)" : L"Частота, Гц (лин.)");
     constexpr UINT flags = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
+    const auto range_caption=mode==AnalysisMode::Time ? analysis_range_caption_text() : std::wstring();
+    if(!range_caption.empty()) {
+        SIZE y_size{};GetTextExtentPoint32W(dc,y_name.c_str(),static_cast<int>(y_name.size()),&y_size);
+        y_row.right=p.left+std::min(y_size.cx,std::max(1L,(p.right-p.left)/3));
+        RECT range_row{std::min(p.right,y_row.right+16),y_row.top,p.right,y_row.bottom};
+        SetTextColor(dc,g_theme->text_primary);
+        DrawTextW(dc,range_caption.c_str(),static_cast<int>(range_caption.size()),&range_row,flags | DT_RIGHT);
+        SetTextColor(dc,g_theme->axis_text);
+    }
     DrawTextW(dc, y_name.c_str(), static_cast<int>(y_name.size()), &y_row, flags | DT_LEFT);
     DrawTextW(dc, x_name.c_str(), static_cast<int>(x_name.size()), &x_row, flags | DT_RIGHT);
     DrawTextW(dc, physical_x, -1, &physical_row, flags | DT_CENTER);
@@ -535,14 +546,18 @@ void draw_guides(HDC dc) {
 void draw_markers(HDC dc) {
     if (g.markers.empty() || !g.vvalid) return;
     const RECT& p = g.vrect;
-    if (g.vx1 <= g.vx0) return;
+    if (g.vx1 <= g.vx0 || g.vy1 <= g.vy0) return;
     auto mx = [&](double dx) -> int {
         if (g.mode == AnalysisMode::FRF && !(dx > 0)) return std::numeric_limits<int>::min();
         const double displayed_x = (g.mode == AnalysisMode::FRF) ? (g.vx0+frf_frequency_fraction(dx)*(g.vx1-g.vx0)) :
             (g.mode == AnalysisMode::FFT) ? dx : stitched_time_from_raw(dx);
+        if (!std::isfinite(displayed_x) || displayed_x < g.vx0 || displayed_x > g.vx1)
+            return std::numeric_limits<int>::min();
         return p.left + static_cast<int>((displayed_x - g.vx0) / (g.vx1 - g.vx0) * (p.right - p.left));
     };
-    auto my = [&](double dy) {
+    auto my = [&](double dy) -> int {
+        if (!std::isfinite(dy) || dy < g.vy0 || dy > g.vy1)
+            return std::numeric_limits<int>::min();
         return p.bottom - static_cast<int>((dy - g.vy0) / (g.vy1 - g.vy0) * (p.bottom - p.top));
     };
     HRGN clip = CreateRectRgn(p.left, p.top, p.right + 1, p.bottom + 1);
@@ -560,13 +575,14 @@ void draw_markers(HDC dc) {
     for (std::size_t marker_index=0; marker_index<g.markers.size(); ++marker_index) {
         const auto& m=g.markers[marker_index];
         if (m.mode != g.mode) continue;
-        const int X = mx(m.x);
-        if (X < p.left || X > p.right) continue;
-        MoveToEx(dc, X, p.top, nullptr); LineTo(dc, X, p.bottom);
+        // Each projection can remain visible after the intersection leaves the plot.
         const int Y = my(m.y);
         if (Y >= p.top && Y <= p.bottom) {
             MoveToEx(dc, p.left, Y, nullptr); LineTo(dc, p.right, Y);
         }
+        const int X = mx(m.x);
+        if (X < p.left || X > p.right) continue;
+        MoveToEx(dc, X, p.top, nullptr); LineTo(dc, X, p.bottom);
         const wchar_t* txt = nullptr;
         int tlen = 0;
         wchar_t b[48];
@@ -869,35 +885,6 @@ void draw_time(HDC dc, const RECT& p) {
     HRGN clip = CreateRectRgn(p.left + 1, p.top + 1, p.right, p.bottom);
     SelectClipRgn(dc, clip);
 
-    double fft0 = 0.0, fft1 = 0.0;
-    bool show_fft_window = false;
-    bool has_visible_fft_window = false;
-    int fft_left_px = 0, fft_right_px = 0;
-    if (g.fft_selecting) {
-        fft0 = g.fft_select_anchor_t;
-        fft1 = g.fft_select_current_t;
-        show_fft_window = true;
-    } else if (has_fft_window()) {
-        fft0 = g.fft_window_start;
-        fft1 = g.fft_window_end;
-        show_fft_window = true;
-    }
-    if (show_fft_window) {
-        double sel0 = std::min(fft0, fft1);
-        double sel1 = std::max(fft0, fft1);
-        clamp_time_window(sel0, sel1);
-        fft0 = sel0;
-        fft1 = sel1;
-        const double vis0 = std::max(sel0, g.win_start);
-        const double vis1 = std::min(sel1, g.win_end);
-        if (vis1 > vis0) {
-            has_visible_fft_window = true;
-            fft_left_px = mapx(vis0);
-            fft_right_px = mapx(vis1);
-            if (fft_right_px <= fft_left_px) fft_right_px = fft_left_px + 1;
-        }
-    }
-
     static std::vector<double> cmin, cmax;
     const bool visible_channels = any_visible_channel();
     // Keep the sparse path for genuinely small windows only; it is more expensive
@@ -1098,202 +1085,7 @@ void draw_time(HDC dc, const RECT& p) {
     SelectClipRgn(dc, nullptr);
     DeleteObject(clip);
 
-    if (show_fft_window) {
-        HRGN overlay_clip = CreateRectRgn(p.left, p.top, p.right + 1, p.bottom + 1);
-        SelectClipRgn(dc, overlay_clip);
-
-        HPEN tick_pen = CreatePen(PS_SOLID, 2, g_theme->accent);
-        HGDIOBJ old_tick_pen = SelectObject(dc, tick_pen);
-        const int tick = 7;
-        const int top_y = p.top + 2;
-        const int bottom_y = p.bottom - 2;
-        const int handle_margin = 9;
-        const int tri_w = 6;
-        const int tri_h = 7;
-        const COLORREF handle_outline = g_theme->btn_border;
-        const COLORREF handle_fill = g_theme->accent;
-        const int min_x = static_cast<int>(p.left) + handle_margin;
-        const int max_x = static_cast<int>(p.right) - handle_margin;
-        auto clamp_handle_x = [&](int x) {
-            if (min_x > max_x) return (static_cast<int>(p.left) + static_cast<int>(p.right)) / 2;
-            return std::clamp(x, min_x, max_x);
-        };
-        const int left_x = clamp_handle_x(mapx(fft0));
-        const int right_x = clamp_handle_x(mapx(fft1));
-        {
-            const int sel_left = has_visible_fft_window
-                ? std::clamp(std::min(fft_left_px, fft_right_px), static_cast<int>(p.left) + 1, static_cast<int>(p.right) - 1)
-                : static_cast<int>(p.right) - 1;
-            const int sel_right = has_visible_fft_window
-                ? std::clamp(std::max(fft_left_px, fft_right_px), static_cast<int>(p.left) + 1, static_cast<int>(p.right) - 1)
-                : static_cast<int>(p.left) + 1;
-            const int shade_top = static_cast<int>(p.top) + 1;
-            const int shade_bottom = static_cast<int>(p.bottom) - 1;
-            const int shade_h = shade_bottom - shade_top;
-            if (shade_h > 0) {
-                Gdiplus::Graphics gfx(dc);
-                gfx.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-                const bool dark = (g_theme == &kDarkTheme);
-                const Gdiplus::Color outer_fill_color(dark ? 48 : 34,
-                    GetRValue(g_theme->text_secondary),
-                    GetGValue(g_theme->text_secondary),
-                    GetBValue(g_theme->text_secondary));
-                const Gdiplus::Color outer_hatch_color(dark ? 92 : 76,
-                    GetRValue(g_theme->accent),
-                    GetGValue(g_theme->accent),
-                    GetBValue(g_theme->accent));
-                const Gdiplus::Color selected_fill_color(dark ? 14 : 10,
-                    GetRValue(g_theme->accent),
-                    GetGValue(g_theme->accent),
-                    GetBValue(g_theme->accent));
-                const Gdiplus::Color selected_edge_color(dark ? 140 : 120,
-                    GetRValue(g_theme->accent),
-                    GetGValue(g_theme->accent),
-                    GetBValue(g_theme->accent));
-                const Gdiplus::Color selected_edge_soft(dark ? 70 : 58,
-                    GetRValue(g_theme->text_secondary),
-                    GetGValue(g_theme->text_secondary),
-                    GetBValue(g_theme->text_secondary));
-                const Gdiplus::Color clear_color(0, 0, 0, 0);
-
-                auto fill_rect = [&](int x0, int x1, const Gdiplus::Color& fill, const Gdiplus::Color& hatch_color, Gdiplus::HatchStyle hatch_style) {
-                    if (x1 <= x0) return;
-                    const int w = x1 - x0;
-                    Gdiplus::SolidBrush fill_brush(fill);
-                    gfx.FillRectangle(
-                        &fill_brush,
-                        static_cast<Gdiplus::REAL>(x0),
-                        static_cast<Gdiplus::REAL>(shade_top),
-                        static_cast<Gdiplus::REAL>(w),
-                        static_cast<Gdiplus::REAL>(shade_h));
-                    Gdiplus::HatchBrush hatch(
-                        hatch_style,
-                        hatch_color,
-                        clear_color);
-                    gfx.FillRectangle(
-                        &hatch,
-                        static_cast<Gdiplus::REAL>(x0),
-                        static_cast<Gdiplus::REAL>(shade_top),
-                        static_cast<Gdiplus::REAL>(w),
-                        static_cast<Gdiplus::REAL>(shade_h));
-                };
-
-                auto tint_rect = [&](int x0, int x1, const Gdiplus::Color& fill) {
-                    if (x1 <= x0) return;
-                    const int w = x1 - x0;
-                    Gdiplus::SolidBrush fill_brush(fill);
-                    gfx.FillRectangle(
-                        &fill_brush,
-                        static_cast<Gdiplus::REAL>(x0),
-                        static_cast<Gdiplus::REAL>(shade_top),
-                        static_cast<Gdiplus::REAL>(w),
-                        static_cast<Gdiplus::REAL>(shade_h));
-                };
-
-                fill_rect(static_cast<int>(p.left) + 1, sel_left, outer_fill_color, outer_hatch_color, Gdiplus::HatchStyleWideDownwardDiagonal);
-                fill_rect(sel_right, static_cast<int>(p.right), outer_fill_color, outer_hatch_color, Gdiplus::HatchStyleWideDownwardDiagonal);
-                if (has_visible_fft_window && sel_right > sel_left) {
-                    tint_rect(sel_left, sel_right, selected_fill_color);
-                }
-
-                if (has_visible_fft_window && sel_right > sel_left) {
-                    HPEN sel_pen = CreatePen(PS_DOT, 1, g_theme->accent);
-                    HGDIOBJ old_pen = SelectObject(dc, sel_pen);
-                    MoveToEx(dc, sel_left, p.top, nullptr); LineTo(dc, sel_left, p.bottom);
-                    MoveToEx(dc, sel_right, p.top, nullptr); LineTo(dc, sel_right, p.bottom);
-                    SelectObject(dc, old_pen);
-                    DeleteObject(sel_pen);
-
-                    Gdiplus::Pen edge_pen(selected_edge_color, 1.0f);
-                    gfx.DrawLine(&edge_pen,
-                        static_cast<Gdiplus::REAL>(sel_left),
-                        static_cast<Gdiplus::REAL>(shade_top),
-                        static_cast<Gdiplus::REAL>(sel_left),
-                        static_cast<Gdiplus::REAL>(shade_bottom));
-                    gfx.DrawLine(&edge_pen,
-                        static_cast<Gdiplus::REAL>(sel_right),
-                        static_cast<Gdiplus::REAL>(shade_top),
-                        static_cast<Gdiplus::REAL>(sel_right),
-                        static_cast<Gdiplus::REAL>(shade_bottom));
-                    gfx.DrawLine(&edge_pen,
-                        static_cast<Gdiplus::REAL>(sel_left),
-                        static_cast<Gdiplus::REAL>(shade_top),
-                        static_cast<Gdiplus::REAL>(sel_right),
-                        static_cast<Gdiplus::REAL>(shade_top));
-                    gfx.DrawLine(&edge_pen,
-                        static_cast<Gdiplus::REAL>(sel_left),
-                        static_cast<Gdiplus::REAL>(shade_bottom),
-                        static_cast<Gdiplus::REAL>(sel_right),
-                        static_cast<Gdiplus::REAL>(shade_bottom));
-
-                    Gdiplus::Pen soft_pen(selected_edge_soft, 1.0f);
-                    gfx.DrawLine(&soft_pen,
-                        static_cast<Gdiplus::REAL>(sel_left + 1),
-                        static_cast<Gdiplus::REAL>(shade_top),
-                        static_cast<Gdiplus::REAL>(sel_left + 1),
-                        static_cast<Gdiplus::REAL>(shade_bottom));
-                    gfx.DrawLine(&soft_pen,
-                        static_cast<Gdiplus::REAL>(sel_right - 1),
-                        static_cast<Gdiplus::REAL>(shade_top),
-                        static_cast<Gdiplus::REAL>(sel_right - 1),
-                        static_cast<Gdiplus::REAL>(shade_bottom));
-                    gfx.DrawLine(&soft_pen,
-                        static_cast<Gdiplus::REAL>(sel_left),
-                        static_cast<Gdiplus::REAL>(shade_top + 1),
-                        static_cast<Gdiplus::REAL>(sel_right),
-                        static_cast<Gdiplus::REAL>(shade_top + 1));
-                    gfx.DrawLine(&soft_pen,
-                        static_cast<Gdiplus::REAL>(sel_left),
-                        static_cast<Gdiplus::REAL>(shade_bottom - 1),
-                        static_cast<Gdiplus::REAL>(sel_right),
-                        static_cast<Gdiplus::REAL>(shade_bottom - 1));
-                }
-            }
-        }
-
-        auto draw_handle = [&](int x) {
-            MoveToEx(dc, x, top_y, nullptr); LineTo(dc, x + tick, top_y);
-            MoveToEx(dc, x - tick, bottom_y, nullptr); LineTo(dc, x, bottom_y);
-
-            POINT top_tri[3] = {
-                {x, top_y + tri_h},
-                {x - tri_w, top_y},
-                {x + tri_w, top_y},
-            };
-            HBRUSH tri_brush = CreateSolidBrush(handle_fill);
-            HPEN tri_pen = CreatePen(PS_SOLID, 1, handle_outline);
-            HGDIOBJ old_brush = SelectObject(dc, tri_brush);
-            HGDIOBJ old_pen2 = SelectObject(dc, tri_pen);
-            Polygon(dc, top_tri, 3);
-            SelectObject(dc, old_pen2);
-            SelectObject(dc, old_brush);
-            DeleteObject(tri_pen);
-            DeleteObject(tri_brush);
-
-            const int dot_r = 4;
-            const int dot_y = bottom_y - 1;
-            HBRUSH dot_brush = CreateSolidBrush(handle_fill);
-            HPEN dot_pen = CreatePen(PS_SOLID, 1, handle_outline);
-            old_brush = SelectObject(dc, dot_brush);
-            old_pen2 = SelectObject(dc, dot_pen);
-            Ellipse(dc, x - dot_r, dot_y - dot_r, x + dot_r + 1, dot_y + dot_r + 1);
-            SelectObject(dc, old_pen2);
-            SelectObject(dc, old_brush);
-            DeleteObject(dot_pen);
-            DeleteObject(dot_brush);
-        };
-
-        if (has_visible_fft_window) {
-            draw_handle(left_x);
-            draw_handle(right_x);
-        }
-
-        SelectObject(dc, old_tick_pen);
-        DeleteObject(tick_pen);
-
-        SelectClipRgn(dc, nullptr);
-        DeleteObject(overlay_clip);
-    }
+    draw_analysis_range_selection(dc,p);
     draw_legend(dc, p);
 
     g.vx0 = displayed_start; g.vx1 = displayed_end; g.vy0 = ymin; g.vy1 = ymax;
@@ -1470,6 +1262,7 @@ void draw_chart(HDC dc, const RECT& p) {
     draw_guides(dc);
     draw_markers(dc);
     draw_measure(dc);
+    draw_marker_values(dc);
     // Editable names have their own outer rows, clear of data and scale captions.
     draw_user_axis_names(dc, p, g.mode);
 }

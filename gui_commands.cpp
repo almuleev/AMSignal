@@ -2,6 +2,7 @@
 #include "gui_commands.hpp"
 #include "gui_frf_render.hpp"
 #include "gui_frf.hpp"
+#include "gui_frequency_view.hpp"
 #include "gui_spectrum.hpp"
 #include "gui_gap_details.hpp"
 #include "gui_controls.hpp"
@@ -45,6 +46,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_COMMAND: {
+            if(handle_frequency_view_command(hwnd,wp))return 0;
             g_filter_slider_before.reset();
             const int id = LOWORD(wp);
             if (id == IDC_DOCUMENT_SELECTOR) {
@@ -132,12 +134,14 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 case IDC_LINE_MENU: {
                     HMENU menu = CreatePopupMenu();
-                    OwnerDrawMenuEntry vertical{g_str == &kEn ? L"Vertical line" : L"Вертикальная линия", L""};
-                    OwnerDrawMenuEntry horizontal{g_str == &kEn ? L"Horizontal line" : L"Горизонтальная линия", L""};
+                    OwnerDrawMenuEntry vertical{menu_text(g_str == &kEn ? L"Vertical line" : L"Вертикальная линия",IDM_ADD_VLINE), L""};
+                    OwnerDrawMenuEntry horizontal{menu_text(g_str == &kEn ? L"Horizontal line" : L"Горизонтальная линия",IDM_ADD_HLINE), L""};
+                    OwnerDrawMenuEntry exact{menu_text(guide_prompt_title_text(),IDM_ADD_LINE_EXACT), L""};
                     AppendMenuW(menu, MF_OWNERDRAW | (g.pending_line == 1 ? MF_CHECKED : 0),
                         IDM_ADD_VLINE, reinterpret_cast<LPCWSTR>(&vertical));
                     AppendMenuW(menu, MF_OWNERDRAW | (g.pending_line == 2 ? MF_CHECKED : 0),
                         IDM_ADD_HLINE, reinterpret_cast<LPCWSTR>(&horizontal));
+                    AppendMenuW(menu, MF_OWNERDRAW, IDM_ADD_LINE_EXACT, reinterpret_cast<LPCWSTR>(&exact));
                     RECT r{};
                     GetWindowRect(g.line_menu_btn, &r);
                     const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
@@ -189,6 +193,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     redraw_window_with_children(hwnd);
                     return 0;
                 case IDC_SIDE_TAB_CHANNELS:
+                    g.side_panel_visible = true;
                     g.side_scroll_y = 0;
                     if (g.mode == AnalysisMode::FRF) g.frf_point_settings_open = false;
                     set_side_panel_tab(0);
@@ -197,6 +202,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     redraw_window_with_children(hwnd);
                     return 0;
                 case IDC_SIDE_TAB_POINTS:
+                    g.side_panel_visible = true;
                     g.side_scroll_y = 0;
                     if (g.mode == AnalysisMode::FRF) g.frf_point_settings_open = true;
                     set_side_panel_tab(1);
@@ -205,6 +211,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     redraw_window_with_children(hwnd);
                     return 0;
                 case IDC_SIDE_TAB_FILTER:
+                    g.side_panel_visible = true;
                     g.side_scroll_y = 0;
                     set_side_panel_tab(2);
                     save_runtime_settings();
@@ -344,7 +351,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hwnd, nullptr, TRUE);
                     return 0;
                 case IDC_SIDE_STITCH_GAPS:
-                    if(HIWORD(wp)!=BN_CLICKED && HIWORD(wp)!=BN_DOUBLECLICKED)return 0;
+                    if(HIWORD(wp)!=BN_CLICKED && HIWORD(wp)!=BN_DOUBLECLICKED && !(HIWORD(wp)==1 && lp==0))return 0;
                     if(!has_data() || g.ds.frequency_axis)return 0;
                     g.stitch_time_gaps=!g.stitch_time_gaps;
                     mark_active_document_dirty();
@@ -362,6 +369,13 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     set_status();
                     InvalidateRect(hwnd, nullptr, TRUE);
                     return 0;
+                case IDM_MARKER_VALUES: {
+                    const auto before=capture_settings_snapshot();
+                    g.show_marker_values=!g.show_marker_values;
+                    g.marker_values_rect={};g.marker_values_close_rect={};
+                    record_settings_change(before);save_runtime_settings();sync_menu();invalidate_plot();
+                    return 0;
+                }
                 case IDM_CHANNEL_LEGEND: {
                     const SettingsSnapshot before = capture_settings_snapshot();
                     g.show_channel_legend = !g.show_channel_legend;
@@ -411,12 +425,14 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     sync_menu();
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
-                case IDM_ADD_VLINE_EXACT: {
+                case IDM_ADD_LINE_EXACT:
+                case IDM_ADD_HLINE_EXACT_LEGACY: {
                     if (g.annotations_locked) return 0;
                     if (!has_data()) { show_styled_info_prompt(hwnd, g_str->msg_nodata, g_str->msg_openfirst, false); return 0; }
                     double value = 0.0;
-                    if (!prompt_exact_guide_value(true, value)) return 0;
-                    add_guide_line(true, value);
+                    bool vertical = id != IDM_ADD_HLINE_EXACT_LEGACY && g.pending_line != 2;
+                    if (!prompt_exact_guide_value(vertical, value)) return 0;
+                    add_guide_line(vertical, value);
                     return 0;
                 }
                 case IDM_ADD_HLINE:
@@ -437,14 +453,6 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     sync_menu();
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
-                case IDM_ADD_HLINE_EXACT: {
-                    if (g.annotations_locked) return 0;
-                    if (!has_data()) { show_styled_info_prompt(hwnd, g_str->msg_nodata, g_str->msg_openfirst, false); return 0; }
-                    double value = 0.0;
-                    if (!prompt_exact_guide_value(false, value)) return 0;
-                    add_guide_line(false, value);
-                    return 0;
-                }
                 case IDM_CLEAR_LINES:
                     if (g.annotations_locked) return 0;
                     if (!g.guides.empty()) {
@@ -697,10 +705,9 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
-                case IDC_SIDE_PT_SNAP: {
+                case IDC_MAGNET_TOOL: {
                     const SettingsSnapshot before = capture_settings_snapshot();
-                    toggle_checked_state(GetDlgItem(hwnd, id));
-                    g.snap_to_data = is_toggle_checked(GetDlgItem(hwnd, id));
+                    g.snap_to_data = !g.snap_to_data;
                     record_settings_change(before);
                     save_runtime_settings();
                     refresh_settings_controls();
@@ -709,10 +716,10 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 }
                 case IDC_SIDE_FILTER_ENABLE: {
-                    if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED) {
+                    if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED || (HIWORD(wp)==1 && lp==0)) {
                         const SettingsSnapshot before = capture_settings_snapshot();
-                        toggle_checked_state(GetDlgItem(hwnd, id));
-                        g.noise_threshold_enabled = is_toggle_checked(GetDlgItem(hwnd, id));
+                        g.noise_threshold_enabled = !g.noise_threshold_enabled;
+                        set_toggle_checked(g.side_filter_enable,g.noise_threshold_enabled);
                         normalize_filter_bounds();
                         commit_filter_settings_change(before);
                     }
@@ -804,15 +811,21 @@ void set_mode(AnalysisMode mode) {
     active_point_group_index_for_mode(current_point_group_mode()) = g.active_point_group;
     finish_channel_rename(true);
     g.mode = mode;
-    g.dragging = false; g.fft_selecting = false;
+    g.dragging = false; g.fft_selecting = false; g.fft_resize_edge = 0;
     g.gap_click_pending = false;
     if (g.main && GetCapture() == g.main) ReleaseCapture();
     g.vvalid = false;
+    g.marker_values_rect={};g.marker_values_close_rect={};
     if (mode != AnalysisMode::Time) {
         stop_play();
         hide_gap_details_card();
     }
     if (mode == AnalysisMode::FRF) {
+        if (g.frf.inputs.empty() || g.frf.outputs.empty()) {
+            g.side_panel_visible = true;
+            g.side_scroll_y = 0;
+            set_side_panel_tab(0);
+        }
         g.frf_point_settings_open = g.side_panel_tab == 1;
         normalize_active_point_group();
         if (PointGroup* group = active_point_group()) {

@@ -1,6 +1,7 @@
 // Window: native viewer implementation.
 #include "gui_window.hpp"
 #include "gui_frf.hpp"
+#include "gui_frequency_view.hpp"
 #include "gui_menu.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_controls.hpp"
@@ -24,6 +25,32 @@
 
 namespace gui {
 
+namespace {
+void draw_magnet_icon(HDC dc,const RECT& rect,bool pressed,bool enabled) {
+    const Gdiplus::REAL x=(rect.left+rect.right)*.5f;
+    const Gdiplus::REAL y=(rect.top+rect.bottom)*.5f+(pressed ? 1.0f : 0.0f);
+    const BYTE tone=!enabled ? 128 : g_theme==&kDarkTheme ? 255 : 0;
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Matrix rotation;
+    rotation.RotateAt(90.0f,Gdiplus::PointF(x,y));
+    graphics.SetTransform(&rotation);
+    Gdiplus::SolidBrush ink(Gdiplus::Color(255,tone,tone,tone));
+    Gdiplus::GraphicsPath horseshoe;
+    horseshoe.AddLine(x-7,y-3,x-7,y+1);
+    horseshoe.AddBezier(x-7,y+1,x-7,y+10,x+7,y+10,x+7,y+1);
+    horseshoe.AddLine(x+7,y+1,x+7,y-3);
+    horseshoe.AddLine(x+7,y-3,x+3,y-3);
+    horseshoe.AddLine(x+3,y-3,x+3,y+1);
+    horseshoe.AddBezier(x+3,y+1,x+3,y+5,x-3,y+5,x-3,y+1);
+    horseshoe.AddLine(x-3,y+1,x-3,y-3);
+    horseshoe.CloseFigure();
+    graphics.FillPath(&ink,&horseshoe);
+    graphics.FillRectangle(&ink,x-7,y-8,4.0f,4.0f);
+    graphics.FillRectangle(&ink,x+3,y-8,4.0f,4.0f);
+}
+}
+
 // ---- UI rebuild (language switch) --------------------------------------
 void rebuild_ui() {
     if (!g.main) return;
@@ -35,6 +62,7 @@ void rebuild_ui() {
     SetWindowTextW(g.document_close, L"×");
     SetWindowTextW(g.cursor_btn, g_str == &kEn ? L"Cursor" : L"Курсор");
     SetWindowTextW(g.line_menu_btn, g_str == &kEn ? L"Line ▾" : L"Линия ▾");
+    SetWindowTextW(g.magnet_btn, magnet_button_text());
     refresh_open_document_selector();
     SetWindowTextW(g.savepng, g_str->btn_png);
     SetWindowTextW(g.savecsv, g_str->btn_csv);
@@ -145,6 +173,7 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.measure = mk(g_str->btn_measure, IDC_MEASURE, 0);
             g.cursor_btn = mk(g_str == &kEn ? L"Cursor" : L"Курсор", IDC_CURSOR_TOOL, 0);
             g.line_menu_btn = mk(g_str == &kEn ? L"Line ▾" : L"Линия ▾", IDC_LINE_MENU, 0);
+            g.magnet_btn = mk(magnet_button_text(), IDC_MAGNET_TOOL, WS_TABSTOP);
             g.annotation_lock_btn = mk(L"🔒", IDC_LOCK_ANNOTATIONS, 0);
             g.marker_btn = mk(g_str == &kEn ? L"Marker" : L"Маркер", IDM_ADD_MARKER, 0);
             g.vline_btn = mk(g_str == &kEn ? L"V-Line" : L"V-линия", IDM_ADD_VLINE, 0);
@@ -174,6 +203,7 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.side_tab_channels = mk(side_tab_channels_text(), IDC_SIDE_TAB_CHANNELS, 0);
             g.side_tab_points = mk(side_tab_points_text(), IDC_SIDE_TAB_POINTS, 0);
             g.side_tab_filter = mk(side_tab_filter_text(), IDC_SIDE_TAB_FILTER, 0);
+            create_frequency_view_controls(hwnd,inst);
             g.side_channel_hint = mk_panel_ctl(L"STATIC", side_channel_hint_text(),
                                                SS_LEFT | SS_NOPREFIX, IDC_SIDE_CHANNEL_HINT, g.side_filter_controls);
             g.side_filter_enable = mk_panel_ctl(L"BUTTON", filter_toggle_text(),
@@ -202,6 +232,8 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.side_filter_high_value = mk_panel_ctl(L"STATIC", L"", SS_RIGHT | SS_NOPREFIX, 0, g.side_filter_controls);
             g.side_filter_high_track = mk_panel_ctl(TRACKBAR_CLASS, L"", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,
                                                     IDC_SIDE_FILTER_HIGH_TRACK, g.side_filter_controls);
+            install_themed_trackbar(g.side_filter_low_track);
+            install_themed_trackbar(g.side_filter_high_track);
             g.side_stitch_gaps = mk_panel_ctl(L"BUTTON", stitch_gaps_toggle_text(),
                 BS_OWNERDRAW | WS_TABSTOP, IDC_SIDE_STITCH_GAPS, g.side_channel_controls);
             g.side_global_formula_label = mk_panel_ctl(L"STATIC", side_global_formula_label_text(), SS_LEFT, 0, g.side_channel_controls);
@@ -221,7 +253,6 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 {IDC_SIDE_PT_DY, side_pt_dy_text(), g.pdisp.dy},
                 {IDC_SIDE_PT_INVDT, side_pt_invdt_text(), g.pdisp.inv_dt},
                 {IDC_SIDE_PT_DIST, side_pt_dist_text(), g.pdisp.dist},
-                {IDC_SIDE_PT_SNAP, side_pt_snap_text(), g.snap_to_data},
             };
             for (const auto& seed : point_toggle_seeds) {
                 HWND c = mk_panel_ctl(L"BUTTON", seed.text, BS_OWNERDRAW, seed.id, g.side_point_controls);
@@ -293,6 +324,9 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case WM_NOTIFY: {
             auto* notification = reinterpret_cast<NMHDR*>(lp);
+            if(notification && notification->code==NM_CUSTOMDRAW &&
+               (notification->hwndFrom==g.side_filter_low_track || notification->hwndFrom==g.side_filter_high_track))
+                return draw_themed_trackbar(*reinterpret_cast<NMCUSTOMDRAW*>(lp));
             if (notification && notification->hwndFrom == g.status_tooltip &&
                 notification->code == TTN_GETDISPINFOW) {
                 auto* info = reinterpret_cast<NMTTDISPINFOW*>(lp);
@@ -380,6 +414,8 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 active = g.pending_line != 0;
             } else if (btn == g.annotation_lock_btn) {
                 active = g.annotations_locked;
+            } else if (btn == g.magnet_btn) {
+                active = g.snap_to_data;
             } else if (btn == g.measure) {
                 active = g.measure_mode;
             } else if (btn == g.autoy) {
@@ -408,7 +444,9 @@ LRESULT handle_window_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             bool hover = (btn == g.hovered_btn);
             wchar_t txt[128];
             GetWindowTextW(btn, txt, 128);
-            draw_themed_button(dc, r, txt, pressed, active, hover);
+            // Keep the localized window name for accessibility; the face is an icon.
+            draw_themed_button(dc, r, btn==g.magnet_btn ? L"" : txt, pressed, active, hover);
+            if(btn==g.magnet_btn)draw_magnet_icon(dc,r,pressed,IsWindowEnabled(btn)!=FALSE);
             return TRUE;
         }
         case WM_DESTROY:

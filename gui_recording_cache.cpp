@@ -39,4 +39,11 @@ std::shared_ptr<lvm::DiskCache> recording_overview_cache() {
 void configure_recording_disk_cache(std::filesystem::path directory,std::uint64_t bytes) {
     std::lock_guard<std::mutex> lock(mutex);cache.reset();temporary_cache.reset();override_directory=std::move(directory);disk_limit=bytes;
 }
+void set_recording_disk_cache_limit(std::uint64_t bytes) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if(!bytes)throw lvm::RecordingFailure(lvm::RecordingError::InvalidRequest,"Invalid disk cache limit.");
+    if(temporary_cache)temporary_cache->set_limit(bytes);
+    else if(cache)cache->set_limit(bytes);
+    disk_limit=bytes;
+}
 } // namespace gui

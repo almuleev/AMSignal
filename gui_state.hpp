@@ -189,6 +189,7 @@ struct DocumentState {
     // grayscale screenshots and printed exports.
     bool distinguish_curves = false;
     bool show_channel_legend = true;
+    bool show_marker_values = true;
 
     bool auto_y = true;            // auto-fit vertical scale (true=auto, false=fixed)
     double y_lock_min = -1.0, y_lock_max = 1.0;
@@ -202,7 +203,7 @@ struct DocumentState {
     bool point_click_pending = false;
     bool point_click_reference_axis = false;
     int point_click_x = 0, point_click_y = 0;
-    bool snap_to_data = true;       // snap markers to the nearest real sample
+    bool snap_to_data = true;       // shared snap for points, markers and lines
     PointDisplay pdisp;             // which read-outs to draw at markers
     // User-defined coordinate names. They are independent in every view and
     // do not replace the physical quantity/unit captions on the plots.
@@ -267,7 +268,6 @@ struct DocumentState {
     unsigned long long plot_analysis_serial = 1;
     bool pending_marker = false;    // active marker tool; stays selected after placement
     int active_marker = -1;
-    bool show_gap_markers = true;
     bool stitch_time_gaps = false;
     bool stitched_time_ready = false;
     std::vector<std::size_t> stitched_gap_right_indices;
@@ -300,6 +300,10 @@ struct App : DocumentState {
     std::vector<DocumentState> inactive_documents;
     std::vector<std::wstring> pending_open_paths;
     lvm::ResourcePolicy resource_policy;
+    bool disk_cache_unlimited = false;
+    unsigned disk_cache_mib = 2048;
+    int point_cursor_size = 31;
+    bool show_gap_markers = true; // Application preference shared by every document.
     AsyncLoadStage async_load_stage = AsyncLoadStage::None;
     unsigned long long async_load_token = 0;
     std::shared_ptr<std::atomic<bool>> async_load_cancel_flag;
@@ -320,6 +324,8 @@ struct App : DocumentState {
     HWND vline_btn = nullptr, hline_btn = nullptr;
     HWND cursor_btn = nullptr, line_menu_btn = nullptr;
     HWND annotation_lock_btn = nullptr;
+    HWND magnet_btn = nullptr;
+    RECT marker_values_rect{},marker_values_close_rect{};
     HWND reset = nullptr, autoy = nullptr, sidepanel_btn = nullptr;
     HWND show_all_btn = nullptr, hide_all_btn = nullptr;
     HWND status = nullptr;
@@ -402,6 +408,9 @@ struct App : DocumentState {
     std::vector<HWND> side_channel_controls;
     std::vector<HWND> side_filter_controls;
     std::vector<HWND> side_point_controls;
+    std::vector<HWND> side_frequency_controls;
+    HWND side_frequency_title=nullptr,side_frequency_low_label=nullptr,side_frequency_high_label=nullptr;
+    HWND side_frequency_low=nullptr,side_frequency_high=nullptr,side_frequency_apply=nullptr;
 
     HWND settings_wnd = nullptr; // measurement-point settings panel (modeless)
     HWND welcome_wnd = nullptr;  // start screen
@@ -425,6 +434,7 @@ struct App : DocumentState {
     int gap_click_index = -1;
 
     bool fft_selecting = false;
+    int fft_resize_edge = 0; // Drag preview only; committed interval stays unchanged until release.
     int fft_select_anchor_x = 0, fft_select_current_x = 0;
     double fft_select_anchor_t = 0.0, fft_select_current_t = 0.0;
 

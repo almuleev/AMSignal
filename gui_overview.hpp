@@ -16,8 +16,11 @@ bool overview_view_can_render();
 bool overview_time_yrange(double& minimum,double& maximum);
 // UI-only callback. Source, viewport, processing, visibility and annotation
 // revision are checked again before it can publish an original sample.
+// analysis_range permits locked annotations and reports a valid no-point result.
 bool request_overview_snap(double time,double value,
-                           std::function<void(const lvm::RecordingSnapResult&)> accept);
+                           std::function<void(const lvm::RecordingSnapResult&)> accept,
+                           bool analysis_range=false);
 bool poll_overview_snap();
+bool overview_analysis_range_snap_pending();
 void cancel_overview_snap();
 } // namespace gui

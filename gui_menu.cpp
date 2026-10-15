@@ -252,7 +252,7 @@ void sync_menu() {
     CheckMenuItem(g.menu,IDM_ANALYSIS_ENTIRE,MF_BYCOMMAND | (!has_fft_window() ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(g.menu,IDM_ANALYSIS_INTERVAL,MF_BYCOMMAND | (has_fft_window() ? MF_CHECKED : MF_UNCHECKED));
     for (int id : {IDC_PLAY, IDC_MEASURE, IDM_ADD_MARKER, IDM_ADD_VLINE, IDM_ADD_HLINE,
-         IDM_ADD_VLINE_EXACT, IDM_ADD_HLINE_EXACT, IDM_CLEAR_POINTS, IDM_CLEAR_MARKERS, IDM_CLEAR_LINES,
+         IDM_ADD_LINE_EXACT, IDM_CLEAR_POINTS, IDM_CLEAR_MARKERS, IDM_CLEAR_LINES,
          IDM_VISMOOTH, IDM_CURVE_SYMBOLS})
         EnableMenuItem(g.menu, id, MF_BYCOMMAND |
             (g.mode == AnalysisMode::FRF && !frf_command_supported(id) ? MF_GRAYED : MF_ENABLED));
@@ -266,6 +266,7 @@ void sync_menu() {
     chk(IDM_VISMOOTH, g.visual_smooth);
     chk(IDM_CURVE_SYMBOLS, g.distinguish_curves);
     chk(IDM_CHANNEL_LEGEND, g.show_channel_legend);
+    chk(IDM_MARKER_VALUES, g.show_marker_values);
     EnableMenuItem(g.menu, IDM_CHANNEL_LEGEND, MF_BYCOMMAND |
         (g.mode == AnalysisMode::FRF ? MF_GRAYED : MF_ENABLED));
     chk(IDM_VPAN, g.vertical_pan);
@@ -366,7 +367,8 @@ HMENU make_menu() {
     append_menu_item_owner_draw(view, IDC_AUTOY, autoy_text);
     append_menu_item_owner_draw(view, IDM_VISMOOTH, smooth_text);
     append_menu_item_owner_draw(view, IDM_CURVE_SYMBOLS, curve_symbols_text);
-    append_menu_item_owner_draw(view, IDM_CHANNEL_LEGEND, text(L"Channel legend", L"Легенда каналов"));
+    append_menu_item_owner_draw(view, IDM_CHANNEL_LEGEND, menu_text(text(L"Channel legend", L"Легенда каналов"),IDM_CHANNEL_LEGEND));
+    append_menu_item_owner_draw(view, IDM_MARKER_VALUES, menu_text(text(L"Marker values", L"Значения маркеров"),IDM_MARKER_VALUES));
     append_menu_item_owner_draw(view, IDM_VPAN, vpan_text);
     append_menu_item_owner_draw(view, IDC_PLAY, play_text);
     append_menu_item_owner_draw(view,IDM_STOP_PLAYBACK,text(L"Stop and hide timeline",L"Остановить и убрать таймлайн"));
@@ -375,25 +377,23 @@ HMENU make_menu() {
     append_menu_popup_owner_draw(bar, view, text(L"View", L"Вид"));
 
     const HMENU analysis=CreatePopupMenu();
-    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_ENTIRE,text(L"Entire recording",L"Вся запись"));
-    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_INTERVAL,text(L"Interval…",L"Участок…"));
-    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_VISIBLE,text(L"Use visible interval",L"Взять видимый участок"));
+    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_ENTIRE,menu_text(text(L"Entire recording",L"Вся запись"),IDM_ANALYSIS_ENTIRE));
+    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_INTERVAL,menu_text(text(L"Interval…",L"Участок…"),IDM_ANALYSIS_INTERVAL));
+    append_menu_item_owner_draw(analysis,IDM_ANALYSIS_VISIBLE,menu_text(text(L"Use visible interval",L"Взять видимый участок"),IDM_ANALYSIS_VISIBLE));
     append_menu_popup_owner_draw(bar,analysis,text(L"Analysis",L"Анализ"));
 
     const HMENU tools = CreatePopupMenu();
-    append_menu_item_owner_draw(tools, IDC_CURSOR_TOOL, text(L"Cursor", L"Курсор"));
+    append_menu_item_owner_draw(tools, IDC_CURSOR_TOOL, menu_text(text(L"Cursor", L"Курсор"),IDC_CURSOR_TOOL));
     const std::wstring measure_text = menu_text(text(L"Points", L"Точки"), IDC_MEASURE);
     const std::wstring marker_text = menu_text(text(L"Marker", L"Маркер"), IDM_ADD_MARKER);
     const std::wstring vline_text = menu_text(text(L"Vertical line", L"Вертикальная линия"), IDM_ADD_VLINE);
-    const std::wstring vline_exact_text = menu_text(text(L"Vertical line (exact)", L"Вертикальная линия (точно)"), IDM_ADD_VLINE_EXACT);
+    const std::wstring exact_line_text = menu_text(text(L"Set line (exact)", L"Задать линию (точно)"), IDM_ADD_LINE_EXACT);
     const std::wstring hline_text = menu_text(text(L"Horizontal line", L"Горизонтальная линия"), IDM_ADD_HLINE);
-    const std::wstring hline_exact_text = menu_text(text(L"Horizontal line (exact)", L"Горизонтальная линия (точно)"), IDM_ADD_HLINE_EXACT);
     append_menu_item_owner_draw(tools, IDC_MEASURE, measure_text);
     append_menu_item_owner_draw(tools, IDM_ADD_MARKER, marker_text);
     append_menu_item_owner_draw(tools, IDM_ADD_VLINE, vline_text);
-    append_menu_item_owner_draw(tools, IDM_ADD_VLINE_EXACT, vline_exact_text);
     append_menu_item_owner_draw(tools, IDM_ADD_HLINE, hline_text);
-    append_menu_item_owner_draw(tools, IDM_ADD_HLINE_EXACT, hline_exact_text);
+    append_menu_item_owner_draw(tools, IDM_ADD_LINE_EXACT, exact_line_text);
     AppendMenuW(tools, MF_SEPARATOR, 0, nullptr);
     append_menu_item_owner_draw(tools, IDM_CLEAR_POINTS, text(L"Clear points", L"Очистить точки"));
     append_menu_item_owner_draw(tools, IDM_CLEAR_MARKERS, text(L"Clear markers", L"Очистить маркеры"));

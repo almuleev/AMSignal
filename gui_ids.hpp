@@ -47,8 +47,8 @@ enum {
     IDM_VPAN,           // vertical pan toggle
     IDM_ADD_VLINE,      // arm: place a vertical guide line
     IDM_ADD_HLINE,      // arm: place a horizontal guide line
-    IDM_ADD_VLINE_EXACT, // add a vertical guide line by exact value
-    IDM_ADD_HLINE_EXACT, // add a horizontal guide line by exact value
+    IDM_ADD_LINE_EXACT, // choose direction and add a guide line by exact value
+    IDM_ADD_HLINE_EXACT_LEGACY, // reserved: old command opens the unified dialog
     IDM_ADD_MARKER,     // arm: place a marker
     IDM_CLEAR_LINES,
     IDM_CLEAR_MARKERS,
@@ -60,6 +60,7 @@ enum {
     IDM_CURVE_SYMBOLS = 1115,
     IDM_CHANNEL_LEGEND = 1116,
     IDM_STOP_PLAYBACK = 1117,
+    IDM_MARKER_VALUES = 1118,
 
     // Playback speed menu items.
     IDM_SPEED_00001 = 1300,
@@ -120,7 +121,7 @@ enum {
     IDC_SIDE_PT_DY,
     IDC_SIDE_PT_INVDT,
     IDC_SIDE_PT_DIST,
-    IDC_SIDE_PT_SNAP,
+    IDC_MAGNET_TOOL, // Shared toolbar snap toggle; retains the former control ID.
     IDC_SIDE_FILTER_ENABLE,
     IDC_SIDE_FILTER_MODE,
     IDC_SIDE_FILTER_TOPOLOGY,
@@ -206,6 +207,16 @@ inline const int IDC_SET_MEMORY_AUTO = 6211;
 inline const int IDC_SET_MEMORY_EDIT = 6212;
 inline const int IDC_SET_MEMORY_APPLY = 6213;
 inline const int IDC_SET_MEMORY_STATUS = 6214;
+inline const int IDC_SET_DISK_UNLIMITED = 6215;
+inline const int IDC_SET_DISK_EDIT = 6216;
+inline const int IDC_SET_DISK_APPLY = 6217;
+inline const int IDC_SET_POINT_CURSOR_SIZE = 6218;
+inline const int IDC_SET_POINT_CURSOR_RESET = 6219;
+inline const int IDC_SET_GROUP_CURSOR = 6220;
+inline const int IDC_GUIDE_DIRECTION = 6221;
+inline const int IDC_FREQUENCY_VIEW_LOW = 6222;
+inline const int IDC_FREQUENCY_VIEW_HIGH = 6223;
+inline const int IDC_FREQUENCY_VIEW_APPLY = 6224;
 
 inline constexpr UINT WM_APP_ASYNC_SCAN_DONE = WM_APP + 1;
 

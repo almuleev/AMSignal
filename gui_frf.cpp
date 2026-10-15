@@ -1,4 +1,6 @@
 #include "gui_frf.hpp"
+#include "gui_frequency_view.hpp"
+#include "gui_dialogs.hpp"
 #include "gui_analysis_source.hpp"
 #include <iomanip>
 #include <sstream>
@@ -26,7 +28,7 @@ enum {
     InputLabel = 7100, Input, InputSummary, OutputLabel, Output, Processing,
     LowLabel, Low, HighLabel, High, ApplyRange, Method, Source,
     Calculate, // Internal command for Enter in L; no corresponding button.
-    Hint = 7116, EstimatorLabel, Estimator, LengthLabel, Length,
+    EstimatorLabel = 7117, Estimator, LengthLabel, Length,
     SmoothingLabel, Smoothing, AxisScaleLabel, AxisScale, Reference
 };
 constexpr double smoothing_choices[] = {0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0};
@@ -46,7 +48,7 @@ LRESULT CALLBACK FrfEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (msg == WM_KEYDOWN && wp == VK_RETURN) {
         HWND panel = GetParent(hwnd);
-        const int action = GetDlgCtrlID(hwnd) == Length ? Calculate : ApplyRange;
+        const int action = Calculate;
         SendMessageW(panel, WM_COMMAND, MAKEWPARAM(action, BN_CLICKED),
                      reinterpret_cast<LPARAM>(GetDlgItem(panel, action)));
         return 0;
@@ -94,16 +96,10 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             make(AxisScale, L"COMBOBOX", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, 108, 274, 182, 100);
             make(Reference, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 300, 278, 24);
             make(Source, L"STATIC", SS_LEFT, 12, 326, 278, 28);
-            make(LowLabel, L"STATIC", SS_LEFT, 12, 358, 130, 18);
-            make(HighLabel, L"STATIC", SS_LEFT, 156, 358, 134, 18);
-            make(Low, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 12, 378, 130, 24);
-            make(High, L"EDIT", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 156, 378, 134, 24);
-            make(ApplyRange, L"BUTTON", BS_OWNERDRAW | WS_TABSTOP, 12, 408, 278, 24);
-            make(Hint, L"STATIC", SS_LEFT, 12, 438, 278, 80);
             install_themed_combo(control(Estimator));
             install_themed_combo(control(Smoothing));
             install_themed_combo(control(AxisScale));
-            for (const int id : {Length, Low, High}) {
+            for (const int id : {Length}) {
                 if (HWND edit = control(id)) {
                     WNDPROC previous = reinterpret_cast<WNDPROC>(
                         SetWindowLongPtrW(edit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(FrfEditProc)));
@@ -162,14 +158,7 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             } else if (id == Calculate) {
                 if (read_segment_length()) compute_frf_from_current_source();
             } else if (id == ApplyRange) {
-                wchar_t low[80]{}, high[80]{};
-                GetWindowTextW(control(Low), low, 80); GetWindowTextW(control(High), high, 80);
-                double a = 0, b = 0;
-                if (!parse_wide_double_text(low, a) || !parse_wide_double_text(high, b) ||
-                    !set_frf_frequency_range(a, b)) {
-                    MessageBoxW(hwnd, tr(L"Use 0 < F min < F max within the calculated frequency range.",
-                        L"Укажите 0 < F min < F max в пределах рассчитанных частот."), L"FRF", MB_OK | MB_ICONINFORMATION);
-                }
+                handle_frequency_view_command(g.main,MAKEWPARAM(IDC_FREQUENCY_VIEW_APPLY,BN_CLICKED));
             }
             return 0;
         }
@@ -838,13 +827,19 @@ void create_frf_panel(HWND parent, HINSTANCE instance) {
 void layout_frf_panel() {
     if (!g.frf_panel) return;
     const bool show = g.mode == AnalysisMode::FRF && g.side_panel_visible && !welcome_visible() && g.side_panel_tab == 0;
-    ShowWindow(g.frf_panel, show ? SW_SHOW : SW_HIDE);
     if (show) {
         RECT r; GetClientRect(g.main, &r);
         constexpr int tabs_height = 44;
-        MoveWindow(g.frf_panel, r.right - kRightPanel, kTopBar + tabs_height, kRightPanel,
-            std::max(1L, r.bottom - kTopBar - tabs_height - kBottomBar), TRUE);
-    }
+        const int viewport_top=kTopBar+tabs_height,viewport_bottom=r.bottom-kBottomBar-6;
+        const int y=viewport_top-g.side_scroll_y;
+        const int top=std::max(0,viewport_top-y),bottom=std::min(kFrfChannelContentHeight,viewport_bottom-y);
+        MoveWindow(g.frf_panel,r.right-kRightPanel,y,kRightPanel,kFrfChannelContentHeight,FALSE);
+        // The role/settings child scrolls with the shared range block and is
+        // clipped below the tabs, including partially visible native controls.
+        HRGN region=CreateRectRgn(0,top,kRightPanel,std::max(top,bottom));
+        if(!SetWindowRgn(g.frf_panel,region,FALSE))DeleteObject(region);
+        ShowWindow(g.frf_panel,bottom>top ? SW_SHOW : SW_HIDE);
+    } else ShowWindow(g.frf_panel,SW_HIDE);
 }
 
 void refresh_frf_controls(bool repopulate) {
@@ -853,8 +848,6 @@ void refresh_frf_controls(bool repopulate) {
     label(InputLabel, tr(L"Reference channels", L"Опоры"));
     label(OutputLabel, tr(L"Responses", L"Отклики"));
     label(Processing, tr(L"Apply channel processing", L"Применять обработку каналов"));
-    label(LowLabel, tr(L"Min frequency, Hz", L"Мин. частота, Гц")); label(HighLabel, tr(L"Max frequency, Hz", L"Макс. частота, Гц"));
-    label(ApplyRange, tr(L"Apply frequency range", L"Применить диапазон частот"));
     label(EstimatorLabel, tr(L"Estimator",L"Метод")); label(LengthLabel,tr(L"L (0 = Auto)", L"L (0 = Авто)"));
     label(SmoothingLabel, tr(L"Smoothing",L"Сглаживание"));
     label(AxisScaleLabel, tr(L"Frequency axis",L"Ось частоты"));
@@ -867,10 +860,8 @@ void refresh_frf_controls(bool repopulate) {
             r.segment_length,r.averages,1.0/(r.sample_dt*r.segment_length),
             100.0*r.overlap_samples/r.segment_length,r.overlap_samples);
         label(Method,details);
-    } else label(Method,g.frf.pending ? tr(L"Calculating…",L"Вычисление…") : L"Hann · L/K/Δf: —");
+    } else label(Method,g.frf.pending ? tr(L"Calculating…",L"Вычисление…") : L"");
     EnableWindow(control(Length),g.frf.options.estimator==lvm::FrfEstimator::H1);
-    label(Hint, tr(L"|H|: response relative to mean reference.\nLinear magnitude, not dB.\nEqual filters can cancel in |H|.",
-                   L"|H|: отклик относительно средней опоры.\nМодуль в линейной шкале, не дБ.\nОдинаковые фильтры могут сократиться."));
     if (repopulate) {
         SendMessageW(control(Estimator),CB_SETCURSEL,g.frf.options.estimator==lvm::FrfEstimator::H1 ? 0 : 1,0);
         SendMessageW(control(Smoothing),CB_SETCURSEL,smoothing_choice(g.frf.display_smoothing_octaves),0);
@@ -900,19 +891,14 @@ void refresh_frf_controls(bool repopulate) {
     label(Output,button_text(g.frf.outputs,false).c_str());
     label(InputSummary,g.frf.inputs.size()>1 ? (tr(L"Mean of ",L"Среднее из ")+std::to_wstring(g.frf.inputs.size())+
         tr(L" channels",L" каналов")).c_str() : L"");
-    if (g.frf.view_initialized) {
-        label(Low, format_edit_number(g.frf.frequency_start).c_str());
-        label(High, format_edit_number(g.frf.frequency_end).c_str());
-    }
     wchar_t source[192]{};
     swprintf(source, 192, tr(L"%ls: %.5g–%.5g s", L"%ls: %.5g–%.5g с"),
         g.frf.from_selection ? tr(L"Interval", L"Участок") : tr(L"Entire recording",L"Вся запись"),
         g.frf.source_start, g.frf.source_end);
     label(Source, source);
-    const bool ready = g.frf.result.ok && !g.frf.pending;
-    EnableWindow(control(ApplyRange), ready);
     InvalidateRect(control(Processing), nullptr, TRUE);
     InvalidateRect(control(Reference), nullptr, TRUE);
+    sync_frequency_view_controls();
 }
 
 bool set_frf_frequency_range(double low, double high) {

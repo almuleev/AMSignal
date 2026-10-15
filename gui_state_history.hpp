@@ -33,6 +33,7 @@ struct SettingsSnapshot {
     double y_amp_max = 1.0;
     bool distinguish_curves = false;
     bool show_channel_legend = true;
+    bool show_marker_values = true;
     bool noise_threshold_enabled = false;
     double noise_threshold_min = -std::numeric_limits<double>::infinity();
     double noise_threshold_max = std::numeric_limits<double>::infinity();

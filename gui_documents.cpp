@@ -33,6 +33,8 @@ void cancel_document_workers() {
     cancel_recording_overview();
     g_overview_worker.trim_cache(0);
     g.fft_selecting=false;
+    g.fft_resize_edge=0;
+    g.marker_values_rect={};g.marker_values_close_rect={};
     stop_play();
     g_spectrum_worker.cancel();
     g_frf_worker.cancel();

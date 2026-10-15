@@ -27,13 +27,29 @@ std::vector<HotkeyBinding> default_hotkeys() {
         {IDC_SAVE_PROJECT, FVIRTKEY | FCONTROL, 'S'},
         {IDM_UNDO, FVIRTKEY | FCONTROL, 'Z'},
         {IDM_REDO, FVIRTKEY | FCONTROL | FSHIFT, 'Z'},
-        {IDM_MODE_TIME, FVIRTKEY, 'T'},
+        {IDM_MODE_TIME, FVIRTKEY, 'S'},
         {IDM_MODE_FREQ, FVIRTKEY, 'F'},
-        {IDM_MODE_FRF, FVIRTKEY | FCONTROL, 'R'},
+        {IDM_MODE_FRF, FVIRTKEY, 'R'},
         {IDC_MEASURE, FVIRTKEY, 'P'},
+        {IDC_CURSOR_TOOL, FVIRTKEY, 'N'},
+        {IDC_MAGNET_TOOL, FVIRTKEY, 'G'},
+        {IDC_LOCK_ANNOTATIONS, FVIRTKEY, 'L'},
         {IDM_ADD_MARKER, FVIRTKEY, 'M'},
         {IDM_ADD_VLINE, FVIRTKEY, 'V'},
         {IDM_ADD_HLINE, FVIRTKEY, 'H'},
+        {IDM_ADD_LINE_EXACT, FVIRTKEY | FSHIFT, 'L'},
+        {IDC_SIDEPANEL, FVIRTKEY, 'B'},
+        {IDC_SIDE_TAB_CHANNELS, FVIRTKEY | FCONTROL, '1'},
+        {IDC_SIDE_TAB_POINTS, FVIRTKEY | FCONTROL, '2'},
+        {IDC_SIDE_TAB_FILTER, FVIRTKEY | FCONTROL, '3'},
+        {IDC_SIDE_FILTER_ENABLE, FVIRTKEY | FSHIFT, 'F'},
+        {IDC_SIDE_STITCH_GAPS, FVIRTKEY | FSHIFT, 'G'},
+        {IDM_MARKER_VALUES, FVIRTKEY | FSHIFT, 'M'},
+        {IDM_CHANNEL_LEGEND, FVIRTKEY | FCONTROL | FSHIFT, 'L'},
+        {IDM_CURVE_SYMBOLS, FVIRTKEY | FSHIFT, 'C'},
+        {IDM_ANALYSIS_INTERVAL, FVIRTKEY | FCONTROL, 'I'},
+        {IDM_ANALYSIS_VISIBLE, FVIRTKEY | FCONTROL | FSHIFT, 'I'},
+        {IDM_ANALYSIS_ENTIRE, FVIRTKEY | FCONTROL | FALT, 'I'},
         {IDC_AUTOY, FVIRTKEY, 'A'},
         {IDM_VISMOOTH, FVIRTKEY, 'C'},
         {IDM_VPAN, FVIRTKEY, 'Y'},
@@ -76,6 +92,19 @@ void ensure_hotkeys_initialized() {
         ctrl_s_taken = false;
     }
     if (!project && !ctrl_s_taken) g.hotkeys.push_back({IDC_SAVE_PROJECT, FVIRTKEY | FCONTROL, 'S'});
+    // Upgrade the previous Signal default without taking a customized S binding.
+    for(auto& binding:g.hotkeys)if(binding.command==IDM_MODE_TIME && binding.fvirt==FVIRTKEY && binding.key=='T' &&
+        !find_conflicting_hotkey(FVIRTKEY,'S',IDM_MODE_TIME))binding.key='S';
+    // Upgrade the previous FRF default, preserving any customized plain R.
+    for(auto& binding:g.hotkeys)if(binding.command==IDM_MODE_FRF && binding.fvirt==(FVIRTKEY|FCONTROL) && binding.key=='R' &&
+        !find_conflicting_hotkey(FVIRTKEY,'R',IDM_MODE_FRF))binding.fvirt=FVIRTKEY;
+    // Add newly supported commands without stealing a customized shortcut or
+    // restoring a command the user explicitly left unassigned.
+    for(auto binding:default_hotkeys()) {
+        if(find_hotkey_binding(binding.command))continue;
+        if(find_conflicting_hotkey(binding.fvirt,binding.key,binding.command))binding.key=0;
+        g.hotkeys.push_back(binding);
+    }
 }
 
 std::wstring key_name(WORD key) {
@@ -149,11 +178,25 @@ std::wstring command_name(int command) {
         case IDM_MODE_FREQ: return en ? L"Spectrum (FFT) view" : L"Режим спектра (БПФ)";
         case IDM_MODE_FRF: return en ? L"FRF view" : L"Режим FRF / АЧХ";
         case IDC_MEASURE: return en ? L"Measurement points" : L"Точки измерения";
+        case IDC_CURSOR_TOOL: return en ? L"Cursor / navigation" : L"Курсор / навигация";
+        case IDC_MAGNET_TOOL: return en ? L"Magnet" : L"Магнит";
+        case IDC_LOCK_ANNOTATIONS: return en ? L"Lock annotations" : L"Блокировка разметки";
+        case IDC_SIDEPANEL: return en ? L"Show / hide side panel" : L"Показать / скрыть правую панель";
+        case IDC_SIDE_TAB_CHANNELS: return en ? L"Channels panel" : L"Панель «Каналы»";
+        case IDC_SIDE_TAB_POINTS: return en ? L"Points panel" : L"Панель «Точки»";
+        case IDC_SIDE_TAB_FILTER: return en ? L"Filter panel" : L"Панель «Фильтр»";
+        case IDC_SIDE_FILTER_ENABLE: return en ? L"Enable / disable filter" : L"Включить / выключить фильтр";
+        case IDC_SIDE_STITCH_GAPS: return en ? L"Hide time gaps" : L"Скрывать разрывы времени";
+        case IDM_MARKER_VALUES: return en ? L"Marker values" : L"Значения маркеров";
+        case IDM_CHANNEL_LEGEND: return en ? L"Channel legend" : L"Легенда каналов";
+        case IDM_ANALYSIS_INTERVAL: return en ? L"Analysis interval…" : L"Участок анализа…";
+        case IDM_ANALYSIS_VISIBLE: return en ? L"Analyze visible interval" : L"Анализ видимого участка";
+        case IDM_ANALYSIS_ENTIRE: return en ? L"Analyze entire recording" : L"Анализ всей записи";
         case IDM_ADD_MARKER: return en ? L"Marker" : L"Маркер";
         case IDM_ADD_VLINE: return en ? L"Vertical line" : L"Вертикальная линия";
         case IDM_ADD_HLINE: return en ? L"Horizontal line" : L"Горизонтальная линия";
-        case IDM_ADD_VLINE_EXACT: return en ? L"Vertical line (exact)" : L"Вертикальная линия (точно)";
-        case IDM_ADD_HLINE_EXACT: return en ? L"Horizontal line (exact)" : L"Горизонтальная линия (точно)";
+        case IDM_ADD_LINE_EXACT:
+        case IDM_ADD_HLINE_EXACT_LEGACY: return guide_prompt_title_text();
         case IDC_AUTOY: return en ? L"Auto scale" : L"Автомасштабирование";
         case IDM_VISMOOTH: return en ? L"Channel smoothing" : L"Сглаживание каналов";
         case IDM_CURVE_SYMBOLS: return en ? L"Curve symbols for grayscale" : L"Фигуры кривых для Ч/Б";
@@ -177,8 +220,11 @@ std::wstring command_name(int command) {
 std::vector<int> hotkey_command_order() {
     return {
         IDC_OPEN, IDC_SAVEPNG, IDC_SAVECSV, IDC_SAVE_PROJECT, IDM_UNDO, IDM_REDO,
-        IDM_MODE_TIME, IDM_MODE_FREQ, IDM_MODE_FRF, IDC_MEASURE, IDM_ADD_MARKER,
-        IDM_ADD_VLINE, IDM_ADD_HLINE, IDC_AUTOY, IDM_VISMOOTH, IDM_CURVE_SYMBOLS,
+        IDM_MODE_TIME, IDM_MODE_FREQ, IDM_MODE_FRF, IDC_CURSOR_TOOL, IDC_MEASURE, IDM_ADD_MARKER,
+        IDM_ADD_VLINE, IDM_ADD_HLINE, IDM_ADD_LINE_EXACT, IDC_MAGNET_TOOL, IDC_LOCK_ANNOTATIONS,
+        IDC_SIDEPANEL, IDC_SIDE_TAB_CHANNELS, IDC_SIDE_TAB_POINTS, IDC_SIDE_TAB_FILTER,
+        IDC_SIDE_FILTER_ENABLE, IDC_SIDE_STITCH_GAPS, IDM_ANALYSIS_INTERVAL, IDM_ANALYSIS_VISIBLE, IDM_ANALYSIS_ENTIRE,
+        IDC_AUTOY, IDM_VISMOOTH, IDM_CURVE_SYMBOLS, IDM_CHANNEL_LEGEND, IDM_MARKER_VALUES,
         IDM_VPAN, IDM_THEME, IDC_PLAY, IDC_ZOOMIN, IDC_ZOOMOUT,
         IDC_PANLEFT, IDC_PANRIGHT, IDC_RESET, IDC_GOTO_START,
         IDC_GOTO_END, IDM_CLEAR_POINTS, IDM_HOTKEYS
@@ -209,16 +255,28 @@ std::wstring hotkeys_body_text() {
     append_hotkey_line(out, IDM_MODE_TIME);
     append_hotkey_line(out, IDM_MODE_FREQ);
     append_hotkey_line(out, IDM_MODE_FRF);
+    append_hotkey_line(out, IDC_CURSOR_TOOL);
     append_hotkey_line(out, IDC_MEASURE);
     append_hotkey_line(out, IDM_ADD_MARKER);
     append_hotkey_line(out, IDM_ADD_VLINE);
     append_hotkey_line(out, IDM_ADD_HLINE);
+    append_hotkey_line(out, IDM_ADD_LINE_EXACT);
+    append_hotkey_line(out, IDC_MAGNET_TOOL);
+    append_hotkey_line(out, IDC_LOCK_ANNOTATIONS);
     out += en ? L"  Esc\t: Cancel current add mode\n\n" : L"  Esc\t: Отменить текущий режим добавления\n\n";
+
+    out += en ? L"Panels and analysis\n" : L"Панели и анализ\n";
+    for(int command:{IDC_SIDEPANEL,IDC_SIDE_TAB_CHANNELS,IDC_SIDE_TAB_POINTS,IDC_SIDE_TAB_FILTER,
+        IDC_SIDE_FILTER_ENABLE,IDC_SIDE_STITCH_GAPS,IDM_ANALYSIS_INTERVAL,IDM_ANALYSIS_VISIBLE,IDM_ANALYSIS_ENTIRE})
+        append_hotkey_line(out,command);
+    out += L"\n";
 
     out += en ? L"View\n" : L"Вид\n";
     append_hotkey_line(out, IDC_AUTOY);
     append_hotkey_line(out, IDM_VISMOOTH);
     append_hotkey_line(out, IDM_CURVE_SYMBOLS);
+    append_hotkey_line(out, IDM_CHANNEL_LEGEND);
+    append_hotkey_line(out, IDM_MARKER_VALUES);
     append_hotkey_line(out, IDM_VPAN);
     append_hotkey_line(out, IDM_THEME);
     append_hotkey_line(out, IDC_PLAY);

@@ -3,6 +3,8 @@
 #include "disk_spectrum.hpp"
 #include "gui_frf_render.hpp"
 #include "gui_analysis_source.hpp"
+#include "gui_analysis_range.hpp"
+#include "gui_marker_values.hpp"
 #include "gui_gap_details.hpp"
 #include "gui_controls.hpp"
 #include "gui_menu.hpp"
@@ -16,6 +18,7 @@
 #include "gui_render.hpp"
 #include "gui_render_data.hpp"
 #include "gui_side_panel.hpp"
+#include "gui_settings.hpp"
 #include "gui_spectrum.hpp"
 #include "gui_state.hpp"
 #include "gui_state_history.hpp"
@@ -27,35 +30,49 @@
 namespace gui {
 
 HCURSOR point_placement_cursor() {
-    struct TargetCursor {
-        HCURSOR handle = nullptr;
-        TargetCursor() {
-            // A 17x17 visible target inside the native 32x32 cursor bitmap.
-            // AND=1/XOR=0 is transparent; AND=0 paints black or white.
-            std::array<unsigned char, 128> mask, image{};
-            mask.fill(0xff);
-            const auto ink = [](int x, int y) {
-                return (x == 0 && y == 0) ||
-                    (x == 0 && std::abs(y) >= 4 && std::abs(y) <= 7) ||
-                    (y == 0 && std::abs(x) >= 4 && std::abs(x) <= 7);
-            };
-            for (int y = 0; y < 32; ++y) for (int x = 0; x < 32; ++x) {
-                bool outline = false;
-                for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx)
-                    outline = outline || ink(x - 16 + dx, y - 16 + dy);
-                if (!outline) continue;
-                const auto bit = static_cast<unsigned char>(0x80 >> (x % 8));
-                const auto offset = y * 4 + x / 8;
-                mask[offset] &= static_cast<unsigned char>(~bit);
-                if (!ink(x - 16, y - 16)) image[offset] |= bit;
-            }
-            handle = CreateCursor(GetModuleHandleW(nullptr), 16, 16, 32, 32,
-                                  mask.data(), image.data());
-        }
-        ~TargetCursor() { if (handle) DestroyCursor(handle); }
+    struct TargetCursors {
+        std::array<HCURSOR,std::size(point_cursor_sizes)> handles{};
+        std::array<bool,std::size(point_cursor_sizes)> attempted{};
+        ~TargetCursors() { for(auto handle:handles)if(handle)DestroyCursor(handle); }
     };
-    static const TargetCursor cursor;
-    return cursor.handle ? cursor.handle : LoadCursor(nullptr, IDC_CROSS);
+    static TargetCursors cursors;
+    std::size_t index=0;
+    while(index<std::size(point_cursor_sizes) && point_cursor_sizes[index]!=g.point_cursor_size)++index;
+    if(index==std::size(point_cursor_sizes))index=3; // 31 px default.
+    auto& handle=cursors.handles[index];
+    if(!cursors.attempted[index]) {
+        cursors.attempted[index]=true;
+        const int size=point_cursor_sizes[index],dimension=size<=31 ? 32 : 64;
+        const int center=dimension/2,stride=dimension/8,half=(size-1)/2;
+        std::array<unsigned char,512> mask,image{};mask.fill(0xff);
+        // Thin one-pixel arms; a 3x3 center has the same exact central hotspot.
+        // The white outline remains one pixel at every selected size.
+        const auto ink=[&](int x,int y) {
+            const int gap=std::max(5,half*2/5);
+            return (std::abs(x)<=1 && std::abs(y)<=1) ||
+                (x==0 && std::abs(y)>=gap && std::abs(y)<=half-1) ||
+                (y==0 && std::abs(x)>=gap && std::abs(x)<=half-1);
+        };
+        for(int y=0;y<dimension;++y)for(int x=0;x<dimension;++x) {
+            bool outline=false;
+            for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
+                outline=outline || ink(x-center+dx,y-center+dy);
+            if(!outline)continue;
+            const auto bit=static_cast<unsigned char>(0x80>>(x%8));
+            const int offset=y*stride+x/8;
+            mask[offset]&=static_cast<unsigned char>(~bit);
+            if(!ink(x-center,y-center))image[offset]|=bit;
+        }
+        handle=CreateCursor(GetModuleHandleW(nullptr),center,center,dimension,dimension,mask.data(),image.data());
+    }
+    return handle ? handle : LoadCursor(nullptr,IDC_CROSS);
+}
+
+bool set_point_cursor_size(int pixels) {
+    for(int size:point_cursor_sizes)if(pixels==size) {
+        g.point_cursor_size=pixels;save_runtime_settings();return true;
+    }
+    return false;
 }
 
 void add_guide_line(bool vertical, double value) {
@@ -307,11 +324,10 @@ int hit_test_marker(int px, int py) {
         if (m.mode != g.mode) continue;
         const int dxp = std::abs(px - mx(m.x));
         if (dxp > 6) continue;
-        int score = dxp * 10;
-        if (m.snapped) {
-            const int dyp = std::abs(py - my(m.y));
-            if (dyp <= 8) score = dxp + dyp;
-        }
+        const int dyp = std::abs(py - my(m.y));
+        // Prefer the actual marker intersection over another marker's vertical
+        // line, including free markers sharing the same X coordinate.
+        const int score=dyp<=8 ? dxp+dyp : 32+dxp*10;
         if (score < best_score) {
             best_score = score;
             best = static_cast<int>(i);
@@ -410,6 +426,7 @@ bool begin_annotation_drag(HWND hwnd, int px, int py) {
     }
     const int marker=hit_test_marker(px,py);
     if (marker>=0) {
+        g.active_marker=marker;
         g.annotation_selection_kind=App::AnnotationSelectionKind::Marker;
         g.annotation_selection_index=marker;
         g.annotation_selection_point_index=-1;
@@ -534,11 +551,13 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (g.mode == AnalysisMode::FRF) return handle_frf_input(hwnd, msg, wp, lp);
     switch (msg) {
         case WM_CAPTURECHANGED:
+            if(g.fft_selecting && reinterpret_cast<HWND>(lp)!=hwnd)cancel_analysis_range_drag(hwnd);
             if(g.playhead_dragging) {
                 g.playhead_dragging=false;seek_playhead(g.playhead_drag_before);
             }
             return 0;
         case WM_CANCELMODE:
+            if(g.fft_selecting)cancel_analysis_range_drag(hwnd);
             if(g.playhead_dragging) {
                 g.playhead_dragging=false;seek_playhead(g.playhead_drag_before);
                 if(GetCapture()==hwnd)ReleaseCapture();
@@ -554,6 +573,12 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 GetCursorPos(&pt);
                 ScreenToClient(hwnd, &pt);
                 RECT p = plot_rect();
+                if(marker_values_hit_test(pt.x,pt.y)) {
+                    SetCursor(LoadCursor(nullptr,PtInRect(&g.marker_values_close_rect,pt) ? IDC_HAND : IDC_ARROW));return TRUE;
+                }
+                if(g.fft_resize_edge || (!g.pending_line && !g.pending_marker && hit_test_analysis_range_edge(pt.x,pt.y))) {
+                    SetCursor(LoadCursor(nullptr,IDC_SIZEWE));return TRUE;
+                }
                 if(g.playhead_dragging || (!g.pending_line && !g.pending_marker &&
                    !(GetKeyState(VK_SHIFT)&0x8000) && hit_test_playhead(pt.x,pt.y))) {
                     SetCursor(LoadCursor(nullptr,IDC_SIZEWE));return TRUE;
@@ -575,13 +600,14 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             break;
         }
-        case WM_MOUSEWHEEL: {
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL: {
             if (g.gap_details_visible) {
                 hide_gap_details_card();
             }
             POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             ScreenToClient(hwnd, &pt);
-            if (side_panel_hit_test(pt) && g.side_scroll_max > 0) {
+            if (msg == WM_MOUSEWHEEL && side_panel_hit_test(pt) && g.side_scroll_max > 0) {
                 const int direction = GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -48 : 48;
                 scroll_side_panel(direction);
                 return 0;
@@ -589,11 +615,17 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!has_data()) return 0;
             const RECT p = plot_rect();
             bool in_plot = (pt.x >= p.left && pt.x <= p.right && pt.y >= p.top && pt.y <= p.bottom);
-            bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            bool shift = (GET_KEYSTATE_WPARAM(wp) & MK_SHIFT) != 0 ||
+                (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
             bool up = GET_WHEEL_DELTA_WPARAM(wp) > 0;
 
+            if (GET_WHEEL_DELTA_WPARAM(wp) == 0) return 0;
+            if (msg == WM_MOUSEHWHEEL) {
+                pan_by(up ? 0.1 : -0.1);
+                return 0;
+            }
             if (shift) {
                 pan_by(up ? -0.1 : 0.1);
                 return 0;
@@ -637,6 +669,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 hide_gap_details_card();
             }
             const int mx = GET_X_LPARAM(lp), my = GET_Y_LPARAM(lp);
+            if(handle_marker_values_click(hwnd,mx,my))return 0;
             const RECT p = plot_rect();
             if (!has_data()) {
                 if (mx >= p.left && mx <= p.right && my >= p.top && my <= p.bottom) {
@@ -686,6 +719,9 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const bool selecting_range = g.mode == AnalysisMode::Time &&
                 ((wp & MK_SHIFT) != 0 || (GetKeyState(VK_SHIFT) & 0x8000) != 0) &&
                 !g.pending_line && !g.pending_marker;
+            if(!g.pending_line && !g.pending_marker && begin_analysis_range_edge_drag(hwnd,mx,my)) {
+                stop_play();clear_annotation_selection();return 0;
+            }
             if(!g.pending_line && !g.pending_marker && !selecting_range && hit_test_playhead(mx,my)) {
                 stop_play();clear_annotation_selection();
                 g.playhead_selected=true;g.playhead_dragging=true;g.playhead_drag_before=g.playhead;
@@ -759,6 +795,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         return 0;
                     }
                     g.fft_selecting = true;
+                    g.fft_resize_edge = 0;
                     g.fft_select_anchor_x = clamped_x;
                     g.fft_select_current_x = clamped_x;
                     g.fft_select_anchor_t = tt;
@@ -785,6 +822,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_RBUTTONDOWN:
+            if(g.fft_selecting) {cancel_analysis_range_drag(hwnd);return 0;}
             if(hit_test_playhead(GET_X_LPARAM(lp),GET_Y_LPARAM(lp))) {reset_playback();return 0;}
             if (g.annotations_locked) return 0;
             if (g.gap_details_visible) {
@@ -797,7 +835,11 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             return 0;
+        case WM_MOUSELEAVE:
+            update_analysis_range_hover(hwnd,-1,-1);
+            return 0;
         case WM_MOUSEMOVE: {
+            update_analysis_range_hover(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
             if(g.playhead_dragging) {
                 const auto x=std::clamp<int>(GET_X_LPARAM(lp),g.vrect.left,g.vrect.right);
                 double time,value;
@@ -810,6 +852,10 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (g.fft_selecting) {
+                if(g.fft_resize_edge) {
+                    update_analysis_range_edge_drag(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
+                    return 0;
+                }
                 const RECT p = plot_rect();
                 const int pw = p.right - p.left;
                 if (pw > 0) {
@@ -831,14 +877,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.point_click_reference_axis = false;
                 g.dragging = true;
             }
-            const int hovered_marker = hit_test_marker(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
-            if (hovered_marker >= 0 && hovered_marker != g.active_marker) {
-                g.active_marker = hovered_marker;
-                set_status();
-                RECT rc; GetClientRect(hwnd, &rc);
-                RECT sr = {0, rc.bottom - kBottomBar, rc.right, rc.bottom};
-                InvalidateRect(hwnd, &sr, FALSE);
-            }
+            if(!g.dragging)update_marker_values_hover(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
             if (g.gap_click_pending && !g.dragging) {
                 const int dx = GET_X_LPARAM(lp) - g.drag_x;
                 const int dy = GET_Y_LPARAM(lp) - g.drag_y;
@@ -902,12 +941,19 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (g.fft_selecting) {
+                if(g.fft_resize_edge) {
+                    finish_analysis_range_edge_drag(hwnd,GET_X_LPARAM(lp),GET_Y_LPARAM(lp));
+                    return 0;
+                }
+                const bool resizing=g.fft_resize_edge!=0;
                 g.fft_selecting = false;
+                g.fft_resize_edge = 0;
                 if (GetCapture() == hwnd) ReleaseCapture();
-                if (std::abs(g.fft_select_current_x - g.fft_select_anchor_x) >= 4) {
+                if (resizing || std::abs(g.fft_select_current_x - g.fft_select_anchor_x) >= 4) {
                     const auto a=std::min(g.fft_select_anchor_t,g.fft_select_current_t);
                     const auto b=std::max(g.fft_select_anchor_t,g.fft_select_current_t);
-                    change_analysis_range(lvm::AnalysisRange::selected(a,b));
+                    if(b>a && (!resizing || a!=g.fft_window_start || b!=g.fft_window_end))
+                        change_analysis_range(lvm::AnalysisRange::selected(a,b));
                 }
                 set_status();
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -953,6 +999,11 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g.dragging) { g.dragging = false; ReleaseCapture(); }
             return 0;
         case WM_KEYDOWN:
+            // After release, Escape cancels the pending exact edge placement,
+            // rather than falling through to clearing the existing analysis range.
+            if(wp==VK_ESCAPE && !g.fft_selecting && overview_analysis_range_snap_pending()) {
+                cancel_overview_snap();set_status();InvalidateRect(hwnd,nullptr,FALSE);return 0;
+            }
             if(wp==VK_ESCAPE || wp==VK_DELETE || wp==VK_BACK)cancel_overview_snap();
             if (wp==VK_DELETE || wp==VK_BACK) {
                 if(g.mode==AnalysisMode::Time && g.playhead_selected) {reset_playback();return 0;}
@@ -996,8 +1047,7 @@ LRESULT handle_input_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 }
                 if (g.fft_selecting) {
-                    g.fft_selecting = false;
-                    if (GetCapture() == hwnd) ReleaseCapture();
+                    cancel_analysis_range_drag(hwnd);
                     set_status();
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;

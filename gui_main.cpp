@@ -33,6 +33,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CTLCOLORLISTBOX:
         case WM_CTLCOLOREDIT:
         case WM_MEASUREITEM:
+        case WM_NOTIFY:
         case WM_PAINT:
         case WM_DRAWITEM:
         case WM_DESTROY:
@@ -50,9 +51,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CAPTURECHANGED:
         case WM_SETCURSOR:
         case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL:
         case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
         case WM_MOUSEMOVE:
+        case WM_MOUSELEAVE:
         case WM_LBUTTONUP:
         case WM_KEYDOWN:
             return handle_input_message(hwnd, msg, wp, lp);

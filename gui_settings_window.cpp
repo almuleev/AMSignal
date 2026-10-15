@@ -16,6 +16,7 @@
 #include "gui_render_data.hpp"
 #include "gui_window.hpp"
 #include "gui_resources.hpp"
+#include "gui_input.hpp"
 #include <psapi.h>
 
 namespace gui {
@@ -23,13 +24,20 @@ namespace gui {
 namespace {
 WNDPROC g_axis_label_edit_proc = nullptr;
 
+void refresh_point_cursor_size(HWND hwnd) {
+    HWND combo=GetDlgItem(hwnd,IDC_SET_POINT_CURSOR_SIZE);
+    for(int i=0;i<static_cast<int>(std::size(point_cursor_sizes));++i)
+        if(point_cursor_sizes[i]==g.point_cursor_size)SendMessageW(combo,CB_SETCURSEL,i,0);
+}
+
 LRESULT CALLBACK AxisLabelEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_GETDLGCODE) {
         return CallWindowProcW(g_axis_label_edit_proc, hwnd, msg, wp, lp) | DLGC_WANTALLKEYS;
     }
     if (msg == WM_KEYDOWN && wp == VK_RETURN) {
-        if(GetDlgCtrlID(hwnd)==IDC_SET_MEMORY_EDIT) {
-            SendMessageW(GetParent(hwnd),WM_COMMAND,MAKEWPARAM(IDC_SET_MEMORY_APPLY,BN_CLICKED),0);
+        if(GetDlgCtrlID(hwnd)==IDC_SET_MEMORY_EDIT || GetDlgCtrlID(hwnd)==IDC_SET_DISK_EDIT) {
+            const int apply=GetDlgCtrlID(hwnd)==IDC_SET_DISK_EDIT ? IDC_SET_DISK_APPLY : IDC_SET_MEMORY_APPLY;
+            SendMessageW(GetParent(hwnd),WM_COMMAND,MAKEWPARAM(apply,BN_CLICKED),0);
             return 0;
         }
         SetFocus(GetParent(hwnd));
@@ -235,17 +243,22 @@ const wchar_t* settings_window_title() {
 
 void refresh_settings_controls() {
     if (!g.settings_wnd) return;
+    refresh_point_cursor_size(g.settings_wnd);
     set_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_AUTO),g.resource_policy.automatic);
     SetDlgItemTextW(g.settings_wnd,IDC_SET_MEMORY_EDIT,std::to_wstring(g.resource_policy.manual_mib).c_str());
     EnableWindow(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_EDIT),!g.resource_policy.automatic);
     EnableWindow(GetDlgItem(g.settings_wnd,IDC_SET_MEMORY_APPLY),!g.resource_policy.automatic);
+    set_toggle_checked(GetDlgItem(g.settings_wnd,IDC_SET_DISK_UNLIMITED),g.disk_cache_unlimited);
+    SetDlgItemTextW(g.settings_wnd,IDC_SET_DISK_EDIT,std::to_wstring(g.disk_cache_mib).c_str());
+    EnableWindow(GetDlgItem(g.settings_wnd,IDC_SET_DISK_EDIT),!g.disk_cache_unlimited);
+    EnableWindow(GetDlgItem(g.settings_wnd,IDC_SET_DISK_APPLY),!g.disk_cache_unlimited);
     const auto memory=resource_snapshot();
     const auto limit=lvm::resource_limit(g.resource_policy,memory)/(1024*1024);
     // Shared originals appear in both resident and RAII reservations; count once.
     const auto occupied=(memory.resident-memory.shared_resident+refresh_load_memory_budget()->reserved())/(1024*1024);
     PROCESS_MEMORY_COUNTERS_EX process{};process.cb=sizeof(process);
     GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&process),sizeof(process));
-    const auto status=(g_str==&kEn ? L"Data + analysis: " : L"Данные + расчёты: ")+std::to_wstring(limit)+
+    const auto status=(g_str==&kEn ? L"Data RAM budget now: " : L"RAM данных сейчас: ")+std::to_wstring(limit)+
         (g_str==&kEn ? L" MiB; accounted: " : L" MiB; учтено: ")+std::to_wstring(occupied)+L" MiB\n"+
         (g_str==&kEn ? L"Process RAM: " : L"RAM процесса: ")+std::to_wstring(process.WorkingSetSize/(1024*1024))+L" MiB; "+
         (g_str==&kEn ? L"commit: " : L"выделено: ")+std::to_wstring(process.PrivateUsage/(1024*1024))+L" MiB";
@@ -274,7 +287,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             HFONT font = g.ui_font ? g.ui_font : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
             auto is_settings_group = [](int id) {
                 return id == IDC_SET_GROUP_GENERAL ||
-                       id == IDC_SET_GROUP_HOTKEYS;
+                       id == IDC_SET_GROUP_HOTKEYS || id == IDC_SET_GROUP_CURSOR;
             };
             auto mk = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id) {
                 HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, hwnd,
@@ -287,7 +300,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return mk(L"BUTTON", text, BS_OWNERDRAW | WS_TABSTOP, x, y, w, h, id);
             };
             const bool en = (g_str == &kEn);
-            mk(L"BUTTON", en ? L"General" : L"Общие", BS_OWNERDRAW, 12, 10, 510, 332, IDC_SET_GROUP_GENERAL);
+            mk(L"BUTTON", en ? L"General" : L"Общие", BS_OWNERDRAW, 12, 10, 510, 414, IDC_SET_GROUP_GENERAL);
             mk(L"BUTTON", g_str->lang_ru, BS_OWNERDRAW, 28, 36, 110, 22, IDC_SET_LANG_RU);
             mk(L"BUTTON", g_str->lang_en, BS_OWNERDRAW, 144, 36, 110, 22, IDC_SET_LANG_EN);
             mk(L"BUTTON", g_str->theme_light, BS_OWNERDRAW, 264, 36, 120, 22, IDW_THEME_LIGHT);
@@ -303,7 +316,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mk(L"STATIC", en ? L"FRF" : L"АЧХ", SS_LEFT, 28, 236, 120, 20, 0);
             install_axis_label_edit(mk(L"EDIT", g.frf_axis_x_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 144, 232, 120, 24, IDC_SET_FRF_AXIS_X_EDIT));
             install_axis_label_edit(mk(L"EDIT", g.frf_axis_y_label.c_str(), WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 276, 232, 120, 24, IDC_SET_FRF_AXIS_Y_EDIT));
-            mkcheck(en ? L"Auto memory budget" : L"Автолимит памяти",28,266,190,26,IDC_SET_MEMORY_AUTO);
+            mkcheck(en ? L"RAM: automatic" : L"RAM: автоматически",28,266,206,26,IDC_SET_MEMORY_AUTO);
             set_toggle_checked(GetDlgItem(hwnd,IDC_SET_MEMORY_AUTO),g.resource_policy.automatic);
             // Keep the budget separate from coordinate-name controls above.
             mk(L"STATIC",L"MiB",SS_LEFT,234,270,42,20,0);
@@ -314,20 +327,44 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mk(L"STATIC",L"",SS_LEFT,28,296,482,40,IDC_SET_MEMORY_STATUS);
             EnableWindow(GetDlgItem(hwnd,IDC_SET_MEMORY_EDIT),!g.resource_policy.automatic);
             EnableWindow(GetDlgItem(hwnd,IDC_SET_MEMORY_APPLY),!g.resource_policy.automatic);
-            mk(L"BUTTON", en ? L"Hotkeys" : L"Горячие клавиши", BS_OWNERDRAW, 12, 342, 510, 188, IDC_SET_GROUP_HOTKEYS);
+            mkcheck(en ? L"Disk cache: unlimited" : L"Кэш диска: без лимита",28,342,206,26,IDC_SET_DISK_UNLIMITED);
+            mk(L"STATIC",L"MiB",SS_LEFT,234,346,42,20,0);
+            install_axis_label_edit(mk(L"EDIT",std::to_wstring(g.disk_cache_mib).c_str(),
+                WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP,276,342,80,24,IDC_SET_DISK_EDIT));
+            SendDlgItemMessageW(hwnd,IDC_SET_DISK_EDIT,EM_SETLIMITTEXT,7,0);
+            mk(L"BUTTON",en ? L"Apply" : L"Применить",BS_OWNERDRAW | WS_TABSTOP,366,340,144,28,IDC_SET_DISK_APPLY);
+            set_toggle_checked(GetDlgItem(hwnd,IDC_SET_DISK_UNLIMITED),g.disk_cache_unlimited);
+            EnableWindow(GetDlgItem(hwnd,IDC_SET_DISK_EDIT),!g.disk_cache_unlimited);
+            EnableWindow(GetDlgItem(hwnd,IDC_SET_DISK_APPLY),!g.disk_cache_unlimited);
+            mk(L"STATIC",en ? L"Auto RAM: free memory, no fixed limit; system reserve kept.\nDisk: cached indexes, overviews and filter states."
+                : L"Авто RAM: свободная память без фиксированного лимита.\nДиск: кэш индексов, обзоров и состояний фильтра.",SS_LEFT,28,376,482,40,0);
+            mk(L"BUTTON", en ? L"Hotkeys" : L"Горячие клавиши", BS_OWNERDRAW, 12, 424, 510, 188, IDC_SET_GROUP_HOTKEYS);
             mk(L"LISTBOX", L"", LBS_NOTIFY | WS_VSCROLL | WS_BORDER | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
-                24, 366, 240, 146, IDC_SET_HOTKEY_LIST);
-            mk(L"BUTTON", L"Ctrl", BS_OWNERDRAW, 284, 374, 70, 22, IDC_SET_HOTKEY_CTRL);
-            mk(L"BUTTON", L"Shift", BS_OWNERDRAW, 356, 374, 70, 22, IDC_SET_HOTKEY_SHIFT);
-            mk(L"BUTTON", L"Alt", BS_OWNERDRAW, 428, 374, 70, 22, IDC_SET_HOTKEY_ALT);
-            mk(L"STATIC", en ? L"Key:" : L"Клавиша:", SS_LEFT, 284, 406, 80, 20, 0);
-            HWND combo = mk(L"COMBOBOX", L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_BORDER, 284, 426, 214, 260, IDC_SET_HOTKEY_KEY);
+                24, 448, 240, 146, IDC_SET_HOTKEY_LIST);
+            mk(L"BUTTON", L"Ctrl", BS_OWNERDRAW, 284, 456, 70, 22, IDC_SET_HOTKEY_CTRL);
+            mk(L"BUTTON", L"Shift", BS_OWNERDRAW, 356, 456, 70, 22, IDC_SET_HOTKEY_SHIFT);
+            mk(L"BUTTON", L"Alt", BS_OWNERDRAW, 428, 456, 70, 22, IDC_SET_HOTKEY_ALT);
+            mk(L"STATIC", en ? L"Key:" : L"Клавиша:", SS_LEFT, 284, 488, 80, 20, 0);
+            HWND combo = mk(L"COMBOBOX", L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_BORDER, 284, 508, 214, 260, IDC_SET_HOTKEY_KEY);
             install_themed_combo(combo);
             populate_hotkey_key_combo(combo);
-            mk(L"BUTTON", en ? L"Apply" : L"Применить", BS_OWNERDRAW, 284, 464, 100, 28, IDC_SET_HOTKEY_APPLY);
-            mk(L"BUTTON", en ? L"Reset" : L"Сбросить", BS_OWNERDRAW, 398, 464, 100, 28, IDC_SET_HOTKEY_RESET);
-            mk(L"BUTTON", en ? L"Clear" : L"Очистить", BS_OWNERDRAW, 284, 498, 100, 28, IDC_SET_HOTKEY_CLEAR);
-            mk(L"BUTTON", en ? L"Reset all" : L"Сбросить всё", BS_OWNERDRAW, 398, 498, 100, 28, IDC_SET_HOTKEY_RESET_ALL);
+            mk(L"BUTTON", en ? L"Apply" : L"Применить", BS_OWNERDRAW, 284, 546, 100, 28, IDC_SET_HOTKEY_APPLY);
+            mk(L"BUTTON", en ? L"Reset" : L"Сбросить", BS_OWNERDRAW, 398, 546, 100, 28, IDC_SET_HOTKEY_RESET);
+            mk(L"BUTTON", en ? L"Clear" : L"Очистить", BS_OWNERDRAW, 284, 580, 100, 28, IDC_SET_HOTKEY_CLEAR);
+            mk(L"BUTTON", en ? L"Reset all" : L"Сбросить всё", BS_OWNERDRAW, 398, 580, 100, 28, IDC_SET_HOTKEY_RESET_ALL);
+            mk(L"BUTTON",en ? L"Point cursor" : L"Курсор точек",BS_OWNERDRAW,12,620,510,86,IDC_SET_GROUP_CURSOR);
+            mk(L"STATIC",en ? L"Cursor size" : L"Размер курсора",SS_LEFT,28,647,130,20,0);
+            HWND cursor_size=mk(L"COMBOBOX",L"",CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS |
+                CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP,166,640,190,200,IDC_SET_POINT_CURSOR_SIZE);
+            install_themed_combo(cursor_size);
+            for(int size:point_cursor_sizes) {
+                const auto text=std::to_wstring(size)+L" px";
+                SendMessageW(cursor_size,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(text.c_str()));
+            }
+            refresh_point_cursor_size(hwnd);
+            mk(L"BUTTON",en ? L"Default" : L"Сбросить",BS_OWNERDRAW | WS_TABSTOP,366,640,144,28,IDC_SET_POINT_CURSOR_RESET);
+            mk(L"STATIC",en ? L"Applies immediately to points, lines and markers."
+                : L"Сразу применяется к точкам, линиям и маркерам.",SS_LEFT,28,675,482,20,0);
             populate_hotkey_list(hwnd);
             load_selected_hotkey_controls(hwnd);
             CheckRadioButton(hwnd, IDC_SET_LANG_RU, IDC_SET_LANG_EN, g_str == &kEn ? IDC_SET_LANG_EN : IDC_SET_LANG_RU);
@@ -341,6 +378,35 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!ctl && id) ctl = GetDlgItem(hwnd, id);
             auto checked = [&]() { return is_toggle_checked(ctl); };
             switch (id) {
+                case IDC_SET_POINT_CURSOR_SIZE:
+                    if(HIWORD(wp)==CBN_SELCHANGE) {
+                        const auto index=SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0);
+                        if(index>=0 && index<static_cast<LRESULT>(std::size(point_cursor_sizes)))
+                            set_point_cursor_size(point_cursor_sizes[index]);
+                    }
+                    return 0;
+                case IDC_SET_POINT_CURSOR_RESET:
+                    if(HIWORD(wp)==BN_CLICKED) {set_point_cursor_size(31);refresh_point_cursor_size(hwnd);}
+                    return 0;
+                case IDC_SET_DISK_UNLIMITED:
+                case IDC_SET_DISK_APPLY:
+                    if(HIWORD(wp)==BN_CLICKED) {
+                        bool ok=false;
+                        if(id==IDC_SET_DISK_UNLIMITED) {
+                            ok=set_disk_cache_policy(!g.disk_cache_unlimited,g.disk_cache_mib);
+                        } else {
+                            wchar_t value[16]{};GetDlgItemTextW(hwnd,IDC_SET_DISK_EDIT,value,16);
+                            wchar_t* end=nullptr;const auto mib=wcstoul(value,&end,10);
+                            if(value[0] && end && !*end && mib<=1048576)
+                                ok=set_disk_cache_policy(false,static_cast<unsigned>(mib));
+                        }
+                        if(!ok)MessageBoxW(hwnd,g_str==&kEn
+                            ? L"Enter a disk cache limit from 64 to 1048576 MiB. A limit below files in use cannot be applied; finish the active operations or close their recordings first."
+                            : L"Введите лимит кэша диска от 64 до 1048576 MiB. Лимит ниже размера используемых файлов применить нельзя; завершите операции или закройте их записи.",
+                            settings_window_title(),MB_OK | MB_ICONINFORMATION);
+                        refresh_settings_controls();
+                    }
+                    return 0;
                 case IDC_SET_MEMORY_AUTO:
                     if(HIWORD(wp)==BN_CLICKED) {
                         set_resource_policy(!g.resource_policy.automatic,g.resource_policy.manual_mib);
@@ -353,8 +419,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         wchar_t* end=nullptr;const auto mib=wcstoul(value,&end,10);
                         if(!value[0] || !end || *end || mib>65536 ||
                            !set_resource_policy(false,static_cast<unsigned>(mib))) {
-                            MessageBoxW(hwnd,g_str==&kEn ? L"Enter a data budget from 64 to 65536 MiB."
-                                : L"Введите бюджет данных от 64 до 65536 MiB.",settings_window_title(),MB_OK | MB_ICONINFORMATION);
+                            MessageBoxW(hwnd,g_str==&kEn ? L"Enter a data RAM limit from 64 to 65536 MiB."
+                                : L"Введите лимит RAM для данных от 64 до 65536 MiB.",settings_window_title(),MB_OK | MB_ICONINFORMATION);
                         }
                         refresh_settings_controls();
                     }
@@ -374,12 +440,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_SET_GAP_MARKERS:
                     if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == BN_DOUBLECLICKED) {
                         toggle_checked_state(ctl);
-                        g.show_gap_markers = checked();
-                        mark_active_document_dirty();
-                        if (!g.show_gap_markers) hide_gap_details_card();
-                        invalidate_plot_analysis_cache();
+                        set_gap_markers_visible(checked());
                         save_runtime_settings();
-                        InvalidateRect(g.main, nullptr, FALSE);
                         refresh_settings_controls();
                     }
                     return 0;
@@ -483,7 +545,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_DRAWITEM: {
             DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
-            if (dis && dis->CtlType == ODT_COMBOBOX && dis->CtlID == IDC_SET_HOTKEY_KEY) {
+            if (dis && dis->CtlType == ODT_COMBOBOX &&
+                (dis->CtlID == IDC_SET_HOTKEY_KEY || dis->CtlID == IDC_SET_POINT_CURSOR_SIZE)) {
                 draw_settings_combo_item(dis);
                 return TRUE;
             }
@@ -494,7 +557,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!dis->hwndItem) break;
             const int ctl_id = GetDlgCtrlID(dis->hwndItem);
             if (ctl_id == IDC_SET_GROUP_GENERAL ||
-                ctl_id == IDC_SET_GROUP_HOTKEYS) {
+                ctl_id == IDC_SET_GROUP_HOTKEYS || ctl_id == IDC_SET_GROUP_CURSOR) {
                 wchar_t txt[128]{};
                 GetWindowTextW(dis->hwndItem, txt, 128);
                 draw_settings_group_box(dis->hDC, dis->rcItem, txt);
@@ -518,7 +581,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return TRUE;
             }
-            if (is_settings_checkbox_id(ctl_id) || ctl_id==IDC_SET_MEMORY_AUTO) {
+            if (is_settings_checkbox_id(ctl_id)) {
                 const bool enabled = IsWindowEnabled(dis->hwndItem) != FALSE;
                 draw_themed_check_control(dis->hDC, dis->rcItem, txt,
                     is_toggle_checked(dis->hwndItem), pressed, enabled, false, false);
@@ -529,7 +592,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_MEASUREITEM: {
             MEASUREITEMSTRUCT* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
-            if (mis && mis->CtlType == ODT_COMBOBOX && mis->CtlID == IDC_SET_HOTKEY_KEY) {
+            if (mis && mis->CtlType == ODT_COMBOBOX &&
+                (mis->CtlID == IDC_SET_HOTKEY_KEY || mis->CtlID == IDC_SET_POINT_CURSOR_SIZE)) {
                 measure_settings_combo_item(mis);
                 return TRUE;
             }
@@ -573,7 +637,7 @@ void open_settings() {
         HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetWindowLongPtr(g.main, GWLP_HINSTANCE));
             g.settings_wnd = CreateWindowExW(
             WS_EX_TOOLWINDOW, L"LvmPtSettings", settings_window_title(),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 540, 568,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 540, 748,
             g.main, nullptr, inst, nullptr);
         if (!g.settings_wnd) return;
         RECT mr, sr;

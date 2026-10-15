@@ -29,6 +29,23 @@ void hide_gap_details_card() {
     if (g.main && IsWindow(g.main)) InvalidateRect(g.main, nullptr, FALSE);
 }
 
+void set_gap_markers_visible(bool visible) {
+    g.show_gap_markers=visible;
+    if(!visible) {
+        const auto clear=[](DocumentState& document) {
+            document.visible_gap_markers.clear();
+            document.gap_details_visible=false;
+            document.gap_details_duration=0;
+            document.gap_details_missing_samples=0;
+            document.gap_details_reference_step=0;
+        };
+        clear(g);
+        for(auto& document:g.inactive_documents)clear(document);
+        g.gap_click_pending=false;g.gap_click_index=-1;
+    }
+    if(g.main && IsWindow(g.main))InvalidateRect(g.main,nullptr,FALSE);
+}
+
 void show_gap_details_card(double duration, long long estimated_missing_samples) {
     g.gap_details_visible = true;
     g.gap_details_duration = duration;

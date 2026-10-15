@@ -448,17 +448,22 @@ void apply_filter_slider_change(bool low_cutoff, int position, bool preview) {
     const double nyquist = current_filter_nyquist();
     if (!(nyquist > 0)) return;
     const double value = filter_slider_to_frequency(position, nyquist);
+    // Preserve the edited cutoff; only push the other bound when they cross.
+    const double low = low_cutoff ? value : std::min(g.noise_threshold_min, value);
+    const double high = low_cutoff ? std::max(g.noise_threshold_max, value) : value;
     if (preview) {
         if (!g_filter_slider_before) g_filter_slider_before = capture_settings_snapshot();
-        HWND label = low_cutoff ? g.side_filter_low_value : g.side_filter_high_value;
-        if (label) SetWindowTextW(label, filter_frequency_text(value).c_str());
+        if (g.side_filter_low_value) SetWindowTextW(g.side_filter_low_value, filter_frequency_text(low).c_str());
+        if (g.side_filter_high_value) SetWindowTextW(g.side_filter_high_value, filter_frequency_text(high).c_str());
+        HWND other_track = low_cutoff ? g.side_filter_high_track : g.side_filter_low_track;
+        if (other_track) SendMessageW(other_track, TBM_SETPOS, TRUE,
+            frequency_to_filter_slider(low_cutoff ? high : low, nyquist));
         return;
     }
     SettingsSnapshot before = g_filter_slider_before ? std::move(*g_filter_slider_before) : capture_settings_snapshot();
     g_filter_slider_before.reset();
-    if (low_cutoff) g.noise_threshold_min = value;
-    else g.noise_threshold_max = value;
-    normalize_filter_bounds();
+    g.noise_threshold_min = low;
+    g.noise_threshold_max = high;
     commit_filter_settings_change(before);
 }
 

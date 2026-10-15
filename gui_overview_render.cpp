@@ -7,6 +7,7 @@
 #include "gui_theme.hpp"
 #include "gui_time_axis.hpp"
 #include "gui_analysis_source.hpp"
+#include "gui_analysis_range.hpp"
 #include "gap_details.hpp"
 #include "gui_controls.hpp"
 #include <cmath>
@@ -98,14 +99,6 @@ void draw_overview_time(HDC dc,const RECT& p) {
     IntersectClipRect(dc,p.left+1,p.top+1,p.right,p.bottom);
     ensure_global_gap_step_ready();
     const double threshold=!g.stitch_time_gaps && g.cached_global_gap_step>0 ? g.cached_global_gap_step*64 : std::numeric_limits<double>::infinity();
-    if(has_fft_window() || g.fft_selecting) {
-        const auto a=g.fft_selecting ? std::min(g.fft_select_anchor_t,g.fft_select_current_t) : g.fft_window_start;
-        const auto b=g.fft_selecting ? std::max(g.fft_select_anchor_t,g.fft_select_current_t) : g.fft_window_end;
-        RECT selected={std::max(p.left,mapx(a)),p.top+1,std::min(p.right,mapx(b)),p.bottom-1};
-        if(selected.right>selected.left) {
-            auto brush=CreateSolidBrush(mix_color(g_theme->bg_plot,g_theme->accent,24));FillRect(dc,&selected,brush);DeleteObject(brush);
-        }
-    }
     if(g.show_gap_markers && !g.stitch_time_gaps) {
       const auto brush=CreateSolidBrush(mix_color(g_theme->bg_plot,RGB(245,140,32),32));
       for(auto gap:g.overview.gaps) {
@@ -180,7 +173,7 @@ void draw_overview_time(HDC dc,const RECT& p) {
         HPEN pen=CreatePen(PS_SOLID,2,g_theme->playhead);const auto old=SelectObject(dc,pen);
         MoveToEx(dc,mapx(g.playhead),p.top,nullptr);LineTo(dc,mapx(g.playhead),p.bottom);SelectObject(dc,old);DeleteObject(pen);
     }
-    RestoreDC(dc,saved);draw_legend(dc,p);
+    RestoreDC(dc,saved);draw_analysis_range_selection(dc,p);draw_legend(dc,p);
     if(g.overview.snap_pending || g.overview.snap_error || g.overview.pending || g.overview.error) {
         const std::wstring message=g.overview.error ?
             (g_str==&kEn ? L"Could not refine this view. Showing the previous projection." : L"Не удалось уточнить график. Показан предыдущий обзор.") : g.overview.pending ?

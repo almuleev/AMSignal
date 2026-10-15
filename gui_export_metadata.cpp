@@ -127,12 +127,12 @@ void write_export_metadata(std::ostream& out,
         write_export_key_value(out, L"smoothing", g.visual_smooth ? L"1" : L"0", line_end);
         write_export_key_value(out, L"distinguish_curves", g.distinguish_curves ? L"1" : L"0", line_end);
         write_export_key_value(out, L"show_channel_legend", g.show_channel_legend ? L"1" : L"0", line_end);
+        write_export_key_value(out, L"show_marker_values", g.show_marker_values ? L"1" : L"0", line_end);
         write_export_key_value(out,L"analysis_interval",g.fft_window_active ? L"1" : L"0",line_end);
         write_export_key_value(out,L"analysis_start",format_edit_number(g.fft_window_start),line_end);
         write_export_key_value(out,L"analysis_end",format_edit_number(g.fft_window_end),line_end);
         write_export_key_value(out, L"vertical_pan", g.vertical_pan ? L"1" : L"0", line_end);
         write_export_key_value(out, L"snap_to_data", g.snap_to_data ? L"1" : L"0", line_end);
-        write_export_key_value(out, L"show_gap_markers", g.show_gap_markers ? L"1" : L"0", line_end);
         write_export_key_value(out, L"stitch_time_gaps", g.stitch_time_gaps ? L"1" : L"0", line_end);
         write_export_key_value(out, L"auto_y", g.auto_y ? L"1" : L"0", line_end);
         write_export_key_value(out, L"y_lock_min", format_optional_edit_number(g.y_lock_min), line_end);
@@ -481,6 +481,8 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 parse_bool(value, g.distinguish_curves);
             } else if (key == "show_channel_legend") {
                 parse_bool(value, g.show_channel_legend);
+            } else if (key == "show_marker_values") {
+                parse_bool(value, g.show_marker_values);
             } else if(key=="analysis_interval") {
                 parse_bool(value,g.fft_window_active);
             } else if(key=="analysis_start") {
@@ -491,8 +493,6 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 parse_bool(value, g.vertical_pan);
             } else if (key == "snap_to_data") {
                 parse_bool(value, g.snap_to_data);
-            } else if (key == "show_gap_markers") {
-                parse_bool(value, g.show_gap_markers);
             } else if (key == "stitch_time_gaps") {
                 parse_bool(value, g.stitch_time_gaps);
                 if (g.stitch_time_gaps) hide_gap_details_card();

@@ -1,5 +1,6 @@
 // Spectrum: native viewer implementation.
 #include "gui_spectrum.hpp"
+#include "gui_frequency_view.hpp"
 #include "gui_analysis_source.hpp"
 #include "gui_processing.hpp"
 #include "gui_state.hpp"
@@ -83,6 +84,7 @@ void apply_spectrum_result(lvm::Spectrum spectrum) {
     if (g.spec_valid && g.spec_fit_pending) { g.freq_start = 0; g.freq_end = g.spec.nyquist; }
     g.spec_fit_pending = false;
     trim_document_analysis_caches();
+    sync_frequency_view_controls();
 }
 
 bool spectrum_needs_visible_channels() {

@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.17.3 (2026-10-16)
+
+Подробное описание: [v0.17.3, RU/EN](docs/releases/v0.17.3.md).
+Общий видимый диапазон снизу в Signal/FFT/АЧХ; исправлены перекрытия правой
+панели и перерисовка фильтра, включая резкий drag с удержанием. Выделенный
+участок имеет контрастные подвижные границы, магнит к исходным отсчётам и
+подпись; рабочая область не тонируется. Добавлены карточки значений маркеров,
+настройка размера прицела, общий магнит, точная линия одним диалогом, общий
+показ разрывов, отдельные лимиты RAM/диска и новые горячие клавиши S/F/R.
+8601 GUI-проверка; новых сравнений производительности/10 GB/ПК 8 GiB нет.
+Известные disk-регрессии v0.17.2 не объявляются исправленными; EXE не подписаны.
+
+Shared bottom viewport controls across Signal/FFT/FRF; fixed panel overlaps
+and slider rendering during abrupt held drags. Analysis bounds are draggable,
+snap to original samples and preserve the working-area pixels. Marker cards,
+cursor sizes, shared Magnet, one exact-line dialog, global gap markers,
+independent RAM/disk budgets and S/F/R mode shortcuts. 8601 GUI checks;
+no new performance/large-file claims. See the full bilingual release notes.
+
 ## v0.17.2 (2026-10-15)
 
 Полное описание всех изменений после опубликованного rc.3, включая локальную

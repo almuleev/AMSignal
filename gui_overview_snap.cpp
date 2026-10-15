@@ -17,6 +17,7 @@ struct PendingSnap {
     lvm::ResourcePolicy policy;
     bool measure=false,marker=false;
     bool stitched=false;
+    bool analysis_range=false;
     int line=0;
     std::function<void(const lvm::RecordingSnapResult&)> accept;
 };
@@ -24,7 +25,7 @@ std::optional<PendingSnap> pending;
 std::uint64_t next_snap=0;
 bool matches(const PendingSnap& p) {
     return g.mode==AnalysisMode::Time && g.overview.render_enabled && g.vvalid &&
-        !g.annotations_locked && g.snap_to_data &&
+        (!g.annotations_locked || p.analysis_range) && g.snap_to_data &&
         g.recording_source==p.raw && g.overview.source==p.source && g.numerical_revision==p.numerical && g.project_revision==p.project &&
         g.win_start==p.start && g.win_end==p.end && g.vx0==p.x0 && g.vx1==p.x1 &&
         g.vy0==p.y0 && g.vy1==p.y1 && EqualRect(&g.vrect,&p.plot) && g.visible==p.visible &&
@@ -32,14 +33,17 @@ bool matches(const PendingSnap& p) {
         g.measure_mode==p.measure && g.pending_marker==p.marker && g.pending_line==p.line && g.stitch_time_gaps==p.stitched;
 }
 }
+bool overview_analysis_range_snap_pending() {
+    return pending && pending->analysis_range;
+}
 void cancel_overview_snap() {
     g_overview_worker.cancel_snap();pending.reset();
     g.overview.snap_pending=false;g.overview.snap_error.reset();g.overview_drag_target_valid=false;
 }
-bool request_overview_snap(double time,double value,std::function<void(const lvm::RecordingSnapResult&)> accept) {
+bool request_overview_snap(double time,double value,std::function<void(const lvm::RecordingSnapResult&)> accept,bool analysis_range) {
     cancel_overview_snap();
     if(!accept || g.mode!=AnalysisMode::Time || !g.overview.render_enabled || !g.vvalid ||
-       g.annotations_locked || !g.snap_to_data ||
+       (g.annotations_locked && !analysis_range) || !g.snap_to_data ||
        !overview_view_matches_viewport() || !std::isfinite(time) || !std::isfinite(value))return false;
     try {
         lvm::OverviewWorker::SnapRequest request;request.source=g.overview.source;request.index=g.overview.index;
@@ -60,6 +64,7 @@ bool request_overview_snap(double time,double value,std::function<void(const lvm
         p.policy=g.resource_policy;p.accept=std::move(accept);
         p.measure=g.measure_mode;p.marker=g.pending_marker;p.line=g.pending_line;
         p.stitched=g.stitch_time_gaps;
+        p.analysis_range=analysis_range;
         g_overview_worker.submit_snap(std::move(request));pending=std::move(p);
         g.overview.snap_pending=true;invalidate_plot();return true;
     }catch(const std::bad_alloc&){g.overview.snap_error=lvm::RecordingError::ResourceLimit;}
@@ -80,7 +85,7 @@ bool poll_overview_snap() {
     if(result->error==lvm::RecordingError::SourceChanged) {
         g.overview.error=result->error;g.overview.view.reset();g.overview.index.reset();g.vvalid=false;
     }
-    if(!result->error && result->point.found)p.accept(result->point);
+    if(!result->error && (result->point.found || p.analysis_range))p.accept(result->point);
     invalidate_plot();return true;
 }
 } // namespace gui
