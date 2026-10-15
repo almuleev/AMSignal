@@ -562,6 +562,15 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
     const bool normalize_decimal_commas = !csv_mode;
 
     const double nan_value = std::nan("");
+    auto* captured=options.capture_scan_index;
+    if(captured) {
+        if(!options.consume_block || !options.stream_all_columns || options.use_time_window || options.scan_index || captured->memory_reservation) {
+            ds.error="Invalid combined discovery request.";return ds;
+        }
+        *captured=ScanIndex{};
+        captured->file_size=std::filesystem::file_size(path);
+        captured->modified=std::filesystem::last_write_time(path);
+    }
 
     std::vector<std::vector<double>> columns;
     std::vector<char> column_has_value;  // any non-NaN seen in this column
@@ -590,6 +599,15 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
     ActiveSectionTime active_section{};
     bool section_metadata_seen = false;
     std::vector<std::string> column_labels;
+
+    const auto capture_within_budget=[&](std::uint64_t extra=0) {
+        if(!captured || !options.capture_scan_bytes)return true;
+        auto retained=saturated_add(captured->memory_bytes(),extra);
+        retained=saturated_add(retained,column_labels.capacity()*sizeof(std::string));
+        for(const auto& text:column_labels)retained=saturated_add(retained,text.capacity()+1);
+        if(retained<=options.capture_scan_bytes)return true;
+        ds.error="Scan index exceeds the memory allowance.";return false;
+    };
 
     const ScanIndexCheckpoint* resume_checkpoint = nullptr;
     std::error_code index_error;
@@ -642,6 +660,13 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
 
         if (starts_with(line, "#")) {
             const std::string comment = strip(line.substr(1));
+            if(captured) {
+                const auto growth=captured->export_comments.size()==captured->export_comments.capacity() ?
+                    (captured->export_comments.capacity()+1)*sizeof(std::string) : 0;
+                if(!capture_within_budget(saturated_add(growth,comment.size()+1)))return ds;
+                captured->export_comments.push_back(comment);
+                if(!capture_within_budget())return ds;
+            }
             if (!comment.empty()) ds.export_comments.push_back(comment);
             continue;
         }
@@ -674,6 +699,7 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
             if (numeric_count == 0) {
                 if (cells.size() > 1) {
                     column_labels = cells;
+                    if(!capture_within_budget())return ds;
                     continue;
                 }
             }
@@ -688,6 +714,7 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
             if (numeric_count == 0) {
                 if (cells.size() > 1) {
                     column_labels = cells;
+                    if(!capture_within_budget())return ds;
                     continue;
                 }
             }
@@ -712,20 +739,32 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         }
 
         bool keep_row = true;
-        if (options.use_time_window) {
+        if (options.use_time_window || captured) {
             if (!have_raw_time) continue;
 
             double adjusted_time = parsed[0];
-            if (!ds.frequency_axis) adjusted_time = advance_time(adjusted_time, have_time_state, prev_raw_time, prev_adjusted_time,
+            if (!ds.frequency_axis || captured) adjusted_time = advance_time(adjusted_time, have_time_state, prev_raw_time, prev_adjusted_time,
                                                                time_offset, fallback_step);
 
-            if (adjusted_time < options.time_start) {
+            if(captured) {
+                if(!row_count)captured->range_start=adjusted_time;
+                captured->range_end=adjusted_time;
+                if(!row_count || (row_count+1)%kScanCheckpointStride==0) {
+                    const auto growth=captured->checkpoints.size()==captured->checkpoints.capacity() ?
+                        (captured->checkpoints.capacity()+1)*sizeof(ScanIndexCheckpoint) : 0;
+                    if(!capture_within_budget(growth))return ds;
+                    maybe_add_scan_checkpoint(captured,static_cast<std::size_t>(row_count)+1,current_stream_offset(in),adjusted_time,
+                        prev_raw_time,prev_adjusted_time,time_offset,fallback_step,have_time_state,have_section_anchor,section_anchor_seconds,active_section);
+                    if(!capture_within_budget())return ds;
+                }
+            }
+            if (options.use_time_window && adjusted_time < options.time_start) {
                 keep_row = false;
-            } else if (adjusted_time > options.time_end) {
+            } else if (options.use_time_window && adjusted_time > options.time_end) {
                 ds.partial = true;
                 break;
             }
-            parsed[0] = adjusted_time;
+            if(!captured || !ds.frequency_axis)parsed[0] = adjusted_time;
         }
 
         if (!section_has_data) {
@@ -805,6 +844,12 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         }
         ds.ok=row_count>0;
         if (!ds.ok) ds.error="No data found in the selected time range.";
+        if(ds.ok && captured) {
+            captured->column_labels=std::move(column_labels);
+            if(options.capture_scan_bytes && captured->memory_bytes()>options.capture_scan_bytes) {
+                ds.ok=false;ds.error="Scan index exceeds the memory allowance.";
+            }
+        }
         return ds;
     }
     if (row_count == 0 || columns.empty()) {

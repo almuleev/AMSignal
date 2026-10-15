@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.17.2 (2026-10-15)
+
+Полное описание всех изменений после опубликованного rc.3, включая локальную
+v0.17.1: [v0.17.2, RU/EN](docs/releases/v0.17.2.md).
+Первое открытие строит metadata/ScanIndex одним проходом. RAM-фильтр пишет
+допущенные обработанные колонки без копии времени; обзор может оставаться в
+RAM. Используются общий executor, точный готовый Cadence и безопасное владение
+при trim/отмене. Включены все исправления test1, Spectrum, точек, выделения,
+таймлайна, склейки и меню из v0.17.1, очистка кода и инфраструктура SignPath.
+На real test2 первое открытие 44,55 → 33,50 с; processed FFT/первый H1 быстрее.
+Зафиксированы рост Peak WS ~429 MiB и оставшиеся disk-регрессии Manual 64 MiB;
+универсального ускорения нет. Новые тесты 10 GB/ПК 8 GiB не проводились.
+Сертификат ожидается: EXE не подписаны. Старые теги и выпуски не заменяются.
+
+Includes every change since published rc.3 and the local v0.17.1 tag.
+Cold discovery/indexing share one pass; admitted resident filtering and overview
+avoid redundant copies/disk work and share the analysis executor. All v0.17.1
+interaction, test1, cleanup and signing-infrastructure fixes are included.
+See the bilingual notes for validation, RAM cost and confirmed disk slowdowns.
+This release is unsigned; Foundation approval is pending.
+
 ## v0.17.1 (2026-10-14)
 
 Подробное двуязычное описание: [v0.17.1](docs/releases/v0.17.1.md).

@@ -1,5 +1,6 @@
 // Loading: native viewer implementation.
 #include "gui_loading.hpp"
+#include <chrono>
 #include "gui_menu.hpp"
 #include "gui_frf.hpp"
 #include "gui_analysis_source.hpp"
@@ -110,7 +111,7 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
             throw lvm::RecordingFailure(lvm::RecordingError::SourceChanged,"The source file changed while loading. Reopen the recording.");
         if(!stamp_error && !ds.frequency_axis && ds.source_columns.size()==ds.channel_count())
             recording=lvm::RecordingSource::from_file(std::filesystem::path(wpath),
-                {ds.time.front(),ds.time.back()},ds.source_columns,index,lvm::RecordingStamp{size,modified},source_filter_step);
+                {ds.time.front(),ds.time.back()},ds.source_columns,index,lvm::RecordingStamp{size,modified},source_filter_step,source_filter_step);
     } catch(const std::exception& ex) {
         g.last_error=ex.what();return false;
     }
@@ -268,7 +269,8 @@ bool move_resident_recordings_to_disk() {
                 (document.cached_global_gap_step_ready && document.cached_global_gap_step>0 ? document.cached_global_gap_step :
                  effective_time_gap_step(document.ds.time,0,document.ds.rows(),precompute_global_gap_step(document.ds.time)));
             source=lvm::RecordingSource::from_file(document.recording_source->path(),document.recording_source->bounds(),
-                document.ds.source_columns,document.source_scan_index,document.recording_source->stamp(),step);
+                document.ds.source_columns,document.source_scan_index,document.recording_source->stamp(),step,
+                document.recording_source->timeline_sample_step());
         }catch(const std::exception&){return;}
         lvm::Dataset seed;seed.ok=true;seed.names=document.ds.names;seed.generated_names=document.ds.generated_names;
         seed.source_columns=document.ds.source_columns;seed.export_comments=document.ds.export_comments;seed.stats=document.ds.stats;
@@ -321,18 +323,17 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                 std::shared_ptr<lvm::DiskCache> cache;
                 // Optional persistence must not prevent valid source opening.
                 try{cache=recording_disk_cache();}catch(const std::exception&){}
-                lvm::ScanIndexCacheOptions options;options.budget=memory_budget;
-                auto scanned=lvm::scan_index_cached(std::filesystem::path(path_copy),std::move(cache),options,cancel_flag.get());
-                result->index=std::move(scanned.index);result->index_from_disk_cache=scanned.from_cache;
-                result->range_start=result->index->range_start;result->range_end=result->index->range_end;result->ok=true;
-                {
+                bool discovered=false;
+                const auto discover=[&](lvm::ScanIndex* capture,std::size_t index_limit) {
+                    const auto metadata_started=std::chrono::steady_clock::now();
                     // Discover channels across the complete recording: a column
                     // matching time only in the prefix must not be discarded.
                     auto admission=memory_budget->reserve(16ULL*1024*1024);
                     if(!admission)throw lvm::RecordingFailure(lvm::RecordingError::ResourceLimit,"No memory budget for source metadata.");
                     lvm::LoadOptions read;read.stream_all_columns=true;read.block_rows=1024;
                     read.max_resident_bytes=8ULL*1024*1024;
-                    read.use_time_window=true;read.time_start=result->range_start;read.time_end=result->range_end;
+                    read.use_time_window=!capture;read.time_start=result->range_start;read.time_end=result->range_end;
+                    read.capture_scan_index=capture;read.capture_scan_bytes=index_limit;
                     read.cancel_flag=cancel_flag.get();
                     std::vector<char> valid,duplicate;
                     lvm::Dataset seed;
@@ -389,6 +390,8 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                     };
                     auto metadata=lvm::read_lvm_file(std::filesystem::path(path_copy),read);
                     if(!metadata.ok)throw std::runtime_error(metadata.error);
+                    result->metadata_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-metadata_started).count();
+                    const auto prepare_started=std::chrono::steady_clock::now();
                     seed.names=std::move(metadata.names);seed.generated_names=std::move(metadata.generated_names);
                     seed.source_columns=std::move(metadata.source_columns);seed.export_comments=std::move(metadata.export_comments);
                     seed.frequency_axis=metadata.frequency_axis;seed.stats=metadata.stats;seed.ok=true;
@@ -421,10 +424,21 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                     }
                     result->source_metadata=std::move(kept);
                     std::error_code ec;
-                    if(std::filesystem::file_size(path_copy,ec)!=result->index->file_size || ec ||
-                       std::filesystem::last_write_time(path_copy,ec)!=result->index->modified || ec)
+                    const auto& index=capture ? *capture : *result->index;
+                    if(std::filesystem::file_size(path_copy,ec)!=index.file_size || ec ||
+                       std::filesystem::last_write_time(path_copy,ec)!=index.modified || ec)
                         throw lvm::RecordingFailure(lvm::RecordingError::SourceChanged,"The source changed while opening. Reopen it.");
-                }
+                    result->prepare_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-prepare_started).count();
+                    discovered=true;
+                };
+                lvm::ScanIndexCacheOptions options;options.budget=memory_budget;
+                options.scan=[&](lvm::ScanIndex& index,std::size_t limit,std::string&) {discover(&index,limit);return true;};
+                const auto index_started=std::chrono::steady_clock::now();
+                auto scanned=lvm::scan_index_cached(std::filesystem::path(path_copy),std::move(cache),options,cancel_flag.get());
+                result->index_seconds=std::max(0.0,std::chrono::duration<double>(std::chrono::steady_clock::now()-index_started).count()-result->metadata_seconds-result->prepare_seconds);
+                result->index=std::move(scanned.index);result->index_from_disk_cache=scanned.from_cache;
+                result->range_start=result->index->range_start;result->range_end=result->index->range_end;result->ok=true;
+                if(!discovered)discover(nullptr,0);
             }catch(const std::exception& e){result->ok=false;result->error=e.what();}
             result->cancelled = cancel_flag->load(std::memory_order_relaxed);
             post_async_result(target, WM_APP_ASYNC_SCAN_DONE, std::move(result));

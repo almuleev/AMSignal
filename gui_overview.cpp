@@ -37,7 +37,8 @@ bool request_recording_overview(const std::filesystem::path& cache,lvm::Analysis
     try {
         // Admission may demote a resident document and replace its source.
         // Capture source/revision/generation only after that transition.
-        auto budget=current_analysis_resources(24ULL*1024*1024).budget;
+        const auto resources=current_analysis_resources(24ULL*1024*1024);
+        auto budget=resources.budget;
         g.overview.generation=++next_generation;
         lvm::OverviewWorker::Request request;
         ensure_channel_formula_vectors();
@@ -46,6 +47,7 @@ bool request_recording_overview(const std::filesystem::path& cache,lvm::Analysis
         // A full resident document used the GUI cadence. Preserve it when
         // moving its display processing to the worker; seed rows cannot set Fs.
         const double filter_step=!g.current_file_partial && g.ds.rows()>2 ? current_filter_sample_step() : 0;
+        if(g.overview.numerical!=g.numerical_revision)g_overview_worker.trim_cache(0);
         request.source=processed ? processed_recording_source(true,filter_step,budget) : g.recording_source;
         request.index=g.overview.index;
         if(request.index && request.index->source()!=request.source)request.index.reset();
@@ -53,7 +55,13 @@ bool request_recording_overview(const std::filesystem::path& cache,lvm::Analysis
         request.generation=g.overview.generation;request.cache=cache;
         if(cache.empty() || processed){request.cache.clear();request.managed_cache=recording_overview_cache();}
         request.cache_bytes=static_cast<std::size_t>(std::min<std::uint64_t>(128ULL*1024*1024,budget->limit()/8));
+        request.build.resident_index_bytes=request.cache_bytes;
+        request.build.max_participants=resources.max_participants;
         request.build.budget=budget;request.view.budget=std::move(budget);
+        if(request.source->timeline_sample_step()>0 && g.cached_global_gap_step_ready) {
+            request.build.prepared_sample_step=request.source->timeline_sample_step();
+            request.build.prepared_gap_step=g.cached_global_gap_step;
+        }
         // The binary time axis costs 8N bytes. Reserve an explicit allowance
         // from N and C, rather than retaining the old 512 MiB ceiling for all
         // file layouts. Common text recordings up to 10 GB can need more.

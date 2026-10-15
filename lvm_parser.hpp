@@ -67,6 +67,10 @@ struct LoadOptions {
     double time_end = 0.0;
     const std::atomic<bool>* cancel_flag = nullptr;
     std::shared_ptr<const ScanIndex> scan_index;
+    // Full streaming discovery can build checkpoints in the same text pass.
+    // Caller publishes only after success and a final stamp check.
+    ScanIndex* capture_scan_index = nullptr;
+    std::size_t capture_scan_bytes = 0;
     // Physical file columns: time is column 0. Blocks never use display envelopes.
     std::vector<std::size_t> stream_columns;
     // Metadata discovery: stream every physical column, including original X

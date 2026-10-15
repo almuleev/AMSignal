@@ -7,6 +7,8 @@ struct ScanIndexCacheOptions {
     std::size_t memory_bytes=16ULL*1024*1024;
     std::uint64_t max_disk_bytes=32ULL*1024*1024;
     std::shared_ptr<MemoryBudget> budget;
+    // Optional combined scanner/metadata reader. Called only on a cache miss.
+    std::function<bool(ScanIndex&,std::size_t,std::string&)> scan;
 };
 struct CachedScanIndex {
     std::shared_ptr<ScanIndex> index;

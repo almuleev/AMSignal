@@ -171,7 +171,7 @@ void test_recording_overview(void (*check)(bool,const std::string&)) {
     out.close();
     auto scan=std::make_shared<lvm::ScanIndex>();double start=0,end=0;std::string error;
     check(lvm::scan_time_bounds(path,start,end,error,nullptr,scan.get()),"overview fixture scans");
-    auto source=lvm::RecordingSource::from_file(path,{start,end},{1,3},scan);
+    auto source=lvm::RecordingSource::from_file(path,{start,end},{1,3},scan,{},1,1);
     std::vector<double> time;std::vector<std::vector<double>> values(2);
     lvm::RecordingReadRequest read;read.channels={0,1};
     source->replay(read,[&](const auto& t,const auto& v) {
@@ -180,23 +180,82 @@ void test_recording_overview(void (*check)(bool,const std::string&)) {
     });
     check(time.size()==n && std::isnan(values[0][10]) && !std::isfinite(values[1][2050]),"overview control uses original logical channels and missing values");
     auto budget=std::make_shared<lvm::MemoryBudget>();budget->configure(32ULL*1024*1024,0,32ULL*1024*1024);
+    lvm::Dataset resident_data;resident_data.ok=true;resident_data.time=time;resident_data.channels=values;
+    resident_data.source_columns={1,3};resident_data.names={"A","B"};
+    auto resident_budget=std::make_shared<lvm::MemoryBudget>();
+    resident_budget->configure(32ULL*1024*1024,lvm::RecordingSource::dataset_array_bytes(resident_data),32ULL*1024*1024);
+    const auto resident=lvm::RecordingSource::from_resident(resident_data,source,resident_budget,1);
+    const auto opaque=lvm::RecordingSource::processed(resident,"opaque",[resident](const auto& r,const auto& c,const auto* f){resident->replay(r,c,f);});
+    const auto preserved=lvm::RecordingSource::processed(resident,"preserved",[resident](const auto& r,const auto& c,const auto* f){resident->replay(r,c,f);},{},true);
+    check(!opaque->resident_timeline() && opaque->timeline_sample_step()==0 &&
+        preserved->resident_timeline()==resident->resident_data() && preserved->timeline_sample_step()==1,
+        "a processed source exposes original RAM timestamps only under an explicit unchanged-timeline contract");
+    {
+        auto detached_data=*resident->resident_data();auto ownership_budget=std::make_shared<lvm::MemoryBudget>();
+        ownership_budget->configure(32ULL*1024*1024,lvm::RecordingSource::dataset_array_bytes(detached_data),32ULL*1024*1024);
+        auto detached=lvm::RecordingSource::from_resident(detached_data,source,ownership_budget,1);
+        auto samples=detached->prepare_resident_columns();detached.reset();
+        check(samples && samples->size()==values.size() && (*samples)[0].size()==n && ownership_budget->reserved()>0,
+            "a raw resident snapshot retains arrays and admission after its source descriptor is destroyed");
+        samples.reset();check(ownership_budget->reserved()==0,"the last detached sample snapshot releases resident admission");
+    }
     lvm::OverviewOptions options;options.memory_bytes=2ULL*1024*1024;options.budget=budget;
     std::shared_ptr<const lvm::RecordingOverview> index;
     for(auto base:{std::size_t(3),std::size_t(64),std::size_t(1024)}) {
         index.reset();options.base_rows=base;index=lvm::RecordingOverview::build(source,cache,options);
         check(index->sample_count()==n && index->level_count()>1 && index->disk_bytes()<=options.max_disk_bytes && budget->reserved()==0,
               "disk hierarchy is complete, bounded and releases build admission");
+        auto prepared=options;prepared.prepared_sample_step=1;prepared.prepared_gap_step=index->gap_step();
+        const auto prepared_path=files.root/"prepared.bin";
+        auto prepared_index=lvm::RecordingOverview::build(source,prepared_path,prepared);
+        std::ifstream original_bytes(cache,std::ios::binary),prepared_bytes(prepared_path,std::ios::binary);
+        const std::vector<char> original_payload((std::istreambuf_iterator<char>(original_bytes)),{});
+        const std::vector<char> prepared_payload((std::istreambuf_iterator<char>(prepared_bytes)),{});
+        check(original_payload==prepared_payload,
+            "reusing inspected cadence preserves the entire overview, exact timeline, stitching and checksums bitwise");
+        auto ram_index=lvm::RecordingOverview::open(resident,cache);
+        auto resident_options=prepared;
+        auto index_budget=std::make_shared<lvm::MemoryBudget>();index_budget->configure(32ULL*1024*1024,0,32ULL*1024*1024);
+        resident_options.budget=index_budget;resident_options.resident_index_bytes=16ULL*1024*1024;
+        resident_options.max_participants=4;
+        auto memory_index=lvm::RecordingOverview::try_build_resident(preserved,resident_options);
+        check(memory_index && memory_index->disk_bytes()==0 && memory_index->sample_count()==n &&
+            memory_index->level_count()==index->level_count() && index_budget->reserved()>0,
+            "resident hierarchy owns an explicit admission and shares the exact original timeline");
+        auto denied=resident_options;denied.resident_index_bytes=1;
+        check(!lvm::RecordingOverview::try_build_resident(preserved,denied) &&
+            !lvm::RecordingOverview::try_build_resident(opaque,resident_options),
+            "insufficient resident allowance and opaque processing fall back without reading samples");
+        std::atomic<bool> cancel_resident{true};
+        const auto held_index=index_budget->reserved();
+        check(rejects(lvm::RecordingError::Cancelled,[&]{lvm::RecordingOverview::try_build_resident(preserved,resident_options,&cancel_resident);}) &&
+            index_budget->reserved()==held_index,"cancelled resident construction cannot publish or leak a hierarchy");
+        cancel_resident=false;auto interrupted_resident=resident_options;
+        interrupted_resident.progress=[&](auto,auto){cancel_resident=true;};
+        check(rejects(lvm::RecordingError::Cancelled,[&]{lvm::RecordingOverview::try_build_resident(preserved,interrupted_resident,&cancel_resident);}) &&
+            index_budget->reserved()==held_index,"cancellation after resident aggregation discards the partial hierarchy and all its working admission");
+        bool same_gaps=true;
+        for(const auto selected:std::vector<lvm::TimeRange>{{start,end},{time[1023],time[1024]},
+                {time[1023]+.25,time[1024]-.25},{time[2049],time[2050]},{time[2050],time[2051]}}) {
+            std::vector<std::pair<double,double>> disk_gaps,ram_gaps;
+            const auto disk_count=index->visit_gaps(selected,3,[&](auto gap){disk_gaps.emplace_back(gap.left,gap.right);});
+            const auto ram_count=ram_index->visit_gaps(selected,3,[&](auto gap){ram_gaps.emplace_back(gap.left,gap.right);});
+            same_gaps=same_gaps && disk_count==ram_count && disk_gaps==ram_gaps;
+        }
+        check(same_gaps,"RAM and indexed gap searches preserve chronological order and inclusive edges within/across timeline leaves");
         bool mapping=true;
         for(auto i:{std::size_t(0),std::size_t(1023),std::size_t(1024),std::size_t(2049),n-1}) {
             const auto display=index->stitched_time(time[i]);
             mapping=mapping && display==static_cast<double>(i) && index->stitched_time(display,true)==time[i] &&
-                index->stitched_sample_time(i)==display;
+                index->stitched_sample_time(i)==display && memory_index->stitched_time(time[i])==display &&
+                memory_index->stitched_time(display,true)==time[i] && memory_index->stitched_sample_time(i)==display;
         }
         check(mapping,"cached stitching matches the original cadence and is reversible across leaf boundaries");
         const auto selected=lvm::AnalysisRange::selected(time[1023]+.25,time[2050]);
         const auto rows=index->sample_range(selected);
         std::vector<double> timeline;index->replay_timeline(selected,[&](const auto& ts){timeline.insert(timeline.end(),ts.begin(),ts.end());});
         check(rows==std::make_pair(std::uint64_t(1024),std::uint64_t(2051)) &&
+              memory_index->sample_range(selected)==rows &&
               timeline==std::vector<double>(time.begin()+1024,time.begin()+2051),
               "binary timeline keeps exact timestamps and inclusive selection edges across disk pages");
         const auto empty=index->sample_range(lvm::AnalysisRange::selected(time[1023]+.25,time[1024]-.25));
@@ -254,6 +313,11 @@ void test_recording_overview(void (*check)(bool,const std::string&)) {
                 check(exact_view(view,time,values,request.channels),"viewport extrema, original positions, finite counts and inclusive edges are exact");
                 check(view.memory_reservation && budget->reserved()==view.resident_bytes(),"viewport keeps only actual admitted result storage");
                 view={};request.display_density=true;
+                {
+                    auto resident_view=memory_index->read_view(request);
+                    check(exact_view(resident_view,time,values,request.channels),
+                        "resident hierarchy preserves every extremum, finite mask, alias, selected edge and raw refinement");
+                }
                 auto display=index->read_view(request);
                 check(exact_view(display,time,values,request.channels) && display.buckets.size()<=2*display.pixel_columns+2,
                       "display packing preserves original extrema/counts/edges with bounded density");
@@ -278,6 +342,7 @@ void test_recording_overview(void (*check)(bool,const std::string&)) {
         const auto middle=(time[1023]+time[1024])/2;
         index->visit_gaps({middle,middle},4,[&](auto gap){gaps.push_back(gap);});
         check(gaps.size()==1 && gaps[0].left==time[1023] && gaps[0].right==time[1024],"viewport wholly inside a gap retains its original boundaries");
+        memory_index.reset();check(index_budget->reserved()==0,"destroying the last resident hierarchy releases its complete admission");
     }
     auto stamp=std::filesystem::last_write_time(cache);
     lvm::RecordingSnapRequest snap;snap.channels={{0,false,1,0}};snap.target_time=time[10];snap.target_value=0;snap.budget=budget;

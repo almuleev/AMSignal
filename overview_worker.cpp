@@ -136,7 +136,8 @@ void OverviewWorker::run() {
                         progress_.rows=rows;progress_.disk_bytes=bytes;
                     }
                 };
-                index=request.managed_cache ? managed_recording_overview(request.source,request.managed_cache,request.build,job->cancelled.get()) :
+                index=RecordingOverview::try_build_resident(request.source,request.build,job->cancelled.get());
+                if(!index)index=request.managed_cache ? managed_recording_overview(request.source,request.managed_cache,request.build,job->cancelled.get()) :
                     RecordingOverview::open_or_build(request.source,request.cache,request.build,job->cancelled.get());
             }
             {

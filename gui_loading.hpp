@@ -23,6 +23,7 @@ struct AsyncScanResult {
     lvm::Dataset resident_data;
     double resident_gap_step=0;
     double resident_filter_step=0;
+    double index_seconds=0,metadata_seconds=0,prepare_seconds=0;
 };
 
 struct AsyncLoadResult {

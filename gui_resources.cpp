@@ -17,6 +17,14 @@ namespace {
 std::shared_ptr<lvm::MemoryBudget> shared_memory_budget() {
     static auto budget=std::make_shared<lvm::MemoryBudget>();return budget;
 }
+void trim_processed_caches() {
+    const auto trim=[](const auto& document) {
+        if(document.processed_source)document.processed_source->trim_processing_cache();
+        if(document.overview.source && document.overview.source!=document.processed_source)
+            document.overview.source->trim_processing_cache();
+    };
+    trim(g);for(const auto& document:g.inactive_documents)trim(document);
+}
 template<class T> std::uint64_t bytes(const std::vector<T>& v) { return v.capacity()*sizeof(T); }
 std::uint64_t arrays(const std::vector<std::vector<double>>& v) {
     auto total=bytes(v);
@@ -76,6 +84,7 @@ std::shared_ptr<lvm::MemoryBudget> refresh_load_memory_budget() {
 bool set_resource_policy(bool automatic,unsigned manual_mib) {
     if(!lvm::ResourcePolicy::valid_manual(manual_mib))return false;
     g.resource_policy={automatic,manual_mib};
+    trim_processed_caches();
     auto budget=refresh_load_memory_budget();g_frf_worker.trim_cache(budget->limit()/3,256ULL*1024*1024);
     g_overview_worker.trim_cache(std::min<std::uint64_t>(128ULL*1024*1024,budget->limit()/8));
     trim_document_analysis_caches(static_cast<std::size_t>(budget->limit()/8));
@@ -89,11 +98,14 @@ lvm::AnalysisResources current_analysis_resources(std::uint64_t required) {
     g_overview_worker.trim_cache(std::min<std::uint64_t>(128ULL*1024*1024,result.budget->limit()/8));
     trim_document_analysis_caches(static_cast<std::size_t>(result.budget->limit()/8));
     lvm::trim_fft_cached_plans(static_cast<std::size_t>(result.budget->limit()/8));
+    if(refresh_load_memory_budget()->available()<std::max<std::uint64_t>(required,32ULL*1024*1024))
+        trim_processed_caches();
     if(refresh_load_memory_budget()->available()<32ULL*1024*1024)move_resident_recordings_to_disk();
     if(required && refresh_load_memory_budget()->available()<required) {
         // Caches borrow the shared budget; a new operation has priority. Live
         // requests keep their own shared owners even after idle retention ends.
         g_frf_worker.clear_cache();g_overview_worker.trim_cache(0);
+        trim_processed_caches();
         trim_document_analysis_caches(0);lvm::trim_fft_cached_plans(0);
         if(refresh_load_memory_budget()->available()<required) {
             g.spec={};g.spec_valid=false;if(!g.spec_pending)g.spec_attempted=false;

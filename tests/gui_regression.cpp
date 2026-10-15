@@ -39,12 +39,14 @@
 #include "../gui_filter_state_cache.hpp"
 #include "../gui_source_export.hpp"
 #include "../disk_spectrum.hpp"
+#include "../analysis_executor.hpp"
 using namespace gui;
 #include <iostream>
 #include <stdexcept>
 #include <chrono>
 #include <iomanip>
 #include <psapi.h>
+#include <future>
 #ifdef near
 #undef near
 #endif
@@ -2293,6 +2295,7 @@ void background_filtered_resident_view() {
         require(!g.overview.pending && !g.overview.error,"background filtered view completes successfully");};
     wait();draw_time(dc,plot);
     const auto index=g.overview.index;const auto source=g.overview.source;const auto ready_generation=g.overview.generation;
+    require(index->disk_bytes()==0,"admitted resident filtering builds a RAM hierarchy without a duplicate disk timeline");
     draw_time(dc,plot);
     require(g.vvalid && !g.overview.pending && g.overview.index==index && g.overview.generation==ready_generation,
         "ready filtered repaint reuses its index without another filtering job");
@@ -2320,6 +2323,68 @@ void background_filtered_resident_view() {
         continuation=equal(replay_a[i],expected_a[69995+i]) && equal(replay_b[i],expected_b[69995+i]);
     }
     require(continuation,"filter checkpoints preserve NaN/Inf resets and exact values with reordered channels and 17-row blocks");
+    const auto cache_budget=refresh_load_memory_budget();const auto before_trim=cache_budget->reserved();
+    source->trim_processing_cache();
+    require(before_trim>=cache_budget->reserved()+rows*2*8,
+        "completed resident processing retains admitted values and explicit trim releases their full storage");
+    auto full=query;full.range=lvm::AnalysisRange::entire();full.channels={0,1};full.block_rows=4096;
+    const auto admitted_before_cancel=cache_budget->reserved();std::atomic<bool> cancel_cache{false};bool cancelled=false;
+    try {source->replay(full,[&](const auto&,const auto&){cancel_cache.store(true);},&cancel_cache);}
+    catch(const lvm::RecordingFailure& failure){cancelled=failure.error==lvm::RecordingError::Cancelled;}
+    require(cancelled && cache_budget->reserved()==admitted_before_cancel,
+        "cancelling a full resident filter pass publishes no partial RAM cache and releases its admission");
+    bool trimmed_during_replay=false;std::size_t replayed_rows=0;
+    source->replay(full,[&](const auto& time,const auto&){replayed_rows+=time.size();
+        if(!trimmed_during_replay){source->trim_processing_cache();trimmed_during_replay=true;}});
+    require(replayed_rows==rows && cache_budget->reserved()==admitted_before_cancel,
+        "an active pass remains valid during trim and cannot repopulate an evicted RAM cache");
+    auto constrained=std::make_shared<lvm::MemoryBudget>();constrained->configure(4ULL*1024*1024,0,4ULL*1024*1024);
+    const auto saved_processed=g.processed_source,saved_overview_source=g.overview.source;
+    g.processed_source.reset();g.overview.source.reset();
+    const auto limited_source=processed_recording_source(true,step,constrained);
+    g.processed_source=saved_processed;g.overview.source=saved_overview_source;
+    bool limited_exact=true;std::size_t limited_rows=0;
+    limited_source->replay(full,[&](const auto&,const auto& values) {
+        for(std::size_t i=0;i<values[0].size();++i,++limited_rows) {
+            const auto equal=[](double a,double b){return a==b || (std::isnan(a) && std::isnan(b));};
+            limited_exact=limited_exact && equal(values[0][i],expected_a[limited_rows]) && equal(values[1][i],expected_b[limited_rows]);
+        }
+    });
+    require(limited_exact && limited_rows==rows && constrained->reserved()==2ULL*1024*1024,
+        "denying full processed RAM retention preserves every filtered value and holds only admitted continuation state");
+    replay_a.clear();replay_b.clear();
+    source->replay(query,[&](const auto&,const auto& values){
+        replay_b.insert(replay_b.end(),values[0].begin(),values[0].end());
+        replay_a.insert(replay_a.end(),values[1].begin(),values[1].end());});
+    continuation=replay_a.size()==1011 && replay_b.size()==1011;
+    for(std::size_t i=0;continuation && i<replay_a.size();++i) {
+        const auto equal=[](double a,double b){return a==b || (std::isnan(a) && std::isnan(b));};
+        continuation=equal(replay_a[i],expected_a[69995+i]) && equal(replay_b[i],expected_b[69995+i]);
+    }
+    require(continuation,"uncached continuation after RAM eviction matches cached filtered values across missing values and gaps");
+    source->trim_processing_cache();
+    std::promise<void> executor_entered,executor_release;auto released=executor_release.get_future().share();
+    auto busy=std::async(std::launch::async,[&] {
+        lvm::analysis_executor().run(1,1,[&](std::size_t){executor_entered.set_value();released.wait();});
+    });
+    executor_entered.get_future().wait();
+    lvm::RecordingSource::ResidentColumns snapshot;
+    try {snapshot=source->prepare_resident_columns();}
+    catch(...) {executor_release.set_value();busy.get();throw;}
+    executor_release.set_value();busy.get();
+    bool prepared_exact=snapshot && snapshot->size()==2;
+    for(std::size_t i=0;prepared_exact && i<rows;++i) {
+        const auto equal=[](double a,double b){return a==b || (std::isnan(a) && std::isnan(b));};
+        prepared_exact=equal((*snapshot)[0][i],expected_a[i]) && equal((*snapshot)[1][i],expected_b[i]);
+    }
+    require(prepared_exact,"busy shared executor uses exact sequential resident preparation with formulas, gaps and nonfinite input");
+    const auto held_snapshot=cache_budget->reserved();source->trim_processing_cache();
+    require(cache_budget->reserved()==held_snapshot,"an active resident snapshot retains its admission across cache eviction");
+    snapshot.reset();require(cache_budget->reserved()+rows*2*8<=held_snapshot,
+        "releasing the final resident snapshot frees the admitted channel arrays");
+    std::atomic<bool> prepare_cancel{true};bool prepare_cancelled=false;
+    try {source->prepare_resident_columns(&prepare_cancel);}catch(const lvm::RecordingFailure& e){prepare_cancelled=e.error==lvm::RecordingError::Cancelled;}
+    require(prepare_cancelled,"resident preparation reports typed cancellation before allocating or publishing data");
     require(g.recording_source->resident_data() && g.recording_source->resident_data()->time.data()==resident &&
         g.ds.rows()==2 && g.numerical_revision==numerical &&
         g.filtered_channel_cache[0].empty() && g.filtered_channel_cache[1].empty(),

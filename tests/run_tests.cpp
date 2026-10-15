@@ -975,6 +975,11 @@ void test_frf_streaming() {
             }
         }
         check(actual==expected,"causal filter states and resets match for every family/mode across blocks");
+        auto inplace=signal;FilterStream owned(settings);
+        for(std::size_t at=0;at<inplace.size();at+=4093)
+            owned.process_in_place(times,inplace,at,std::min(inplace.size(),at+4093));
+        check(inplace==expected && owned.continuation()==filter.continuation(),
+            "in-place filtering preserves every output and continuation across different chunk boundaries");
     }
     std::atomic<bool> cancelled{true};bool threw=false;
     try {lvm::compute_prepared_frf(lvm::PreparedFrf{}, {}, &cancelled);}catch(...){threw=true;}

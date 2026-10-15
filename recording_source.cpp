@@ -38,11 +38,12 @@ std::size_t bounded_rows(const RecordingReadRequest& request) {
 std::shared_ptr<const RecordingSource> RecordingSource::from_file(
     const std::filesystem::path& path, TimeRange bounds,
     std::vector<std::size_t> physical_columns, std::shared_ptr<const ScanIndex> index,
-    std::optional<RecordingStamp> expected,double filter_sample_step) {
+    std::optional<RecordingStamp> expected,double filter_sample_step,double timeline_sample_step) {
     auto source = std::shared_ptr<RecordingSource>(new RecordingSource);
-    if(!std::isfinite(filter_sample_step) || filter_sample_step<0)
+    if(!std::isfinite(filter_sample_step) || filter_sample_step<0 || !std::isfinite(timeline_sample_step) || timeline_sample_step<0)
         throw RecordingFailure(RecordingError::InvalidRequest,"Invalid source filter cadence.");
     source->filter_sample_step_=filter_sample_step;
+    source->timeline_sample_step_=timeline_sample_step;
     std::error_code ec;
     source->path_ = std::filesystem::absolute(path, ec);
     if (ec) throw RecordingFailure(RecordingError::ReadFailure, "Cannot resolve the recording path.");
@@ -93,7 +94,7 @@ std::shared_ptr<const RecordingSource> RecordingSource::from_resident(Dataset& d
        !std::all_of(data.channels.begin(),data.channels.end(),[&](const auto& values){return values.size()==data.rows();}))
         throw RecordingFailure(RecordingError::InvalidRequest,"Invalid resident recording transfer.");
     auto source=std::const_pointer_cast<RecordingSource>(from_file(file->path(),file->bounds(),
-        file->physical_columns(),file->scan_index(),file->stamp(),filter_step));
+        file->physical_columns(),file->scan_index(),file->stamp(),filter_step,file->timeline_sample_step()));
     auto memory=std::make_shared<Dataset>();
     source->resident_reservation_=budget->transfer_resident(dataset_array_bytes(data));
     if(!source->resident_reservation_)
@@ -178,13 +179,32 @@ std::size_t RecordingSource::replay(const RecordingReadRequest& request,
 }
 
 std::shared_ptr<const RecordingSource> RecordingSource::processed(std::shared_ptr<const RecordingSource> raw,
-                                                               std::string identity,Replay replay) {
+                                                               std::string identity,Replay replay,std::function<void()> trim_cache,bool preserves_timeline,
+                                                               PrepareResident prepare_resident) {
     if(!raw || !replay || identity.empty())throw RecordingFailure(RecordingError::InvalidRequest,"Invalid processing view.");
     raw->check_current();auto source=std::shared_ptr<RecordingSource>(new RecordingSource);
     source->bounds_=raw->bounds_;source->path_=raw->path_;source->stamp_=raw->stamp_;
     source->physical_columns_=raw->physical_columns_;source->raw_=std::move(raw);
     source->processing_identity_="\nprocessed-v1:"+std::move(identity);source->replay_=std::move(replay);
+    source->trim_cache_=std::move(trim_cache);
+    source->preserves_timeline_=preserves_timeline;
+    source->prepare_resident_=std::move(prepare_resident);
     return source;
+}
+RecordingSource::ResidentColumns RecordingSource::prepare_resident_columns(const std::atomic<bool>* cancel) const {
+    check_cancel(cancel);check_current();
+    if(!resident_timeline())return {};
+    ResidentColumns result;
+    if(memory_) {
+        struct Owner {std::shared_ptr<MemoryBudget::Reservation> reservation;std::shared_ptr<const Dataset> memory;};
+        auto owner=std::make_shared<Owner>();owner->reservation=resident_reservation_;owner->memory=memory_;
+        result=ResidentColumns(std::move(owner),&memory_->channels);
+    }else if(prepare_resident_)result=prepare_resident_(cancel);
+    check_cancel(cancel);check_current();
+    if(result && (result->size()!=channel_count() || std::any_of(result->begin(),result->end(),
+       [&](const auto& values){return values.size()!=resident_timeline()->rows();})))
+        throw RecordingFailure(RecordingError::SourceChanged,"Resident processing sample count changed.");
+    return result;
 }
 
 } // namespace lvm

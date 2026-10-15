@@ -30,6 +30,12 @@ struct OverviewOptions {
     std::size_t memory_bytes = 16ULL*1024*1024;
     std::uint64_t max_disk_bytes = 512ULL*1024*1024;
     std::shared_ptr<MemoryBudget> budget;
+    // Trusted full-timeline values from the opening pass; never the GUI filter Fs.
+    // Zero sample step / negative gap step request the original exact inspection.
+    double prepared_sample_step=0,prepared_gap_step=-1;
+    // Optional resident hierarchy, accounted separately from temporary buffers.
+    // Zero keeps the persisted disk path; timestamps remain owned by the source.
+    std::size_t resident_index_bytes=0,max_participants=1;
     // Runs on the building thread; counts do not imply that the cache is published.
     std::function<void(std::uint64_t,std::uint64_t)> progress;
 };
@@ -80,10 +86,14 @@ struct RecordingSnapResult {
     bool found=false;
 };
 
-// Immutable disk hierarchy. Reads own buffers; concurrent views share no cursor.
+// Immutable disk or admitted resident hierarchy. Reads own temporary buffers.
 // Cache format validates source identity, bounds, channel mapping and checksums.
 class RecordingOverview {
 public:
+    // Returns null when unsupported or admission is denied; other failures propagate.
+    static std::shared_ptr<const RecordingOverview> try_build_resident(
+        std::shared_ptr<const RecordingSource> source,const OverviewOptions& options,
+        const std::atomic<bool>* cancel=nullptr);
     static std::shared_ptr<const RecordingOverview> build(
         std::shared_ptr<const RecordingSource> source,const std::filesystem::path& cache,
         const OverviewOptions& options={},const std::atomic<bool>* cancel=nullptr);

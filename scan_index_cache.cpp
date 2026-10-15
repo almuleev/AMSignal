@@ -157,7 +157,9 @@ CachedScanIndex scan_index_cached(const std::filesystem::path& original,std::sha
          catch(const std::filesystem::filesystem_error&){result.cache_error=RecordingError::ResourceLimit;}
         if(!result.index) {
             result.index=std::make_shared<ScanIndex>();double first=0,last=0;std::string error;
-            if(!scan_time_bounds(path,first,last,error,cancel,result.index.get(),limit)) {
+            const bool ok=options.scan ? options.scan(*result.index,limit,error) :
+                scan_time_bounds(path,first,last,error,cancel,result.index.get(),limit);
+            if(!ok) {
                 check(cancel);if(error.find("memory allowance")!=std::string::npos)fail(RecordingError::ResourceLimit,error.c_str());
                 fail(RecordingError::ReadFailure,error.c_str());
             }

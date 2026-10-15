@@ -98,6 +98,39 @@ void scan(Check check) {
     lvm::ScanIndexCacheOptions options;options.budget=budget;
     lvm::ScanIndex original;double first=0,last=0;std::string error;
     check(lvm::scan_time_bounds(path,first,last,error,nullptr,&original),"control scan builds checkpoint fixture with multiple sections");
+    int discovery_passes=0;std::size_t discovery_rows=0;
+    auto combined_options=options;
+    combined_options.scan=[&](lvm::ScanIndex& index,std::size_t limit,std::string& failure) {
+        ++discovery_passes;lvm::LoadOptions read;read.stream_all_columns=true;read.block_rows=17;
+        read.capture_scan_index=&index;read.capture_scan_bytes=limit;
+        read.consume_block=[&](const auto& time,const auto&){discovery_rows+=time.size();};
+        const auto metadata=lvm::read_lvm_file(path,read);failure=metadata.error;return metadata.ok;
+    };
+    auto combined_pool=std::make_shared<lvm::DiskCache>(files.root/"combined",64ULL*1024*1024);
+    auto combined=lvm::scan_index_cached(path,combined_pool,combined_options);
+    auto combined_hit=lvm::scan_index_cached(path,combined_pool,combined_options);
+    check(discovery_passes==1 && discovery_rows==13500 && combined_hit.from_cache,
+        "combined opening discovers metadata and index in one pass and skips discovery callback on a cache hit");
+    check(equal(original,*combined.index) && equal(original,*combined_hit.index),
+        "combined parser preserves every scanner checkpoint, section state, bound, comment and label bitwise");
+    combined.index.reset();combined_hit.index.reset();
+    auto limited=combined_options;limited.memory_bytes=131073;
+    check(rejects(lvm::RecordingError::ResourceLimit,[&]{lvm::scan_index_cached(path,{},limited);}),
+        "combined discovery cannot exceed index admission while growing checkpoints");
+    for(const auto& name:{"tiny.txt","reset.txt","labels.csv","spectrum.csv"}) {
+        const auto sample=files.root/name;std::ofstream out(sample);
+        if(std::string(name)=="tiny.txt")out<<"#\nTime\tA\n-6.9388939039072284e-18\t1\n1e-16\t2\n2e-16\t3\n";
+        else if(std::string(name)=="reset.txt")out<<"Time\tA\n0\t1\n1\t2\n0\tNaN\n0\tInf\n-2\t3\n";
+        else if(std::string(name)=="labels.csv")out<<"\"Time\",\"A, note\"\n0,1\n1,NaN\n2,Inf\n# note\n";
+        else out<<"# data_kind=spectrum\nFrequency,A\n0,1\n1,2\n2,3\n";
+        out.close();lvm::ScanIndex expected,captured;double lo=0,hi=0;std::string failure;
+        const auto scanned=lvm::scan_time_bounds(sample,lo,hi,failure,nullptr,&expected);
+        lvm::LoadOptions read;read.stream_all_columns=true;read.capture_scan_index=&captured;read.capture_scan_bytes=1024*1024;
+        std::vector<double> times;read.consume_block=[&](const auto& t,const auto&){times.insert(times.end(),t.begin(),t.end());};
+        const auto metadata=lvm::read_lvm_file(sample,read);
+        check(scanned && metadata.ok && equal(expected,captured),
+            "combined index preserves exact tiny boundaries, reset state, CSV labels and stored-spectrum metadata: "+std::string(name));
+    }
     auto fresh=lvm::scan_index_cached(path,pool,options);auto hit=lvm::scan_index_cached(path,pool,options);
     check(!fresh.from_cache && !fresh.cache_error && hit.from_cache && !hit.cache_error,"first index is persisted and second opening hits cache");
     check(equal(original,*fresh.index) && equal(original,*hit.index),"all checkpoint values, flags, bounds, labels and comments survive bitwise round trip");

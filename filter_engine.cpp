@@ -94,12 +94,24 @@ bool FilterStream::restore_continuation(const std::array<double,10>& values) {
 
 std::vector<double> FilterStream::process(const std::vector<double>& time, const std::vector<double>& src,
                                          const std::atomic<bool>* cancel) {
+    if(src.size()!=time.size())throw std::invalid_argument("Filter requires aligned samples and time.");
+    std::vector<double> dst(src.size());process_into(time,src,dst,0,src.size(),cancel);return dst;
+}
+void FilterStream::process_in_place(const std::vector<double>& time,std::vector<double>& samples,
+                                   std::size_t begin,std::size_t end,const std::atomic<bool>* cancel) {
+    process_into(time,samples,samples,begin,end,cancel);
+}
+void FilterStream::process_into(const std::vector<double>& time,const std::vector<double>& src,
+                               std::vector<double>& dst,std::size_t begin,std::size_t end,const std::atomic<bool>* cancel) {
     const auto& settings=settings_;
-    if (src.size() != time.size()) throw std::invalid_argument("Filter requires aligned samples and time.");
+    if (src.size() != time.size() || dst.size()!=src.size() || begin>end || end>src.size())
+        throw std::invalid_argument("Filter requires aligned samples and time.");
     const double step = settings.sample_step;
-    if (!(step > 0.0) || !std::isfinite(step)) return src;
+    if (!(step > 0.0) || !std::isfinite(step)) {
+        if(&src!=&dst)std::copy(src.begin()+begin,src.begin()+end,dst.begin()+begin);
+        return;
+    }
     const double nyquist = 0.5 / step;
-    std::vector<double> dst(src.size());
     const double sample_rate = 1.0 / step;
     const double gap_threshold = step * 64.0;
     const int mode = (settings.mode >= FilterModeLowPass && settings.mode <= FilterModeBandStop)
@@ -126,7 +138,7 @@ std::vector<double> FilterStream::process(const std::vector<double>& time, const
     auto& stage4=state_->stage4;
     auto& have_segment=state_->have_segment;
     auto& prev_time=state_->prev_time;
-    for (std::size_t i = 0; i < src.size(); ++i) {
+    for (std::size_t i = begin; i < end; ++i) {
         if (cancel && (i & 0xFFF) == 0 && cancel->load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled.");
         const double input = src[i];
         const double tt = time[i];
@@ -208,7 +220,6 @@ std::vector<double> FilterStream::process(const std::vector<double>& time, const
         have_segment = true;
         prev_time = tt;
     }
-    return dst;
 }
 
 std::vector<double> filter_signal(const std::vector<double>& time,const std::vector<double>& src,

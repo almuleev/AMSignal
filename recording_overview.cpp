@@ -1,6 +1,7 @@
 #include "recording_overview.hpp"
 #include "frf_stream.hpp"
 #include "sampling.hpp"
+#include "analysis_executor.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -100,6 +101,24 @@ void add(OverviewTrace& trace,OverviewPoint point) {
     if(point.value>trace.maximum.value)trace.maximum=point;
     trace.last=point;++trace.finite_count;
 }
+// Scan one contiguous column. Write point metadata only when an extremum
+// changes, rather than copying four 24-byte points for every channel/sample.
+void add_range(OverviewTrace& trace,const std::vector<double>& time,const std::vector<double>& values,
+               std::size_t begin,std::size_t end,std::uint64_t first_sample) {
+    auto count=trace.finite_count;
+    double minimum=trace.minimum.value,maximum=trace.maximum.value;
+    std::size_t last=end;
+    for(auto i=begin;i<end;++i) {
+        const auto value=values[i];if(!std::isfinite(value))continue;
+        const OverviewPoint point{first_sample+i-begin,time[i],value};
+        if(!count) {trace.first=trace.minimum=trace.maximum=point;minimum=maximum=value;}
+        if(value<minimum) {minimum=value;trace.minimum=point;}
+        if(value>maximum) {maximum=value;trace.maximum=point;}
+        last=i;++count;
+    }
+    if(last!=end)trace.last={first_sample+last-begin,time[last],values[last]};
+    trace.finite_count=count;
+}
 OverviewBucket merge(OverviewBucket left,const OverviewBucket& right) {
     if(left.first_sample+left.sample_count!=right.first_sample || left.last_time>=right.first_time)
         fail(RecordingError::ReadFailure,"Noncontiguous overview buckets.");
@@ -152,16 +171,135 @@ void publish(const std::filesystem::path& from,const std::filesystem::path& to) 
 } // namespace
 
 struct RecordingOverview::Storage {
+    // Reservation outlives buffers, including owners retained by cancelled jobs.
+    std::shared_ptr<MemoryBudget::Reservation> reservation;
+    std::vector<OverviewBucket> nodes;
+    std::vector<std::pair<double,double>> anchors;
     std::ifstream in;
     std::mutex mutex;
     std::mutex map_mutex;
     std::array<double,1025> raw{},shown{};
     std::size_t mapped=0;
     std::uint64_t mapped_first=0;
+    Storage()=default;
     explicit Storage(const std::filesystem::path& path):in(path,std::ios::binary) {
         if(!in)fail(RecordingError::ReadFailure,"Cannot open overview cache.");
     }
 };
+std::shared_ptr<const RecordingOverview> RecordingOverview::try_build_resident(
+    std::shared_ptr<const RecordingSource> source,const OverviewOptions& options,const std::atomic<bool>* cancel) {
+    check(cancel);
+    if(!source || !options.resident_index_bytes || !options.budget || !options.base_rows || options.base_rows>65536)return {};
+    const auto* resident=source->resident_timeline();
+    if(!resident || resident->time.empty() || resident->time.front()!=source->bounds().start ||
+       resident->time.back()!=source->bounds().end)return {};
+    if(!std::isfinite(options.prepared_sample_step) || options.prepared_sample_step<0 ||
+       !std::isfinite(options.prepared_gap_step) || options.prepared_gap_step<-1)
+        fail(RecordingError::InvalidRequest,"Invalid prepared overview cadence.");
+    const auto rows=resident->time.size(),channels=source->channel_count();
+    const auto leaves=rows/options.base_rows+(rows%options.base_rows!=0);
+    std::size_t nodes=0;for(auto count=leaves;;count=count/2+count%2) {
+        if(count>std::numeric_limits<std::size_t>::max()-nodes)return {};
+        nodes+=count;if(count==1)break;
+    }
+    const long double cost=nodes*(sizeof(OverviewBucket)+channels*static_cast<long double>(sizeof(OverviewTrace)))+
+        leaves*static_cast<long double>(sizeof(std::pair<double,double>))+sizeof(Storage)+4096;
+    if(cost>options.resident_index_bytes)return {};
+    // Allocation failure before replay is an optional cache miss. Once replay
+    // starts, cancellation/source errors must remain visible to the worker.
+    std::shared_ptr<RecordingOverview> result;
+    std::shared_ptr<MemoryBudget::Reservation> working;
+    try {
+        auto reservation=options.budget->reserve(static_cast<std::uint64_t>(cost));if(!reservation)return {};
+        working=options.budget->reserve(options.memory_bytes);if(!working)return {};
+        result=std::shared_ptr<RecordingOverview>(new RecordingOverview);
+        result->source_=source;result->storage_=std::make_shared<Storage>();
+        result->storage_->reservation=std::move(reservation);
+        result->storage_->nodes.resize(nodes);result->storage_->anchors.resize(leaves);
+        for(auto& node:result->storage_->nodes)node.channels.resize(channels);
+        result->levels_.reserve(64);
+    }catch(const std::bad_alloc&){return {};}
+    const auto block_bytes=work_bytes(options.memory_bytes,channels);
+    result->sample_count_=rows;result->base_rows_=options.base_rows;
+    result->levels_.push_back({0,leaves});
+    std::size_t total=0;double previous=0;
+    RecordingReadRequest read;read.block_bytes=block_bytes;
+    read.channels.resize(channels);std::iota(read.channels.begin(),read.channels.end(),std::size_t{0});
+    const auto consume_span=[&](const auto& time,const auto& values,std::size_t begin_row,std::size_t end_row) {
+        const auto length=end_row-begin_row;
+        if(length>rows-total || std::memcmp(time.data()+begin_row,resident->time.data()+total,length*sizeof(double)))
+            fail(RecordingError::SourceChanged,"Resident overview timeline changed.");
+        const auto first=total;
+        // Independent columns; acquisition order within each leaf is unchanged.
+        const std::function<void(std::size_t)> column=[&](std::size_t c) {
+            for(std::size_t begin=begin_row;begin<end_row;) {
+                check(cancel);const auto sample=first+begin-begin_row;
+                const auto end=std::min(end_row,begin+options.base_rows-sample%options.base_rows);
+                add_range(result->storage_->nodes[sample/options.base_rows].channels[c],time,values[c],begin,end,sample);
+                begin=end;
+            }
+        };
+        if(length<8192 || !analysis_executor().run(channels,options.max_participants,column))
+            for(std::size_t c=0;c<channels;++c)column(c);
+        for(auto i=begin_row;i<end_row;++i) {
+            const auto t=time[i];
+            if((total&4095)==0)check(cancel);
+            if(!std::isfinite(t) || (total && (t<=previous || !std::isfinite(t-previous))))
+                fail(RecordingError::ReadFailure,"Overview needs strictly increasing finite time.");
+            auto& node=result->storage_->nodes[total/options.base_rows];
+            if(!node.sample_count){node.first_sample=total;node.first_time=t;}
+            else node.maximum_spacing=std::max(node.maximum_spacing,t-previous);
+            node.last_time=t;++node.sample_count;previous=t;++total;
+        }
+        if(options.progress)options.progress(total,0);
+    };
+    if(const auto columns=source->prepare_resident_columns(cancel)) {
+        for(std::size_t begin=0;begin<rows;) {
+            check(cancel);const auto end=std::min(rows,begin+65536);
+            consume_span(resident->time,*columns,begin,end);begin=end;
+        }
+    }else source->replay(read,[&](const auto& time,const auto& values){consume_span(time,values,0,time.size());},cancel);
+    if(total!=rows)fail(RecordingError::SourceChanged,"Resident overview sample count changed.");
+    result->sample_step_=options.prepared_sample_step;
+    result->gap_step_=options.prepared_gap_step;
+    if(!result->sample_step_) {
+        FrfSource timeline;
+        timeline.replay=[&](const auto& consume,const auto* flag) {
+            RecordingReadRequest query;query.block_bytes=block_bytes;source->replay(query,consume,flag);
+        };
+        if(rows>=4)result->sample_step_=inspect_frf_timeline(timeline,cancel,rows).sample_dt;
+        else {std::vector<double> intervals;for(std::size_t i=1;i<rows;++i)intervals.push_back(resident->time[i]-resident->time[i-1]);
+            result->sample_step_=typical_sample_spacing(intervals);}
+    }
+    if(result->gap_step_<0) {
+        std::vector<double> sampled;sampled.reserve(4096);const auto stride=std::max<std::size_t>(1,(rows-1)/4096);
+        for(std::size_t i=1;i<rows && sampled.size()<4096;i+=stride)sampled.push_back(resident->time[i]-resident->time[i-1]);
+        std::sort(sampled.begin(),sampled.end());const auto mid=sampled.size()/2;
+        result->gap_step_=sampled.empty() ? 0 : sampled.size()%2 ? sampled[mid] : .5*(sampled[mid-1]+sampled[mid]);
+    }
+    double anchor_raw=0,anchor_display=0;previous=0;
+    for(std::size_t i=0;i<rows;++i) {
+        if((i&4095)==0)check(cancel);
+        const auto t=resident->time[i];
+        if(!i)anchor_raw=anchor_display=t;
+        else if(result->sample_step_>0 && t-previous>result->sample_step_*sampling_gap_factor) {
+            anchor_display+=(previous-anchor_raw)+result->sample_step_;anchor_raw=t;
+        }
+        if(i%options.base_rows==0)result->storage_->anchors[i/options.base_rows]={anchor_raw,anchor_display};
+        previous=t;
+    }
+    while(result->levels_.back().count>1) {
+        check(cancel);const auto level=result->levels_.back();const auto offset=level.offset+level.count;
+        const auto count=level.count/2+level.count%2;
+        for(std::size_t i=0;i<count;++i) {
+            auto combined=result->storage_->nodes[level.offset+2*i];
+            if(2*i+1<level.count)combined=merge(std::move(combined),result->storage_->nodes[level.offset+2*i+1]);
+            result->storage_->nodes[offset+i]=std::move(combined);
+        }
+        result->levels_.push_back({offset,count});
+    }
+    check(cancel);source->check_current();return result;
+}
 std::pair<std::array<OverviewPoint,4>,std::size_t> OverviewTrace::ordered_points() const {
     std::array<OverviewPoint,4> points{first,minimum,maximum,last};
     if(!finite_count)return {points,0};
@@ -193,6 +331,9 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
         check(cancel);
         if(!source || !source->file_backed() || cache.empty() || !options.base_rows || options.base_rows>65536)
             fail(RecordingError::InvalidRequest,"Invalid file overview request.");
+        if(!std::isfinite(options.prepared_sample_step) || options.prepared_sample_step<0 ||
+           !std::isfinite(options.prepared_gap_step) || options.prepared_gap_step< -1)
+            fail(RecordingError::InvalidRequest,"Invalid prepared overview cadence.");
         source->check_current();
         const auto target=std::filesystem::absolute(cache).lexically_normal();
         std::error_code ec;
@@ -238,7 +379,10 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
         RecordingReadRequest read;read.block_bytes=block_bytes;
         read.channels.resize(channels);std::iota(read.channels.begin(),read.channels.end(),std::size_t{0});
         source->replay(read,[&](const auto& time,const auto& values) {
-            for(std::size_t i=0;i<time.size();++i) {
+            for(std::size_t begin=0;begin<time.size();) {
+                const auto end=std::min(time.size(),begin+options.base_rows-node.sample_count);
+                for(std::size_t c=0;c<channels;++c)add_range(node.channels[c],time,values[c],begin,end,total);
+                for(auto i=begin;i<end;++i) {
                 if((i & 4095)==0)check(cancel);
                 if(!std::isfinite(time[i]) || (total && (time[i]<=previous || !std::isfinite(time[i]-previous))) ||
                    total==std::numeric_limits<std::uint64_t>::max())
@@ -247,11 +391,12 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
                 else node.maximum_spacing=std::max(node.maximum_spacing,time[i]-previous);
                 node.last_time=time[i];++node.sample_count;
                 times.put_double(time[i]);
-                for(std::size_t c=0;c<channels;++c)add(node.channels[c],{total,time[i],values[c][i]});
                 previous=time[i];++total;
+                }
                 if(node.sample_count==options.base_rows) {
                     append_leaf();
                 }
+                begin=end;
             }
             if(options.progress)options.progress(total,written);
         },cancel);
@@ -281,13 +426,15 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::build(
         if(8*std::min<std::uint64_t>(total,1048576)+timeline_size*2+header_bytes>options.memory_bytes)
             fail(RecordingError::ResourceLimit,"Cadence exceeds the overview memory allowance.");
         FrfSource cadence_source;cadence_source.replay=replay_times;
-        double sample_step=0;
-        if(total>=4)sample_step=inspect_frf_timeline(cadence_source,cancel,static_cast<std::size_t>(total)).sample_dt;
-        else {std::vector<double> intervals;double prev=0;bool have=false;
+        double sample_step=options.prepared_sample_step;
+        if(sample_step>0 && options.prepared_gap_step<0)replay_times([](const auto&,const auto&){},cancel);
+        else if(!sample_step && total>=4)sample_step=inspect_frf_timeline(cadence_source,cancel,static_cast<std::size_t>(total)).sample_dt;
+        else if(!sample_step) {std::vector<double> intervals;double prev=0;bool have=false;
             replay_times([&](const auto& ts,const auto&){for(auto t:ts){if(have)intervals.push_back(t-prev);prev=t;have=true;}},cancel);
             sample_step=typical_sample_spacing(intervals);}
         std::sort(sampled.begin(),sampled.end());const auto mid=sampled.size()/2;
-        const double gap_step=sampled.empty() ? 0 : sampled.size()%2 ? sampled[mid] : .5*(sampled[mid-1]+sampled[mid]);
+        const double gap_step=options.prepared_gap_step>=0 ? options.prepared_gap_step :
+            sampled.empty() ? 0 : sampled.size()%2 ? sampled[mid] : .5*(sampled[mid-1]+sampled[mid]);
         // Store one prefix per leaf. Raw timestamps remain exact; no full RAM map.
         double previous_raw=0,anchor_raw=0,anchor_display=0;bool have=false;
         for(std::uint64_t leaf=0,row=0;leaf<levels[0].count;++leaf) {
@@ -414,6 +561,7 @@ std::shared_ptr<const RecordingOverview> RecordingOverview::open_or_build(
 }
 OverviewBucket RecordingOverview::read_bucket(std::size_t level,std::uint64_t index) const {
     if(level>=levels_.size() || index>=levels_[level].count)fail(RecordingError::ReadFailure,"Invalid overview node address.");
+    if(!storage_->nodes.empty())return storage_->nodes[levels_[level].offset+index];
     Bytes buffer(record_bytes(source_->channel_count()));
     const auto stride=buffer.size()+(level==0 ? base_rows_*8+24 : 0);
     {std::lock_guard<std::mutex> lock(storage_->mutex);read_at(storage_->in,levels_[level].offset+index*stride,buffer);}
@@ -423,6 +571,15 @@ OverviewBucket RecordingOverview::read_bucket(std::size_t level,std::uint64_t in
 std::vector<double> RecordingOverview::read_times(std::uint64_t leaf,double* display_first,double* anchor_raw,double* anchor_display) const {
     if(leaf>=levels_[0].count)fail(RecordingError::ReadFailure,"Invalid timeline leaf.");
     const auto count=std::min<std::uint64_t>(base_rows_,sample_count_-leaf*base_rows_);
+    if(!storage_->nodes.empty()) {
+        const auto& original=source_->resident_timeline()->time;
+        std::vector<double> time(original.begin()+leaf*base_rows_,original.begin()+leaf*base_rows_+count);
+        const auto anchors=storage_->anchors[leaf];
+        if(display_first)*display_first=anchors.first==anchors.second ? time.front() : anchors.second+(time.front()-anchors.first);
+        if(anchor_raw)*anchor_raw=anchors.first;
+        if(anchor_display)*anchor_display=anchors.second;
+        return time;
+    }
     Bytes buffer(count*8+24);const auto size=record_bytes(source_->channel_count());
     {std::lock_guard<std::mutex> lock(storage_->mutex);
         read_at(storage_->in,levels_[0].offset+leaf*(size+base_rows_*8+24)+size,buffer);}
@@ -508,6 +665,12 @@ std::size_t RecordingOverview::resident_bytes() const {
 std::pair<std::uint64_t,std::uint64_t> RecordingOverview::sample_range(AnalysisRange requested) const {
     source_->check_current();TimeRange range;
     if(!requested.resolve(source_->bounds(),range))fail(RecordingError::InvalidRequest,"Invalid timeline range.");
+    if(!storage_->nodes.empty()) {
+        const auto& time=source_->resident_timeline()->time;
+        const auto begin=std::lower_bound(time.begin(),time.end(),range.start)-time.begin();
+        const auto end=std::upper_bound(time.begin(),time.end(),range.end)-time.begin();
+        source_->check_current();return {begin,end};
+    }
     const auto bound=[&](double t,bool upper) {
         std::uint64_t lo=0,hi=levels_[0].count;
         while(lo<hi){const auto mid=lo+(hi-lo)/2;const auto last=read_bucket(0,mid).last_time;
@@ -758,6 +921,17 @@ std::uint64_t RecordingOverview::visit_gaps(TimeRange range,double threshold,
     const auto emit=[&](double left,double right) {
         if(right-left>threshold && right>=range.start && left<=range.end) {consume({left,right});++found;check(cancel);}
     };
+    if(const auto* resident=source_->resident_timeline();resident && resident->rows()==sample_count_ &&
+       resident->time.front()==source_->bounds().start && resident->time.back()==source_->bounds().end) {
+        const auto& time=resident->time;
+        const auto first=std::lower_bound(time.begin(),time.end(),range.start)-time.begin();
+        // Inclusive edges also retain gaps touching a selected endpoint.
+        for(auto i=std::max<std::size_t>(1,first);i<time.size() && time[i-1]<=range.end;++i) {
+            if((i&4095)==0)check(cancel);
+            emit(time[i-1],time[i]);
+        }
+        check(cancel);source_->check_current();return found;
+    }
     const auto visit=[&](auto&& self,std::size_t level,std::uint64_t index)->void {
         check(cancel);const auto node=read_bucket(level,index);
         if(node.last_time<range.start || node.first_time>range.end || node.maximum_spacing<=threshold)return;

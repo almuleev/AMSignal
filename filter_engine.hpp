@@ -41,7 +41,12 @@ public:
     bool restore_continuation(const std::array<double,10>& state);
     std::vector<double> process(const std::vector<double>& time,const std::vector<double>& samples,
                                 const std::atomic<bool>* cancel = nullptr);
+    // Owned working column; no copy of either the input or the time axis.
+    void process_in_place(const std::vector<double>& time,std::vector<double>& samples,
+                          std::size_t begin,std::size_t end,const std::atomic<bool>* cancel=nullptr);
 private:
+    void process_into(const std::vector<double>& time,const std::vector<double>& samples,
+                      std::vector<double>& output,std::size_t begin,std::size_t end,const std::atomic<bool>* cancel);
     struct State;
     std::unique_ptr<State> state_;
     FilterSettings settings_;
