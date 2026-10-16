@@ -273,7 +273,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     std::wstring formula;
                     std::wstring error;
                     std::vector<FormulaToken> compiled;
-                    if (!read_formula_edit(g.side_formula_edit, formula, compiled, error)) {
+                    if (!read_formula_edit(nullptr, formula, compiled, error)) {
                         std::wstring message = (g_str == &kEn) ? L"Invalid coefficient:\n" : L"Некорректный коэффициент:\n";
                         message += error;
                         MessageBoxW(hwnd, message.c_str(), settings_window_title(), MB_OK | MB_ICONWARNING);

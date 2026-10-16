@@ -1370,15 +1370,6 @@ void on_paint(HDC hdc) {
     SelectObject(mem, oldpen);
     DeleteObject(sep);
 
-    // Toolbar vertical separators (two compact rows)
-    HPEN vsep = CreatePen(PS_SOLID, 1, g_theme->separator);
-    oldpen = SelectObject(mem, vsep);
-    for (int sx : g.toolbar_seps) {
-        MoveToEx(mem, sx, 8, nullptr); LineTo(mem, sx, kTopBar - 4);
-    }
-    SelectObject(mem, oldpen);
-    DeleteObject(vsep);
-
     SetBkMode(mem, TRANSPARENT);
     SetTextColor(mem, g_theme->text_primary);
     SetTextAlign(mem, TA_LEFT | TA_TOP);

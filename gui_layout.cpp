@@ -16,7 +16,6 @@ void layout() {
     const int cw = rc.right, ch = rc.bottom;
     update_status_tooltip();
 
-    g.toolbar_seps.clear();
     int x = 8;
     auto place = [&](HWND h, int w, int row_y) { MoveWindow(h, x, row_y, w, 28, TRUE); x += w + 4; };
     auto sep = [&]() { x += 20; };
@@ -211,11 +210,9 @@ void layout() {
     py += 36;
     if (g.side_point_group_new) place_scrolled(g.side_point_group_new, points_left, py, (content_w - 6) / 2, 28, points_viewport_top, show_points);
     if (g.side_point_group_delete) place_scrolled(g.side_point_group_delete, points_left + (content_w - 6) / 2 + 6, py, (content_w - 6) / 2, 28, points_viewport_top, show_points);
-    const int points_range_y=py+44;
-    g.side_content_height_points = points_range_y+kFrequencyViewHeight;
-    const bool show_frequency=show_panel && (g.side_panel_tab==0 || show_points);
-    const int range_y=g.side_panel_tab==0 ? channels_range_y : points_range_y;
-    layout_frequency_view_controls(panel_x,active_viewport_top+range_y-g.side_scroll_y,content_w,
+    g.side_content_height_points = py+28;
+    const bool show_frequency=show_panel && g.side_panel_tab==0;
+    layout_frequency_view_controls(panel_x,channels_content_top+channels_range_y-g.side_scroll_y,content_w,
         active_viewport_top,viewport_bottom,show_frequency);
 
     const int previous_scroll=g.side_scroll_y;

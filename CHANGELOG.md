@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.17.4 (2026-10-16)
+
+Подробное описание: [v0.17.4, RU/EN](docs/releases/v0.17.4.md).
+Блок видимого диапазона оставлен только в «Каналах» Signal/FFT/АЧХ;
+из «Точек» убраны скрытый блок, пустое место и лишняя прокрутка.
+Удалены 20 неиспользуемых элементов: четыре функции, 13 полей и три таймера,
+чистое сокращение — 76 строк производственного C++. Номера команд, тестовые
+API и прежнее поведение legacy-команд сохранены. Обе штатные сборки успешны;
+8619 GUI-проверок прошли, 11 PNG до/после совпали по SHA-256. Отдельный
+идентичный снимок прошёл 1357 core-проверок. Новых замеров скорости нет.
+
+Visible range controls now appear only in Channels across Signal/FFT/FRF;
+Points has no hidden range reservation or extra scrolling. Removed twenty
+unused elements: four functions, thirteen fields and three timers, reducing
+production C++ by 76 lines. Command IDs, test APIs and legacy behavior are
+retained. Standard builds and 8619 GUI checks passed; all eleven PNGs matched
+byte for byte. An identical isolated snapshot passed 1357 core checks.
+No new cleanup performance measurements; see the full bilingual release notes.
+
 ## v0.17.3 (2026-10-16)
 
 Подробное описание: [v0.17.3, RU/EN](docs/releases/v0.17.3.md).

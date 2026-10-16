@@ -114,7 +114,6 @@ struct ExportPromptState {
     bool include_filter_settings = true;
     bool include_graph_settings = true;
     std::wstring title;
-    std::wstring intro;
     std::wstring save_mode_label_text;
     std::wstring save_original_text;
     std::wstring save_applied_text;

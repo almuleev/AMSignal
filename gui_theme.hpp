@@ -17,7 +17,6 @@ struct Theme {
     COLORREF text_primary, text_secondary;
     COLORREF accent, accent_hover, separator;
     COLORREF btn_bg, btn_border, btn_hover, btn_active;
-    COLORREF btn_pressed; // "pressed" look for active toggle buttons
     COLORREF playhead;
     COLORREF marker_color;
 };

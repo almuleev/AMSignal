@@ -207,8 +207,6 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
     }
     if (!source_preview) {
         g.cached_scan_path = wpath;
-        g.cached_scan_start = g.data_t0;
-        g.cached_scan_end = g.data_t1;
         g.cached_scan_valid = false;
         g.cached_scan_index.reset();
     }
@@ -242,7 +240,6 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
 bool apply_scanned_recording(AsyncScanResult& result) {
     if(!result.ok || !result.index || !result.source_metadata.ok)return false;
     g.cached_scan_path=result.path;g.cached_scan_valid=true;g.cached_scan_index=result.index;
-    g.cached_scan_start=result.range_start;g.cached_scan_end=result.range_end;
     if(!apply_loaded_dataset(std::move(result.source_metadata),result.path,true,0,false,
         lvm::RecordingStamp{result.index->file_size,result.index->modified}))return false;
     g.recording_rows=result.source_rows;
@@ -325,7 +322,6 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                 try{cache=recording_disk_cache();}catch(const std::exception&){}
                 bool discovered=false;
                 const auto discover=[&](lvm::ScanIndex* capture,std::size_t index_limit) {
-                    const auto metadata_started=std::chrono::steady_clock::now();
                     // Discover channels across the complete recording: a column
                     // matching time only in the prefix must not be discarded.
                     auto admission=memory_budget->reserve(16ULL*1024*1024);
@@ -390,8 +386,6 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                     };
                     auto metadata=lvm::read_lvm_file(std::filesystem::path(path_copy),read);
                     if(!metadata.ok)throw std::runtime_error(metadata.error);
-                    result->metadata_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-metadata_started).count();
-                    const auto prepare_started=std::chrono::steady_clock::now();
                     seed.names=std::move(metadata.names);seed.generated_names=std::move(metadata.generated_names);
                     seed.source_columns=std::move(metadata.source_columns);seed.export_comments=std::move(metadata.export_comments);
                     seed.frequency_axis=metadata.frequency_axis;seed.stats=metadata.stats;seed.ok=true;
@@ -428,14 +422,11 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                     if(std::filesystem::file_size(path_copy,ec)!=index.file_size || ec ||
                        std::filesystem::last_write_time(path_copy,ec)!=index.modified || ec)
                         throw lvm::RecordingFailure(lvm::RecordingError::SourceChanged,"The source changed while opening. Reopen it.");
-                    result->prepare_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-prepare_started).count();
                     discovered=true;
                 };
                 lvm::ScanIndexCacheOptions options;options.budget=memory_budget;
                 options.scan=[&](lvm::ScanIndex& index,std::size_t limit,std::string&) {discover(&index,limit);return true;};
-                const auto index_started=std::chrono::steady_clock::now();
                 auto scanned=lvm::scan_index_cached(std::filesystem::path(path_copy),std::move(cache),options,cancel_flag.get());
-                result->index_seconds=std::max(0.0,std::chrono::duration<double>(std::chrono::steady_clock::now()-index_started).count()-result->metadata_seconds-result->prepare_seconds);
                 result->index=std::move(scanned.index);result->index_from_disk_cache=scanned.from_cache;
                 result->range_start=result->index->range_start;result->range_end=result->index->range_end;result->ok=true;
                 if(!discovered)discover(nullptr,0);
@@ -619,8 +610,6 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             g.cached_scan_path = result->path;
-            g.cached_scan_start = result->range_start;
-            g.cached_scan_end = result->range_end;
             g.cached_scan_valid = true;
             g.cached_scan_index = result->index;
             bool accepted=false;

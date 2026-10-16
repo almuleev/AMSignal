@@ -210,22 +210,6 @@ const wchar_t* side_channel_hint_text() {
     return filter_section_title_text();
 }
 
-const wchar_t* side_formula_apply_selected_text() {
-    return (g_str == &kEn) ? L"Apply to selected" : L"К выбранному";
-}
-
-const wchar_t* side_formula_apply_visible_text() {
-    return (g_str == &kEn) ? L"Apply to visible" : L"К видимым";
-}
-
-const wchar_t* side_formula_reset_selected_text() {
-    return (g_str == &kEn) ? L"Reset selected" : L"Сбросить канал";
-}
-
-const wchar_t* side_formula_reset_all_text() {
-    return (g_str == &kEn) ? L"Reset all channels" : L"Сбросить все каналы";
-}
-
 const wchar_t* side_point_group_delete_text() {
     return (g_str == &kEn) ? L"Delete group" : L"Удалить группу";
 }

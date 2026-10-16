@@ -386,26 +386,12 @@ void load_side_transform_controls() {
     if (g.side_global_formula_apply) EnableWindow(g.side_global_formula_apply, has_data());
     const int ci = g.side_selected_channel;
     const bool valid = ci >= 0 && ci < static_cast<int>(g.ds.channel_count());
-    if (g.side_formula_edit) {
-        const wchar_t* text = default_formula.c_str();
-        if (valid && static_cast<std::size_t>(ci) < g.channel_formulas.size()) {
-            text = formulas_ready
-                ? g.channel_formulas[static_cast<std::size_t>(ci)].c_str()
-                : default_formula.c_str();
-        }
-        SetWindowTextW(g.side_formula_edit, text);
-        EnableWindow(g.side_formula_edit, has_data());
-    }
     for (std::size_t i = 0; i < g.channel_coefficient_edits.size(); ++i) {
         HWND edit = g.channel_coefficient_edits[i];
         if (edit && GetFocus() != edit) SetWindowTextW(edit, channel_coefficient_text(i).c_str());
         if (edit) EnableWindow(edit, has_data());
     }
     if (g.side_channel_color) EnableWindow(g.side_channel_color, valid);
-    if (g.side_formula_apply_selected) EnableWindow(g.side_formula_apply_selected, valid);
-    if (g.side_formula_apply_visible) EnableWindow(g.side_formula_apply_visible, has_data());
-    if (g.side_formula_reset_selected) EnableWindow(g.side_formula_reset_selected, valid);
-    if (g.side_formula_reset_all) EnableWindow(g.side_formula_reset_all, has_data());
     sync_filter_controls_from_state();
 }
 
@@ -573,10 +559,6 @@ void refresh_side_panel_controls() {
     if (g.side_point_color_current) SetWindowTextW(g.side_point_color_current, point_current_color_button_text());
     if (g.side_point_group_color) SetWindowTextW(g.side_point_group_color, point_selected_group_color_button_text());
     if (g.side_point_label_groups) SetWindowTextW(g.side_point_label_groups, point_group_list_title());
-    if (g.side_formula_apply_selected) SetWindowTextW(g.side_formula_apply_selected, side_formula_apply_selected_text());
-    if (g.side_formula_apply_visible) SetWindowTextW(g.side_formula_apply_visible, side_formula_apply_visible_text());
-    if (g.side_formula_reset_selected) SetWindowTextW(g.side_formula_reset_selected, side_formula_reset_selected_text());
-    if (g.side_formula_reset_all) SetWindowTextW(g.side_formula_reset_all, side_formula_reset_all_text());
 
     const struct ToggleMap { int id; bool value; const wchar_t* text; } point_toggles[] = {
         {IDC_SIDE_PT_NUM, g.pdisp.number, side_pt_num_text()},

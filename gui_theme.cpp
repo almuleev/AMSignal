@@ -31,7 +31,6 @@ const Theme kLightTheme = {
     RGB(200, 208, 218),   // btn_border
     RGB(230, 235, 242),   // btn_hover
     RGB(0, 120, 212),     // btn_active
-    RGB(170, 175, 180),   // btn_pressed
     RGB(220, 40, 40),     // playhead
     RGB(200, 0, 0),       // marker_color
 };
@@ -55,7 +54,6 @@ const Theme kDarkTheme = {
     RGB(75, 80, 90),      // btn_border
     RGB(70, 75, 85),      // btn_hover
     RGB(0, 150, 255),     // btn_active
-    RGB(20, 25, 35),      // btn_pressed
     RGB(255, 60, 60),     // playhead
     RGB(255, 80, 80),     // marker_color
 };

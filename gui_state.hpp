@@ -308,8 +308,6 @@ struct App : DocumentState {
     unsigned long long async_load_token = 0;
     std::shared_ptr<std::atomic<bool>> async_load_cancel_flag;
     std::wstring cached_scan_path;
-    double cached_scan_start = 0.0;
-    double cached_scan_end = 0.0;
     bool cached_scan_valid = false;
     std::shared_ptr<const lvm::ScanIndex> cached_scan_index;
     std::vector<std::wstring> recent_files;
@@ -355,7 +353,6 @@ struct App : DocumentState {
     COLORREF status_detail_color = RGB(0, 0, 0);
     std::wstring status_tooltip_text;
     std::wstring hover_status_text;  // shown in status bar when hovering toolbar buttons
-    std::vector<int> toolbar_seps;
 
     bool side_panel_visible = true;
     int side_panel_tab = 0; // 0 = channels, 1 = points, 2 = filter
@@ -387,12 +384,7 @@ struct App : DocumentState {
     HWND side_global_formula_apply = nullptr;
     HWND side_channel_separator = nullptr;
     HWND side_channel_formula_label = nullptr;
-    HWND side_formula_edit = nullptr;
     HWND side_channel_color = nullptr;
-    HWND side_formula_apply_selected = nullptr;
-    HWND side_formula_apply_visible = nullptr;
-    HWND side_formula_reset_selected = nullptr;
-    HWND side_formula_reset_all = nullptr;
     std::vector<HWND> channel_coefficient_edits;
     HWND side_point_group_list = nullptr;
     HWND side_point_group_visible = nullptr;

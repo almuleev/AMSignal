@@ -2172,8 +2172,9 @@ void frequency_view_controls() {
     for(int tab:{0,1}) {
         set_side_panel_tab(tab);layout();
         g.side_scroll_y=g.side_scroll_max;layout();
-        require(shown(g.side_frequency_apply) && IsWindowEnabled(g.side_frequency_apply),"spectrum frequency range is available on Channels and Points");
+        require(shown(g.side_frequency_apply)==(tab==0) && IsWindowEnabled(g.side_frequency_apply),"spectrum range is available only on Channels");
     }
+    set_side_panel_tab(0);
     require(!(GetWindowLongPtrW(g.side_frequency_low,GWL_EXSTYLE)&WS_EX_CLIENTEDGE),"frequency edits use the application's compact border");
     SetWindowTextW(g.side_frequency_low,L"8");SetWindowTextW(g.side_frequency_high,L"64");
     g.freq_start=2;set_status();
@@ -2189,7 +2190,7 @@ void frequency_view_controls() {
     require(!IsWindowEnabled(g.side_frequency_apply) && !set_visible_frequency_range(8,64),"pending spectrum cannot change a stale range");
     g.spec_pending=false;
     set_side_panel_tab(2);layout();require(!shown(g.side_frequency_apply),"Filter hides the frequency view block");
-    g.mode=AnalysisMode::Time;set_side_panel_tab(1);g.side_scroll_y=g.side_scroll_max;layout();
+    g.mode=AnalysisMode::Time;set_side_panel_tab(0);g.side_scroll_y=g.side_scroll_max;layout();
     require(shown(g.side_frequency_apply) && label(g.side_frequency_low_label)==L"From, s","Signal uses the same bottom block with time units");
     const auto time_generation=g.spec_generation,time_revision=g.numerical_revision;
     const bool selected_before=has_fft_window();g.stitch_time_gaps=true;
@@ -2205,12 +2206,12 @@ void frequency_view_controls() {
     g.frf.options.estimator=lvm::FrfEstimator::Direct;g.main=nullptr;set_mode(AnalysisMode::FRF);g.main=window.hwnd;
     require(g.frf.result.ok,"frequency view fixture has a real FRF");
     const auto frf_generation=g.frf.generation;const auto transfer=g.frf.result.common().transfer;
-    set_side_panel_tab(1);layout();
+    set_side_panel_tab(0);layout();
     g.side_scroll_y=g.side_scroll_max;layout();
-    require(shown(g.side_frequency_apply) && !shown(g.frf_panel),"FRF Points exposes frequency range without the calculation panel");
+    require(shown(g.side_frequency_apply) && shown(g.frf_panel),"FRF Channels exposes the range below its calculation panel");
     SetWindowTextW(g.side_frequency_low,L"4");SetWindowTextW(g.side_frequency_high,L"32");
     SendMessageW(g.side_frequency_apply,BM_CLICK,0,0);
-    near(g.frf.frequency_start,4,"Points changes the shared FRF view start");near(g.frf.frequency_end,32,"Points changes the shared FRF view end");
+    near(g.frf.frequency_start,4,"Channels changes the shared FRF view start");near(g.frf.frequency_end,32,"Channels changes the shared FRF view end");
     require(g.frf.generation==frf_generation && g.frf.result.common().transfer==transfer,"FRF view range preserves calculated transfer values");
     require(!set_visible_frequency_range(0,32),"FRF range preserves the non-DC lower limit");
     for(const Strings* language:{&kRu,&kEn}) {
@@ -2219,7 +2220,11 @@ void frequency_view_controls() {
         require(!GetDlgItem(g.frf_panel,7110) && label(g.side_frequency_apply)==frequency_view_apply_text(),"FRF has no duplicate native range controls");
         require(label(g.side_frequency_title)==(language==&kRu ? L"Видимый диапазон" : L"Visible range"),"common range heading is localized");
     }
-    set_side_panel_tab(1);g.side_panel_visible=false;layout();
+    for(AnalysisMode mode:{AnalysisMode::Time,AnalysisMode::FFT,AnalysisMode::FRF}) {
+        g.mode=mode;set_side_panel_tab(1);g.side_scroll_y=g.side_scroll_max;refresh_side_panel_controls();
+        for(HWND control:g.side_frequency_controls)require(!shown(control),"Points hides the entire range block in every mode, including after scroll/refresh");
+    }
+    g.side_panel_visible=false;layout();
     require(!shown(g.side_frequency_apply),"hiding the side panel hides the common range controls");
     g_str=&kEn;
 }

@@ -116,14 +116,6 @@ const wchar_t* side_channel_color_button_text();
 
 const wchar_t* side_channel_hint_text();
 
-const wchar_t* side_formula_apply_selected_text();
-
-const wchar_t* side_formula_apply_visible_text();
-
-const wchar_t* side_formula_reset_selected_text();
-
-const wchar_t* side_formula_reset_all_text();
-
 const wchar_t* side_point_group_delete_text();
 
 const wchar_t* side_point_group_rename_text();
