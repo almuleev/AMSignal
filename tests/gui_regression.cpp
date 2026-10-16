@@ -2684,6 +2684,88 @@ void background_document_overview() {
     require(close_active_document() && !g.overview.pending && !g.overview.view,"closing the last document discards its overview state");
 }
 
+void analysis_preempts_background_overview() {
+    const auto path=test_dir/"analysis-overview-priority.txt";
+    const auto cache=test_dir/"analysis-overview-priority.bin";
+    {std::ofstream out(path);out<<"Time\tA\tB\n";
+     for(int i=0;i<256;++i)out<<i<<'\t'<<i%17<<'\t'<<i%23<<'\n';}
+    reset_document({"A","B"},{0,255},{{0,0},{0,0}});
+    g.main=CreateWindowExW(WS_EX_NOACTIVATE,L"STATIC",L"Analysis priority test",WS_POPUP,
+        -10000,-10000,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(g.main!=nullptr,"analysis priority fixture creates a hidden GUI owner");
+    struct Cleanup {HWND window;~Cleanup(){DestroyWindow(window);g.main=nullptr;}} cleanup{g.main};
+    g.source_path=path.wstring();g.ds.source_columns={1,2};
+    g.recording_source=lvm::RecordingSource::from_file(path,{0,255},{1,2});
+    g.recording_rows=256;g.overview.render_enabled=true;
+    g.frf.inputs={0};g.frf.outputs={1};g.frf.options.segment_length=64;
+    const auto source=g.recording_source;const auto revision=g.numerical_revision;
+    const auto wait=[&] {
+        const auto start=std::chrono::steady_clock::now();
+        while(g.overview.pending && std::chrono::steady_clock::now()-start<std::chrono::seconds(10)) {
+            poll_recording_overview();Sleep(1);
+        }
+        require(!g.overview.pending && !g.overview.error,"mode-switch overview completes");
+    };
+    require(request_recording_overview(cache,lvm::AnalysisRange::entire(),{0,1},4,true),
+            "mode-switch fixture prepares a reusable source overview");wait();
+    std::size_t pixels=4;
+    for(const auto mode:{AnalysisMode::FFT,AnalysisMode::FRF}) {
+        const auto index=g.overview.index;const auto view=g.overview.view;
+        pixels*=2;
+        require(request_recording_overview(cache,lvm::AnalysisRange::entire(),{0,1},pixels,true) && g.overview.pending,
+                "a different density can be pending while the old view remains usable");
+        const auto generation=g.overview.generation;
+        set_mode(mode);
+        require(!g.overview.pending && g.overview.generation!=generation,
+                "entering FFT or FRF cancels pending Signal refinement");
+        require(g.overview.index==index && g.overview.view==view && g.recording_source==source,
+                "analysis retains the ready overview and original source");
+        require(!poll_recording_overview() && g.overview.view==view,
+                "a cancelled overview cannot publish a late replacement in analysis mode");
+        require(g.numerical_revision==revision && g_undo.empty() && g_redo.empty(),
+                "overview cancellation changes neither numerical input nor history");
+        const auto analysis_start=std::chrono::steady_clock::now();
+        while((mode==AnalysisMode::FFT ? g.spec_pending : g.frf.pending) &&
+              std::chrono::steady_clock::now()-analysis_start<std::chrono::seconds(10)) {
+            if(mode==AnalysisMode::FFT) {
+                if(auto result=g_spectrum_worker.take_result())apply_spectrum_result(std::move(result->spectrum));
+            } else poll_frf_result();
+            Sleep(1);
+        }
+        if(mode==AnalysisMode::FFT)
+            require(g.spec_valid && g.spec.n==256,"FFT still analyses every original sample after overview cancellation");
+        else
+            require(g.frf.result.ok && !g.frf.result.responses.empty() && g.frf.result.responses[0].sample_count==256,
+                    "FRF still analyses every original sample after overview cancellation");
+        set_mode(AnalysisMode::Time);
+        require(synchronize_overview_viewport(pixels),
+                "returning to Signal resubmits cancelled density even when the old range matches");wait();
+        require(g.overview.index==index && g.overview.view!=view && g.overview.view->pixel_columns==pixels,
+                "the same worker and index produce the requested view after returning");
+    }
+    const auto generation=g.overview.generation;const auto view=g.overview.view;
+    require(!synchronize_overview_viewport(pixels) && g.overview.generation==generation && g.overview.view==view,
+            "a completed matching Signal view is reused without another request");
+    set_mode(AnalysisMode::FFT);set_mode(AnalysisMode::Time);
+    require(g.overview.view==view && !synchronize_overview_viewport(pixels),
+            "leaving and returning with no pending refinement reuses the completed view");
+    for(const auto mode:{AnalysisMode::FFT,AnalysisMode::FRF}) {
+        cancel_recording_overview();g.overview={};g.overview.render_enabled=true;
+        require(request_recording_overview(cache,lvm::AnalysisRange::entire(),{0,1},32,true),
+                "a first overview can be pending before any index is published");
+        require(!g.overview.index && !g.overview.view,"the pending first overview has no published aggregates");
+        set_mode(mode);
+        require(!g.overview.pending && !g.overview.index && !g.overview.view && !poll_recording_overview(),
+                "entering analysis cancels an unpublished first overview without publishing partial state");
+        set_mode(AnalysisMode::Time);
+        require(synchronize_overview_viewport(32),"returning to Signal restarts the cancelled first overview");wait();
+        require(g.overview.index && g.overview.view && g.overview.view->sample_count==256 &&
+                g.overview.index->source()==source && g.numerical_revision==revision,
+                "the reusable worker restores a complete source view after first-build cancellation");
+    }
+    cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};
+}
+
 void overview_renderer() {
     const auto path=test_dir/"renderer.txt",cache=test_dir/"renderer.bin";
     {std::ofstream out(path);out<<"Time\tA\tB\n"<<std::setprecision(17);
@@ -3860,6 +3942,7 @@ int main(int argc,char** argv) {
         document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); global_gap_markers_setting(); multiple_open_documents(); processing(); fft_recording_recovery();
         display_load_budget(); loading_window_ownership(); bounded_load_recovery(); document_source_and_resources(); background_document_overview(); overview_renderer(); resource_settings_and_load_ownership(); configurable_point_cursor(); analysis_admission_and_publication(); persistent_recording_cache(); filter_bound_crossing(); resident_envelope_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
         persistent_filter_continuations();background_filtered_resident_view();adaptive_opening_and_cache();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
+        analysis_preempts_background_overview();
         user_axis_names_outside_plot();
         spectrum_pending_message();
         channel_legend_visibility();

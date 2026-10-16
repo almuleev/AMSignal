@@ -31,6 +31,7 @@
 #include "gui_theme.hpp"
 #include "gui_window.hpp"
 #include "gui_analysis_source.hpp"
+#include "gui_overview.hpp"
 
 namespace gui {
 
@@ -819,6 +820,9 @@ void set_mode(AnalysisMode mode) {
     if (mode != AnalysisMode::Time) {
         stop_play();
         hide_gap_details_card();
+        // Hidden Signal refinement must not compete with FFT/FRF source reads.
+        // Keep the ready index/view and the reusable worker for the return trip.
+        cancel_recording_overview();
     }
     if (mode == AnalysisMode::FRF) {
         if (g.frf.inputs.empty() || g.frf.outputs.empty()) {

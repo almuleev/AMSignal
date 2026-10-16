@@ -91,6 +91,9 @@ bool request_recording_overview(const std::filesystem::path& cache,lvm::Analysis
 }
 void cancel_recording_overview() {
     cancel_overview_snap();
+    // A retained older view can match the range but not the cancelled density
+    // or channel request. Force that refinement to be resubmitted on return.
+    if(g.overview.pending)g.overview.requested_pixels=0;
     g_overview_worker.cancel();g.overview.pending=false;g.overview.progress_percent=-1;
     g.overview.generation=++next_generation;g.overview.error.reset();
 }

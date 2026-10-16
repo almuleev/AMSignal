@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.17.5 (2026-10-16)
+
+Подробное описание: [v0.17.5, RU/EN](docs/releases/v0.17.5.md).
+При переходе из Signal в FFT/АЧХ отменяется ненужный фоновый обзор,
+сохраняются готовые index/view и рабочий поток. Отменённое уточнение
+повторно запрашивается при возврате, готовый вид переиспользуется.
+1357 core / 8654 GUI-проверки прошли; все 28 групп полных FFT/H1
+в Auto и Manual 64 MiB совпали с эталоном. В контрольной паре с pending
+overview первый FFT 8.3187 → 1.9168 с; это не универсальный процент.
+Прежние +52% уточнены как эффект перекрытия задач, не регрессия ядра FFT.
+
+FFT/FRF mode changes cancel unnecessary Signal overview work while retaining
+ready index/view objects and the reusable worker. Cancelled refinement resumes
+on return; ready views are reused. 1357 core / 8654 GUI checks passed, and all
+28 complete FFT/H1 result groups matched the baseline in Auto/Manual 64 MiB.
+One controlled pending-overview pair improved first FFT from 8.3187 to 1.9168 s;
+this is not a universal speedup. The earlier +52% reflects overlapping tasks,
+not an established FFT kernel regression. See the full bilingual notes.
+
 ## v0.17.4 (2026-10-16)
 
 Подробное описание: [v0.17.4, RU/EN](docs/releases/v0.17.4.md).
