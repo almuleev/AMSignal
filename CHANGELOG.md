@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.17.7 (2026-10-17)
+
+Тематические меню и стрелки подменю, выровненные флажки ролей АЧХ,
+контрастный прицел точек с размером по умолчанию 21 px. Фигуры различают
+кривые для Ч/Б-печати при сплошных линиях и образцах легенды. Обновлены
+иллюстрации RU/EN и регрессионные проверки. Новых замеров скорости нет;
+EXE без цифровой подписи. [Полный журнал RU/EN](docs/releases/v0.17.7.md).
+
+Themed popup menus and submenu arrows, centered FRF role checkmarks,
+theme-aware point cursor with a 21 px default. Grayscale symbols identify
+curves while paths and legend samples remain solid. Updated RU/EN images
+and regression coverage. No new performance measurements; executables are
+unsigned. See the full bilingual notes above.
+
 ## v0.17.6 (2026-10-17)
 
 Документационный выпуск: новая главная с тремя режимами, полные RU/EN инструкции,
