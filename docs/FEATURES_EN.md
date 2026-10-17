@@ -73,11 +73,11 @@ Processing order: **global formula → individual channel processing → digital
 
 ## Curve symbols for grayscale printing
 
-Enable **View → Curve symbols for grayscale**. Channels receive distinct symbols and line patterns so readers can identify them without relying on colour.
+Enable **View → Curve symbols for grayscale**. Channels receive distinct symbols so readers can identify them without relying on colour.
 
 ![Two responses in the light theme with triangles and diamonds](assets/screenshots/print-en.png)
 
-The scene shows two responses over 1–1.12 s: triangles, diamonds and line patterns remain distinct when printed in grayscale. Coloured curves remain coloured; the option adds identifying symbols and line patterns. Press `D` to switch theme.
+The scene shows two responses over 1–1.12 s: triangles and diamonds remain distinct when printed in grayscale. Coloured curves remain coloured; the option adds identifying symbols while keeping solid lines. Press `D` to switch theme.
 
 ## PNG for a report
 

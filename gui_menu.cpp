@@ -230,6 +230,10 @@ void draw_owner_draw_menu(const DRAWITEMSTRUCT* dis) {
         SelectObject(dis->hDC, old_brush);
         DeleteObject(arrow_pen);
         DeleteObject(arrow_brush);
+        // Windows draws its submenu arrow after WM_DRAWITEM, even for
+        // MF_OWNERDRAW. Keep that second glyph off our themed item. The
+        // menu manager restores the DC before drawing the next item.
+        ExcludeClipRect(dis->hDC, r.left, r.top, r.right, r.bottom);
     }
     SelectObject(dis->hDC, old_font);
 }

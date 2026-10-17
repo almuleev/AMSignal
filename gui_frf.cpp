@@ -306,7 +306,9 @@ void draw_role_menu(HWND window,HDC dc) {
             HBRUSH hover=CreateSolidBrush(dark ? g_theme->btn_hover : GetSysColor(COLOR_HIGHLIGHT));
             FillRect(dc,&item,hover); DeleteObject(hover);
         }
-        RECT check{item.left+3,item.top+2,item.left+23,item.bottom-2};
+        constexpr int check_size=16;
+        const int check_top=item.top+(g_frf_role_menu.row_height-check_size)/2;
+        RECT check{item.left+3,check_top,item.left+3+check_size,check_top+check_size};
         if (theme) {
             DrawThemeBackground(theme,dc,MENU_POPUPCHECKBACKGROUND,disabled ? MCB_DISABLED : MCB_NORMAL,&check,nullptr);
             if (checked) DrawThemeBackground(theme,dc,MENU_POPUPCHECK,disabled ? MC_CHECKMARKDISABLED : MC_CHECKMARKNORMAL,&check,nullptr);

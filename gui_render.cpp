@@ -227,9 +227,9 @@ void draw_user_axis_names(HDC dc, const RECT& p, AnalysisMode mode) {
     RestoreDC(dc, saved);
 }
 
-int curve_pen_style(std::size_t curve_index) {
-    static constexpr int styles[] = {PS_SOLID, PS_DASH, PS_DOT, PS_DASHDOT, PS_DASHDOTDOT};
-    return styles[curve_index % (sizeof(styles) / sizeof(styles[0]))];
+int curve_pen_style(std::size_t) {
+    // Symbols identify curves in grayscale; keep their paths continuous at crossings.
+    return PS_SOLID;
 }
 
 void draw_curve_symbol(HDC dc, int x, int y, std::size_t curve_index, COLORREF color, int radius) {

@@ -302,7 +302,7 @@ struct App : DocumentState {
     lvm::ResourcePolicy resource_policy;
     bool disk_cache_unlimited = false;
     unsigned disk_cache_mib = 2048;
-    int point_cursor_size = 31;
+    int point_cursor_size = 21;
     bool show_gap_markers = true; // Application preference shared by every document.
     AsyncLoadStage async_load_stage = AsyncLoadStage::None;
     unsigned long long async_load_token = 0;

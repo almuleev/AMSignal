@@ -52,6 +52,7 @@ using namespace gui;
 #include <iomanip>
 #include <psapi.h>
 #include <future>
+#include <set>
 #ifdef near
 #undef near
 #endif
@@ -892,6 +893,94 @@ void analysis_range_edge_magnet() {
     }
 }
 
+void curve_symbols_keep_solid_paths() {
+    reset_document({"A","B","C","D","E","F"},{0,1},
+        {{1,1},{2,2},{3,3},{4,4},{5,5},{6,6}});
+    g.distinguish_curves=true;g.auto_y=false;g.y_lock_min=0;g.y_lock_max=7;
+    g.show_channel_legend=false;
+    HDC dc=CreateCompatibleDC(nullptr);
+    HBITMAP bitmap=CreateBitmap(480,360,1,32,nullptr);
+    const auto old=SelectObject(dc,bitmap);
+    const RECT plot{60,30,400,310};
+    draw_time(dc,plot);
+    for(int channel=0;channel<6;++channel) {
+        const int y=plot.bottom-(channel+1)*40;
+        bool continuous=true;
+        for(int x=80;x<380;++x)
+            continuous=continuous && GetPixel(dc,x,y)==channel_color(channel);
+        require(continuous,"every curve-symbol channel keeps a continuous line between its symbols");
+    }
+    SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);
+}
+
+void submenu_arrow_theme() {
+    HDC dc=CreateCompatibleDC(nullptr);
+    HBITMAP bitmap=CreateBitmap(300,32,1,32,nullptr);
+    const auto old=SelectObject(dc,bitmap);
+    const auto previous_theme=g_theme;
+    for(const auto* theme:{&kLightTheme,&kDarkTheme})
+        for(const auto* label:{L"Недавние файлы",L"Открытые файлы"})
+            for(UINT state:{0u,static_cast<UINT>(ODS_SELECTED),static_cast<UINT>(ODS_DISABLED)}) {
+                g_theme=theme;
+                OwnerDrawMenuEntry entry{label,L"",false,true};
+                DRAWITEMSTRUCT item{};item.CtlType=ODT_MENU;item.hDC=dc;
+                item.rcItem={0,0,300,32};item.itemState=state;
+                item.itemData=reinterpret_cast<ULONG_PTR>(&entry);
+                const int saved=SaveDC(dc);
+                draw_owner_draw_menu(&item);
+                const int drawn=SaveDC(dc);
+                SelectClipRgn(dc,nullptr);
+                const COLORREF foreground=state&ODS_DISABLED ? theme->text_secondary : theme->text_primary;
+                const COLORREF background=state&ODS_SELECTED ? theme->btn_hover : theme->bg_toolbar;
+                require(GetPixel(dc,289,16)==foreground && GetPixel(dc,282,16)==background,
+                    "submenu arrows use theme text and hover colours in both themes");
+                std::vector<COLORREF> before;
+                for(int y=0;y<32;++y)for(int x=278;x<300;++x)before.push_back(GetPixel(dc,x,y));
+                RestoreDC(dc,drawn);
+                RECT native_arrow{278,0,300,32};
+                DrawFrameControl(dc,&native_arrow,DFC_MENU,DFCS_MENUARROW);
+                SelectClipRgn(dc,nullptr);
+                bool unchanged=true;std::size_t index=0;
+                for(int y=0;y<32;++y)for(int x=278;x<300;++x)
+                    unchanged=unchanged && GetPixel(dc,x,y)==before[index++];
+                require(unchanged,"native submenu glyph cannot overwrite the themed arrow after owner drawing");
+                RestoreDC(dc,saved);
+            }
+    g_theme=previous_theme;SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);
+}
+
+void line_menu_theme() {
+    reset_document({"A"},{0,1,2},{{-1,0,1}});
+    struct Observation { bool opened=false; bool themed=false; int items=0; } observation;
+    HWND owner=CreateWindowExW(0,L"STATIC",L"Line menu owner",WS_POPUP,
+        100,100,300,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(owner!=nullptr,"line popup has an owner");
+    SetWindowSubclass(owner,[](HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR data)->LRESULT {
+        if(message==WM_INITMENUPOPUP) {
+            auto& seen=*reinterpret_cast<Observation*>(data);
+            const auto menu=reinterpret_cast<HMENU>(wp);
+            MENUINFO info{};info.cbSize=sizeof(info);info.fMask=MIM_BACKGROUND;
+            LOGBRUSH brush{};
+            seen.opened=true;seen.items=GetMenuItemCount(menu);
+            seen.themed=GetMenuInfo(menu,&info) && info.hbrBack &&
+                GetObjectW(info.hbrBack,sizeof(brush),&brush)==sizeof(brush) &&
+                brush.lbColor==g_theme->bg_toolbar;
+        }
+        return DefSubclassProc(hwnd,message,wp,lp);
+    },1,reinterpret_cast<DWORD_PTR>(&observation));
+    const auto previous_theme=g_theme;
+    g.line_menu_btn=owner;
+    for(const auto* theme:{&kLightTheme,&kDarkTheme}) {
+        g_theme=theme;observation={};
+        const auto timer=SetTimer(owner,0,10,[](HWND,UINT,UINT_PTR,DWORD){EndMenu();});
+        handle_commands_message(owner,WM_COMMAND,IDC_LINE_MENU,0);
+        KillTimer(owner,timer);
+        require(observation.opened && observation.items==3 && observation.themed,
+            "the actual three-item line popup uses the active theme for its native margins");
+    }
+    DestroyWindow(owner);g.line_menu_btn=nullptr;g_theme=previous_theme;
+}
+
 void exact_line_dialog() {
     reset_document({"A"},{0,1,2},{{-1,0,1}});
     const auto instance=GetModuleHandleW(nullptr);
@@ -1713,7 +1802,19 @@ void frf_integration() {
         SendMessageW(g.frf_panel,WM_COMMAND,MAKEWPARAM(7101,BN_CLICKED),0);
         role_menu=FindWindowW(L"AMSignalFrfRoleMenu",nullptr);
         require(role_menu!=nullptr && IsWindowVisible(role_menu),"FRF role menu opens in the dark theme");
-        SendMessageW(role_menu,WM_PAINT,0,0);
+        RedrawWindow(role_menu,nullptr,nullptr,RDW_INVALIDATE|RDW_UPDATENOW);
+        HDC role_dc=GetDC(role_menu);
+        const int row_height=std::max(GetSystemMetrics(SM_CYMENU),20);
+        const int check_top=2+row_height+(row_height-16)/2;
+        int check_left=30,check_right=-1,check_bottom=-1,check_first_y=check_top+16;
+        for(int y=2+row_height;y<2+2*row_height;++y)for(int x=3;x<26;++x)
+            if(GetPixel(role_dc,x,y)==g_theme->frame) {
+                check_left=std::min(check_left,x);check_right=std::max(check_right,x);
+                check_first_y=std::min(check_first_y,y);check_bottom=std::max(check_bottom,y);
+            }
+        ReleaseDC(role_menu,role_dc);
+        require(check_right-check_left+1==16 && check_bottom-check_first_y+1==16 && check_first_y==check_top,
+            "FRF role checkboxes render as compact 16 px squares centered in their rows");
         SendMessageW(g.frf_panel,WM_COMMAND,MAKEWPARAM(7101,BN_CLICKED),0);
         require(!IsWindow(role_menu),"the dark FRF role menu also closes on a repeated control click");
         g_theme=&kLightTheme;
@@ -2034,12 +2135,15 @@ LRESULT CALLBACK shortcut_test_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,U
 void additional_mode_hotkeys() {
     reset_document({"A"},{0,.01,.02,.03},{{1,2,3,4}});
     const auto defaults=default_hotkeys();const auto order=hotkey_command_order();
-    for(std::size_t i=0;i<defaults.size();++i) {
-        const auto& a=defaults[i];
+    std::set<int> commands;
+    std::set<std::pair<BYTE,WORD>> shortcuts;
+    for(const auto& a:defaults) {
         require(a.key!=0 && std::count(order.begin(),order.end(),a.command)==1,"every default is listed once in shortcut settings");
-        for(std::size_t j=0;j<i;++j)
-            require(a.command!=defaults[j].command && (a.key!=defaults[j].key || a.fvirt!=defaults[j].fvirt),"default shortcuts and command IDs are unique");
+        commands.insert(a.command);
+        shortcuts.emplace(a.fvirt,a.key);
     }
+    require(commands.size()==defaults.size(),"default shortcut command IDs are unique");
+    require(shortcuts.size()==defaults.size(),"default key and modifier combinations are unique");
     g.hotkeys=defaults;
     for(const auto* language:{&kRu,&kEn}) {
         g_str=language;const auto help=hotkeys_body_text();
@@ -2286,7 +2390,9 @@ void verify_filter_slider_paint(HWND window) {
                 const int y=(thumb.top+thumb.bottom)/2;
                 SendMessageW(track,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM((thumb.left+thumb.right)/2,y));
                 require(GetCapture()==track,"native filter slider captures a held thumb drag");
-                for(int step=0;step<16;++step) {
+                // Two round trips retain abrupt jumps, reversals and repeated
+                // repainting while capture is held, without 16 redundant moves.
+                for(int step=0;step<4;++step) {
                     const int before=paints;
                     const int x=step%2 ? 15+step : client.right-15-step;
                     SendMessageW(track,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(x,y));
@@ -3073,8 +3179,8 @@ void resource_settings_and_load_ownership() {
         SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_POINT_CURSOR_SIZE,CBN_SELCHANGE),reinterpret_cast<LPARAM>(cursor_size));
         require(g.point_cursor_size==63,"choosing the largest cursor applies it immediately");
         SendMessageW(g.settings_wnd,WM_COMMAND,MAKEWPARAM(IDC_SET_POINT_CURSOR_RESET,BN_CLICKED),0);
-        require(g.point_cursor_size==31 && SendMessageW(cursor_size,CB_GETCURSEL,0,0)==3,
-            "cursor reset restores the current 31 px default and its selected entry");
+        require(g.point_cursor_size==21 && SendMessageW(cursor_size,CB_GETCURSEL,0,0)==1,
+            "cursor reset restores the current 21 px default and its selected entry");
         RECT cursor_rect{},client{};GetWindowRect(cursor_size,&cursor_rect);GetClientRect(g.settings_wnd,&client);
         POINT bottom{cursor_rect.right,cursor_rect.bottom};ScreenToClient(g.settings_wnd,&bottom);
         require(cursor_rect.top>hotkeys_rect.bottom && bottom.y<client.bottom,
@@ -3113,10 +3219,21 @@ void configurable_point_cursor() {
     ReleaseDC(nullptr,screen);const auto old=SelectObject(dc,bitmap);
     struct Cleanup {HDC dc;HBITMAP bitmap;HGDIOBJ old;~Cleanup(){SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);}} cleanup{dc,bitmap,old};
     const COLORREF background=RGB(63,92,117);HBRUSH brush=CreateSolidBrush(background);
+    const auto previous_theme=g_theme;
+    std::array<HCURSOR,std::size(point_cursor_sizes)> light_cursors{};
+    for(const auto* theme:{&kLightTheme,&kDarkTheme,&kLightTheme}) {
+    g_theme=theme;
+    const COLORREF ink=theme==&kDarkTheme ? RGB(255,255,255) : RGB(0,0,0);
+    const COLORREF outline=theme==&kDarkTheme ? RGB(0,0,0) : RGB(255,255,255);
     for(int size:point_cursor_sizes) {
         require(set_point_cursor_size(size),"every offered cursor size is accepted");
         HCURSOR cursor=point_placement_cursor();ICONINFO info{};
         require(cursor && cursor==point_placement_cursor() && GetIconInfo(cursor,&info),"each cursor size reuses its owned native handle");
+        const auto index=static_cast<std::size_t>(std::find(std::begin(point_cursor_sizes),std::end(point_cursor_sizes),size)-std::begin(point_cursor_sizes));
+        if(theme==&kLightTheme) {
+            require(!light_cursors[index] || cursor==light_cursors[index],"switching back to light theme reuses its cursor");
+            light_cursors[index]=cursor;
+        } else require(cursor!=light_cursors[index],"dark theme owns a separate inverted cursor for every size");
         const int dimension=size<=31 ? 32 : 64,center=dimension/2;
         require(info.xHotspot==static_cast<DWORD>(center) && info.yHotspot==static_cast<DWORD>(center),
             "all cursor sizes keep the click hotspot at the exact center");
@@ -3125,26 +3242,30 @@ void configurable_point_cursor() {
         RECT canvas{0,0,64,64};FillRect(dc,&canvas,brush);DrawIconEx(dc,0,0,cursor,dimension,dimension,0,nullptr,DI_NORMAL);
         bool center_filled=true;
         for(int y=center-1;y<=center+1;++y)for(int x=center-1;x<=center+1;++x)
-            center_filled=center_filled && GetPixel(dc,x,y)==RGB(0,0,0);
+            center_filled=center_filled && GetPixel(dc,x,y)==ink;
         require(center_filled && GetPixel(dc,center+3,center)==background,
             "the slightly larger 3x3 center retains an open gap around the target");
         const int arm=center+(size-1)/2-2;
-        require(GetPixel(dc,center,arm)==RGB(0,0,0) && GetPixel(dc,center+1,arm)==RGB(255,255,255) &&
-            GetPixel(dc,center+2,arm)==background,"cursor arms stay one black pixel wide with a one-pixel white outline");
+        require(GetPixel(dc,center,arm)==ink && GetPixel(dc,center+1,arm)==outline &&
+            GetPixel(dc,center+2,arm)==background,"cursor arms and outline invert with the theme and stay one pixel wide");
         int left=64,top=64,right=-1,bottom=-1;
         for(int y=0;y<dimension;++y)for(int x=0;x<dimension;++x)if(GetPixel(dc,x,y)!=background) {
             left=std::min(left,x);top=std::min(top,y);right=std::max(right,x);bottom=std::max(bottom,y);
         }
         require(right-left+1==size && bottom-top+1==size,"the selected size matches the actual visible cursor bounds");
     }
+    }
+    g_theme=previous_theme;
     DeleteObject(brush);
     require(!set_point_cursor_size(0) && !set_point_cursor_size(18) && g.point_cursor_size==63,
         "unsupported cursor sizes cannot replace the current choice");
     require(set_point_cursor_size(49),"a nondefault size can be saved");save_runtime_settings_now();
-    g.point_cursor_size=31;load_runtime_settings();require(g.point_cursor_size==49,"cursor size persists in INI");
+    g.point_cursor_size=21;load_runtime_settings();require(g.point_cursor_size==49,"cursor size persists in INI");
     WritePrivateProfileStringW(L"ui",L"point_cursor_size",L"18",g_config_path.c_str());load_runtime_settings();
-    require(g.point_cursor_size==31,"invalid saved cursor sizes fall back to 31 px");
-    set_point_cursor_size(31);
+    require(g.point_cursor_size==21,"invalid saved cursor sizes fall back to 21 px");
+    WritePrivateProfileStringW(L"ui",L"point_cursor_size",nullptr,g_config_path.c_str());load_runtime_settings();
+    require(g.point_cursor_size==21,"missing saved cursor size defaults to 21 px");
+    set_point_cursor_size(21);
 }
 
 void analysis_admission_and_publication() {
@@ -3945,6 +4066,9 @@ int main(int argc,char** argv) {
         analysis_preempts_background_overview();
         user_axis_names_outside_plot();
         spectrum_pending_message();
+        line_menu_theme();
+        submenu_arrow_theme();
+        curve_symbols_keep_solid_paths();
         channel_legend_visibility();
         shift_range_with_point_mode();analysis_range_edge_editing();analysis_range_edge_magnet();exact_line_dialog();offscreen_marker_lines();marker_value_readouts();playback_timeline_controls();routed_window_messages();
         measurement_label_units();

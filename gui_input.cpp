@@ -35,10 +35,12 @@ HCURSOR point_placement_cursor() {
         std::array<bool,std::size(point_cursor_sizes)> attempted{};
         ~TargetCursors() { for(auto handle:handles)if(handle)DestroyCursor(handle); }
     };
-    static TargetCursors cursors;
+    static std::array<TargetCursors,2> themed_cursors;
+    const bool dark=g_theme==&kDarkTheme;
+    auto& cursors=themed_cursors[dark ? 1 : 0];
     std::size_t index=0;
     while(index<std::size(point_cursor_sizes) && point_cursor_sizes[index]!=g.point_cursor_size)++index;
-    if(index==std::size(point_cursor_sizes))index=3; // 31 px default.
+    if(index==std::size(point_cursor_sizes))index=1; // 21 px default.
     auto& handle=cursors.handles[index];
     if(!cursors.attempted[index]) {
         cursors.attempted[index]=true;
@@ -46,7 +48,7 @@ HCURSOR point_placement_cursor() {
         const int center=dimension/2,stride=dimension/8,half=(size-1)/2;
         std::array<unsigned char,512> mask,image{};mask.fill(0xff);
         // Thin one-pixel arms; a 3x3 center has the same exact central hotspot.
-        // The white outline remains one pixel at every selected size.
+        // The contrasting outline remains one pixel at every selected size.
         const auto ink=[&](int x,int y) {
             const int gap=std::max(5,half*2/5);
             return (std::abs(x)<=1 && std::abs(y)<=1) ||
@@ -61,7 +63,7 @@ HCURSOR point_placement_cursor() {
             const auto bit=static_cast<unsigned char>(0x80>>(x%8));
             const int offset=y*stride+x/8;
             mask[offset]&=static_cast<unsigned char>(~bit);
-            if(!ink(x-center,y-center))image[offset]|=bit;
+            if(ink(x-center,y-center)==dark)image[offset]|=bit;
         }
         handle=CreateCursor(GetModuleHandleW(nullptr),center,center,dimension,dimension,mask.data(),image.data());
     }

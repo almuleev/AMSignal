@@ -289,8 +289,8 @@ void load_runtime_settings() {
     g.visual_smooth = read_ini_int(L"ui", L"smoothing", g.visual_smooth ? 1 : 0) != 0;
     g.distinguish_curves = read_ini_int(L"ui", L"curve_symbols", g.distinguish_curves ? 1 : 0) != 0;
     g.show_marker_values = read_ini_int(L"ui", L"show_marker_values", g.show_marker_values ? 1 : 0) != 0;
-    const int cursor_size=read_ini_int(L"ui",L"point_cursor_size",31);
-    g.point_cursor_size=31;
+    const int cursor_size=read_ini_int(L"ui",L"point_cursor_size",21);
+    g.point_cursor_size=21;
     for(int size:point_cursor_sizes)if(cursor_size==size)g.point_cursor_size=size;
     g.vertical_pan = read_ini_int(L"ui", L"vertical_pan", g.vertical_pan ? 1 : 0) != 0;
     g.snap_to_data = read_ini_int(L"ui", L"snap_to_data", g.snap_to_data ? 1 : 0) != 0;

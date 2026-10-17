@@ -8,20 +8,20 @@ These images use AMSignal's native Win32/GDI drawing and real controls with the 
 
 ## Build / Сборка
 
-Captured 2026-10-17 from the isolated documentation-release checkout based on `v0.17.5-1-g2660b65-dirty`. Application sources are identical to v0.17.5 and are retained in the v0.17.6 documentation release. Separate pending interface changes are excluded. This is native documentation rendering, not a capture or verification of the previously published executable. No production source was changed for these images.
+Local working snapshot based on `v0.17.5-1-g2660b65-dirty`, captured 2026-10-17. This is a documentation rendering of the working code, not a capture or verification of the published v0.17.5 executable. No production source was changed for these images.
 
-Кадры от 17.10.2026 получены в изолированном checkout документационного выпуска на основе `v0.17.5-1-g2660b65-dirty`. Исходники приложения совпадают с v0.17.5 и сохраняются в документационном выпуске v0.17.6. Отдельные незавершённые правки интерфейса не включены. Это нативная отрисовка для документации, а не съёмка или проверка прежнего опубликованного EXE. Для кадров производственные исходники не менялись.
+Локальный рабочий снимок на основе `v0.17.5-1-g2660b65-dirty`, изображения от 17.10.2026. Это отрисовка рабочего кода для документации, а не съёмка или проверка опубликованного EXE v0.17.5. Для кадров производственные исходники не менялись.
 
 SHA-256 of the documentation rendering executable / EXE отрисовки документации:
 
 ```text
-fa4dd19e21abf4ca85a6e64eb7d783acfa2f4b5c2a49e13fab07b419d67c62ad
+cff179070b54af4fd366d3ec9a01ec7cfb1eefbb2d930abe7d6fbe73c7219775
 ```
 
 SHA-256 of the compiled `gui_render.cpp` source / исходника отрисовки:
 
 ```text
-e4673b0982688a1c395e8f9bedb8a66d022cd22191694c3627748e5c69674bb4
+2801dab75076a561f6d0ac468a4713c5631222e213621b6935975b8a842093d1
 ```
 
 ## Data / Данные

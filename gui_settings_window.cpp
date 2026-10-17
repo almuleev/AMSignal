@@ -386,7 +386,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     }
                     return 0;
                 case IDC_SET_POINT_CURSOR_RESET:
-                    if(HIWORD(wp)==BN_CLICKED) {set_point_cursor_size(31);refresh_point_cursor_size(hwnd);}
+                    if(HIWORD(wp)==BN_CLICKED) {set_point_cursor_size(21);refresh_point_cursor_size(hwnd);}
                     return 0;
                 case IDC_SET_DISK_UNLIMITED:
                 case IDC_SET_DISK_APPLY:

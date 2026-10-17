@@ -956,6 +956,9 @@ void test_frf_streaming() {
             visit(std::vector<double>(times.begin()+at,times.begin()+std::min(times.size(),at+65536)),{});
     };
     check(lvm::inspect_frf_timeline(timeline).sample_dt==lvm::typical_sample_spacing(steps),"external cadence sort preserves the majority-gap cluster rule");
+    // Only the cadence sort needs multiple external runs. Keep filter coverage
+    // across all families, resets and chunk boundaries on a smaller fixture.
+    times.resize(32768);
     std::vector<double> signal(times.size());
     for(std::size_t i=0;i<signal.size();++i)signal[i]=std::sin(.017*i);
     times[1000]+=1; // Acquisition discontinuity; block boundaries are unrelated.

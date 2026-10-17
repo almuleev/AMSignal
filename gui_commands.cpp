@@ -135,6 +135,14 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     return 0;
                 case IDC_LINE_MENU: {
                     HMENU menu = CreatePopupMenu();
+                    // Owner drawing covers the items, but the native popup also
+                    // paints margins around them using its menu background.
+                    HBRUSH background = CreateSolidBrush(g_theme->bg_toolbar);
+                    MENUINFO info{};
+                    info.cbSize = sizeof(info);
+                    info.fMask = MIM_BACKGROUND;
+                    info.hbrBack = background;
+                    SetMenuInfo(menu, &info);
                     OwnerDrawMenuEntry vertical{menu_text(g_str == &kEn ? L"Vertical line" : L"Вертикальная линия",IDM_ADD_VLINE), L""};
                     OwnerDrawMenuEntry horizontal{menu_text(g_str == &kEn ? L"Horizontal line" : L"Горизонтальная линия",IDM_ADD_HLINE), L""};
                     OwnerDrawMenuEntry exact{menu_text(guide_prompt_title_text(),IDM_ADD_LINE_EXACT), L""};
@@ -148,6 +156,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
                         r.left, r.bottom, 0, hwnd, nullptr);
                     DestroyMenu(menu);
+                    DeleteObject(background);
                     if (command) SendMessageW(hwnd, WM_COMMAND, command, 0);
                     return 0;
                 }
