@@ -6,6 +6,10 @@ These images use AMSignal's native Win32/GDI drawing and real controls with the 
 
 Кадры получены нативным Win32/GDI-кодом AMSignal и настоящими контролами на синтетическом примере. Отдельная точка входа для документации загружает исходник штатным парсером, рассчитывает FFT/FRF штатным анализом и рисует клиентскую область приложения в bitmap. Рамка Windows и строка меню находятся за пределами этой области. Курсор не отрисовывается; кривые и подписи не ретушировались и не генерировались ИИ. Изображения экспорта записаны собственной функцией PNG приложения.
 
+The rendering procedure and build information below apply to the synthetic demonstration scenes. The separate user-provided menu screenshot is described at the end.
+
+Описанный ниже способ отрисовки и сведения о сборке относятся к сценам синтетического примера. Отдельный пользовательский скриншот меню описан в конце.
+
 ## Build / Сборка
 
 Local working snapshot based on `v0.17.5-1-g2660b65-dirty`, captured 2026-10-17. This is a documentation rendering of the working code, not a capture or verification of the published v0.17.5 executable. No production source was changed for these images.
@@ -57,3 +61,9 @@ Each scene has matching `-en.png` and `-ru.png` versions / Каждая сцен
 FRF export metadata confirmed N=32768, L=2048, K=31, two reference indices and two response indices. The recording is synthetic; these images do not constitute a physical experiment, release certification or a performance benchmark.
 
 Метаданные экспорта FRF подтверждают N=32768, L=2048, K=31, два индекса опор и два индекса откликов. Запись синтетическая; изображения не являются физическим экспериментом, аттестацией выпуска или замером производительности.
+
+## Open-document menu / Меню открытых документов
+
+`documents-menu-ru.png` is the user's first supplied screenshot, copied without editing on 2026-10-17. It shows three open recordings, the active-document dot and the close command in the Russian interface. Its application version and source recordings were not independently verified; the synthetic-scene build and data hashes above do not apply to it.
+
+`documents-menu-ru.png` — первый предоставленный пользователем скриншот, скопирован без изменений 17.10.2026. На нём видны три открытые записи, отметка активного документа и команда закрытия в русском интерфейсе. Версия приложения и исходные записи отдельно не проверялись; сведения о сборке и хэши данных синтетического примера выше к нему не относятся.

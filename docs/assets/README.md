@@ -7,7 +7,7 @@
 | Asset | Purpose and provenance / Назначение и происхождение |
 | --- | --- |
 | `github-banner.png` | User-selected cover, copied from the updated Baner_line copy.png without editing / Выбранная пользователем обложка, копия обновлённого Baner_line copy.png без изменений |
-| `screenshots/` | Native interface rendering and actual PNG exports; [manifest](screenshots/README.md) / Нативная отрисовка интерфейса и настоящий экспорт PNG; [описание](screenshots/README.md) |
+| `screenshots/` | Native interface rendering, actual PNG exports and a user-provided menu screenshot; [manifest](screenshots/README.md) / Нативная отрисовка интерфейса, настоящий экспорт PNG и пользовательский скриншот меню; [описание](screenshots/README.md) |
 | `analysis-workflow-en.svg`, `analysis-workflow-ru.svg` | Editable workflow diagrams / Редактируемые схемы рабочего процесса |
 | `frf-roles-en.svg`, `frf-roles-ru.svg` | Explanatory role diagrams, not numerical results / Поясняющие схемы ролей, не численные результаты |
 
