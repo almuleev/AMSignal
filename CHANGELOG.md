@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.17.6 (2026-10-17)
+
+Документационный выпуск: новая главная с тремя режимами, полные RU/EN инструкции,
+изображения без курсора, демонстрация двух опор и двух откликов, перенос окружения,
+пояснения замеров скорости и обновлённое оформление GitHub. Исходники приложения
+и тестов не изменены относительно v0.17.5; отдельные локальные правки не включены.
+GUI/CLI пересобираются с версией 0.17.6. [Полный журнал RU/EN](docs/releases/v0.17.6.md).
+
+Documentation release: refreshed three-mode main page, matching RU/EN guides,
+cursor-free images, two-reference/two-response example, portability guidance,
+benchmark conditions and GitHub presentation. Application and test sources are
+unchanged from v0.17.5; separate local edits are excluded. GUI/CLI are rebuilt as
+0.17.6. See the full bilingual notes above.
+
 ## v0.17.5 (2026-10-16)
 
 Подробное описание: [v0.17.5, RU/EN](docs/releases/v0.17.5.md).

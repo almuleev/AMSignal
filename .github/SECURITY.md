@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | --- | --- |
-| v0.15.4 | Yes |
-| Earlier releases | No |
+| Latest published release | Report issues against this version first |
+| Earlier releases | Recheck against the latest release |
 
 ## Reporting a Vulnerability
 
@@ -26,8 +26,8 @@ include confidential measurement data in the report.
 
 | Версия | Поддерживается |
 | --- | --- |
-| v0.15.4 | Да |
-| Более ранние выпуски | Нет |
+| Последний опубликованный выпуск | В первую очередь сообщайте об ошибках этой версии |
+| Более ранние выпуски | Повторите проверку на последнем выпуске |
 
 ## Как сообщить об уязвимости
 

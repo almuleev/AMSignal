@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an improvement for the GUI, CLI or workflow
+description: Suggest a feature or workflow improvement / Предложить улучшение
 title: "[Feature] "
 labels:
   - enhancement

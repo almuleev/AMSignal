@@ -1,1 +1,8 @@
 blank_issues_enabled: true
+contact_links:
+  - name: Documentation / Документация
+    url: https://github.com/almuleev/AMSignal/tree/main/docs
+    about: Quick start, features and analysis notes / Быстрый старт, возможности и методика анализа
+  - name: Security / Безопасность
+    url: https://github.com/almuleev/AMSignal/blob/main/.github/SECURITY.md
+    about: Private vulnerability reporting / Закрытый канал для сообщений об уязвимостях

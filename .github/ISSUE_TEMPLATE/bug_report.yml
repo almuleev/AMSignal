@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem in the viewer or CLI
+description: Report a reproducible problem / Сообщить о воспроизводимой ошибке
 title: "[Bug] "
 labels:
   - bug
@@ -27,9 +27,17 @@ body:
     id: environment
     attributes:
       label: Environment / Окружение
-      placeholder: Windows version, release tag, compiler/build method if relevant
+      placeholder: "AMSignal version / версия; Windows version / версия Windows; build method if applicable / способ сборки"
+    validations:
+      required: true
+  - type: textarea
+    id: analysis
+    attributes:
+      label: Recording and analysis / Запись и анализ
+      description: "For FFT/FRF or large-file issues / Для ошибок FFT, АЧХ и больших файлов"
+      placeholder: "Format and size; channels; interval; filter/formula; FRF roles and L; Auto/Manual budget / Формат, размер, каналы, участок, обработка, роли АЧХ и L, бюджет памяти"
   - type: textarea
     id: notes
     attributes:
       label: Extra notes / Дополнительно
-      description: Screenshots, file samples, logs or anything else useful
+      description: "Screenshots, logs and a small non-sensitive sample / Скриншоты, журналы и небольшой пример без конфиденциальных данных"

@@ -1,147 +1,86 @@
 # AMSignal
 
 <p align="center">
-  <img src="docs/assets/github-banner-v2.png" alt="Time-domain, FFT and frequency-response views in AMSignal">
+  <img src="docs/assets/github-banner.png" width="100%" alt="AMSignal — signals, FFT and FRF">
+</p>
+
+<p align="center"><strong>A portable Windows application for measurement recordings.</strong><br>
+Signals, FFT, FRF and measurement annotations — from source data to a graph for your report.</p>
+
+<p align="center">
+  <a href="https://github.com/almuleev/AMSignal/releases/latest"><strong>Download for Windows</strong></a> ·
+  <a href="docs/QUICK_START_EN.md">Quick start</a> ·
+  <a href="docs/FEATURES_EN.md">Features</a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="README_RU.md">Русский</a>
 </p>
 
 <p align="center">
-  A fast native Windows workspace for LabVIEW signal data — from raw time series to FFT and frequency response.
-</p>
-
-<p align="center">
-  <a href="README_RU.md"><strong>Русский</strong></a>
-  &middot;
-  <a href="README_EN.md"><strong>English</strong></a>
-  &middot;
-  <a href="https://github.com/almuleev/AMSignal/releases/latest"><strong>Download latest release</strong></a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/github/v/release/almuleev/AMSignal?display_name=tag&sort=semver" alt="Latest release">
-  <img src="https://img.shields.io/github/license/almuleev/AMSignal" alt="GNU GPLv3 license">
-  <img src="https://img.shields.io/badge/platform-Windows-0078d4" alt="Platform">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GNU GPLv3"></a>
+  <img src="https://img.shields.io/badge/platform-Windows_x64-0078d4" alt="Windows x64">
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C" alt="C++17">
-  <img src="https://img.shields.io/badge/UI-Win32%20%2B%20GDI-1f2937" alt="Win32 GDI">
 </p>
 
-## A focused workspace for measurement data
+## What makes AMSignal useful
 
-`AMSignal` is a lightweight C++ application for engineers who need to inspect LabVIEW measurement logs quickly, without a heavyweight runtime. It opens `.lvm`, `.txt`, `.csv` and AMSignal `.AMSig` projects while preserving the original samples and time axis for analysis and export.
+- **Consistent response analysis.** Compare several responses against a shared reference over the same recording interval. Multiple reference channels can be averaged before estimation.
+- **A complete measurement workflow.** Load a recording → process channels → analyse → add measurement annotations → export a graph for a report.
+- **A workspace you can move.** Take the application, local settings and projects containing source samples to another Windows PC.
 
-The project includes two front ends built on one shared parsing and analysis core:
+## Three analysis modes
 
-  - `AMSignal-<version>-x64.exe` - native desktop viewer for interactive work
-- `Start GUI.bat` - obvious double-click launcher for the GUI in a release folder
-- `lvm_reader.exe` - CLI utility for inspection, FFT and export scenarios
+| Signal | Spectrum · FFT | Frequency response · FRF |
+| --- | --- | --- |
+| [![Signal in AMSignal](docs/assets/screenshots/signal-en.png)](docs/assets/screenshots/signal-en.png) | [![Spectrum in AMSignal](docs/assets/screenshots/fft-en.png)](docs/assets/screenshots/fft-en.png) | [![FRF with two references and two responses](docs/assets/screenshots/frf-en.png)](docs/assets/screenshots/frf-en.png) |
+| Time signals, zooming and original sample inspection. | Frequency content and channel spectrum comparisons. | Response transfer functions and a separate shared-reference spectrum. |
 
-## One measurement, three useful views
+Click an image to open it at full size. In the FRF example, **Reference A / Reference B** are averaged before H1/Welch; **Response A / Response B** have separate curves calculated over the same recording interval.
 
-| Time | FFT | FRF / frequency response |
-|---|---|---|
-| Inspect transients, gaps and channel relationships. | Find dominant frequencies and compare channels. | Compare Reference and Response channels with H1/Welch or Direct. |
-| Zoom, pan, playback and snapped measurement points. | Background calculation and cached channel results. | Multiple response curves, logarithmic frequency and coherence diagnostics. |
+The scenes show a local working build's native interface with a [synthetic recording](examples/README.md). [Gallery and explanations](docs/GALLERY_EN.md) · [Image provenance](docs/assets/screenshots/README.md).
 
-## What AMSignal gives you
+## Measurements and report figures
 
-- Opens LabVIEW `.lvm`, `.txt` and `.csv` signal files, plus AMSignal `.AMSig` projects
-- Switches between time-domain, FFT and FRF (frequency-response) views
-- Supports zoom, pan, playback, dark theme and live RU/EN switching
-- Lets you rename channels directly in the channel list
-- Provides markers, guide lines, snapped measurement points and undo/redo
-- Supports independent point groups with separate colours and visibility
-- Applies per-channel multipliers, formulas and digital filters without altering the source recording
-- Can visually stitch time gaps of resident and disk-source recordings while keeping original timestamps in measurements and export
-- Exports PNG, CSV, TXT and LVM from the viewer; FRF exports CSV and PNG
-- Includes sample files and regression tests in the repository
+![Three measurement points, a marker and guide lines in AMSignal](docs/assets/screenshots/measurements-en.png)
 
-> An exported FRF CSV contains frequency, dynamic coefficient, complex transfer, validity, coherence and calculation metadata. It is a result file: it cannot yet be reopened as an FRF document because it has no original time-domain samples.
+Place points on samples, measure coordinates and intervals, mark events and add vertical or horizontal guide lines. Annotations are saved in projects and included in PNG export.
 
-## Details that matter
+## More features
 
-- **v0.17.2:** [complete RU/EN changes since rc.3](docs/releases/v0.17.2.md), including faster cold opening and resident filtering/navigation, interface fixes, measured RAM costs and remaining disk slowdowns. Windows binaries are unsigned while SignPath approval is pending.
-- **FRF:** select independent, non-overlapping Reference and Response channels. AMSignal averages references before H1/Welch estimation, supports several Responses in one calculation and shows `KD = abs(H)` on a logarithmic frequency axis. Coherence remains a diagnostic value and is exported with the data.
-- **Large recordings:** adaptive full RAM storage or a complete disk overview, exact source measurements and a shared Analysis → Entire recording / Interval area for FFT and FRF. Formulas and causal filters use original samples. FFT uses RAM when admitted or exact temporary-disk computation; CSV/TXT/LVM and projects stream the source. Auto/manual budgets cover data and analysis while keeping system headroom; they are not process-wide memory caps. See [large-recording scope and limits](docs/LARGE_RECORDINGS_PLAN.md) and [rc.3 changes and verified performance](docs/releases/v0.17.0-rc.3.md).
-- **Export and recovery:** `Save as` offers a fully restorable `.AMSig` project, processed channels, or original channels. A project preserves raw samples and all restorable settings; Windows associates `.AMSig` with AMSignal for double-click opening after the app has run once. Signal CSV/TXT with a `Frequency` column reopens as a stored spectrum. PNG export adds a subtle `Generated by AMSignal` signature.
+- Digital filters, individual multipliers and a global channel formula.
+- FFT/FRF interval selection, channel names, colours and visibility.
+- Curve symbols for grayscale, light/dark themes and configurable shortcuts.
+- Large recordings: automatic RAM or disk-backed operation, with calculations using source samples.
 
-## Native workspace
+[All features with images and examples →](docs/FEATURES_EN.md)
 
-| Main workspace | Measurement groups in action |
-|---|---|
-| ![Main workspace](docs/assets/ui-overview-dark.png) | ![Measurement groups in action](docs/assets/ui-measurement-groups-dark.png) |
+## Performance in practice
 
-## Data previews
+Example GUI measurements for **v0.17.3**: a real **1.024 GB recording**, 6,832,000 samples × 8 channels, Auto with data resident in RAM.
 
-| Time-domain view | FFT view |
-|---|---|
-| ![Time-domain preview](docs/assets/preview-time.png) | ![FFT preview](docs/assets/preview-fft.png) |
+| Operation | Time |
+| --- | ---: |
+| Open the recording | 33.22 s |
+| Full raw FFT, one channel | 2.63 s |
+| First H1, seven responses | 1.82 s |
+| Repeat H1 with reused input preparation | 0.97 s |
 
-| Measurement point groups |
-|---|
-| ![Measurement groups preview](docs/assets/preview-point-groups.png) |
+Medians of three processes: Windows 10, Ryzen 5 5600X, 32 GiB RAM; OS cache was not cleared. H1: one reference, L=2048, Hann, 50% overlap, mean removal. Results describe that version; time depends on input, processing and resources. Disk-backed work can be substantially slower. [Method and memory costs →](docs/PERFORMANCE_EN.md)
 
-The interface screenshots above show the real application UI.
-The graph previews below were generated from the bundled sample dataset in [`lvm_files_for_tests`](lvm_files_for_tests).
+## Get started
 
-## Code signing policy
+1. Download the GUI EXE from the [latest release](https://github.com/almuleev/AMSignal/releases/latest) and run it from a writable folder.
+2. Open a LabVIEW `.lvm`, tabular `.txt` / `.csv`, or the [demonstration recording](examples/README.md).
+3. Analyse your data, save an `.AMSig` project to resume work, and export a PNG for your report.
 
-Free SignPath Foundation signing integration is prepared; enrollment and the
-first signed release are pending. Current downloads are not automatically signed.
-See the [code signing policy and activation steps](docs/CODE_SIGNING.md).
+No installer, LabVIEW or Qt is required. To move your workspace, copy the EXE, its adjacent `AMS.ini` and your projects. Save FRF roles, method and L separately in CSV or experiment notes. [Quick start](docs/QUICK_START_EN.md) · [Moving your workspace](docs/PORTABLE_EN.md).
 
-## Quick Start
+GitHub's **Source code** archives contain sources; the CLI can be [built separately](docs/BUILD_EN.md).
 
-### For end users
+## Documentation and project
 
-1. Open the [latest release](https://github.com/almuleev/AMSignal/releases/latest).
-2. Download the release archive.
-3. Double-click `Start GUI.bat` or `AMSignal-<version>-x64.exe`.
-4. Use `run.bat` only if you want the command-line analyzer.
+- [User manual](docs/manual/AMSignal_User_Manual_EN.md) · [Analysis assumptions and limitations](docs/ANALYSIS_EN.md).
+- [Documentation index](docs/README.md) · [Build and CLI](docs/BUILD_EN.md) · [Architecture — Russian](docs/ARCHITECTURE.md).
+- [Releases](https://github.com/almuleev/AMSignal/releases) · [Changelog](CHANGELOG.md).
+- [Report a bug](https://github.com/almuleev/AMSignal/issues) · [Contributing](CONTRIBUTING.md) · [Security](.github/SECURITY.md).
 
-The GUI is the main entry point for first-time users. The CLI helper is useful
-for scripted inspection, FFT and CSV export.
-
-### Build the GUI
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_gui.ps1
-```
-
-### Build the CLI and run tests
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_cli.ps1
-powershell -ExecutionPolicy Bypass -File .\build_gui.ps1 -Test
-```
-
-`make all test test-gui gui` is the equivalent MSYS2/MinGW command used by Windows CI.
-
-## Repository Layout
-
-| Path | Purpose |
-|---|---|
-| `gui_main.cpp` | Win32 entry point and message routing |
-| `gui_*.cpp/.hpp` | Separately compiled GUI modules; [architecture](docs/ARCHITECTURE.md) |
-| `export_helpers.cpp/.hpp` | Export prompt and tabular export helpers |
-| `formula_engine.cpp/.hpp` | Formula parsing and evaluation helpers |
-| `main.cpp` | CLI entry point |
-| `lvm_parser.cpp/.hpp` | LabVIEW file parser |
-| `analysis.cpp/.hpp` | Spectrum helpers and analysis |
-| `fft.cpp/.hpp` | FFT implementation |
-| `Start GUI.bat` | Main double-click launcher for the GUI |
-| `run.bat` | CLI helper launcher |
-| `package_release.ps1` | Builds a release folder and optional zip archive |
-| `tests/run_tests.cpp` | Regression tests |
-| `lvm_files_for_tests/` | Bundled sample input files |
-| `docs/assets/` | GitHub visuals and preview images |
-| `AGENTS.md`, `docs/ARCHITECTURE.md` | Agent working rules and current architecture map |
-
-## Documentation
-
-- [English documentation](README_EN.md)
-- [Русская документация](README_RU.md)
-- [Changelog](CHANGELOG.md)
-- [License](LICENSE)
-
-## License
-
-This project is distributed under the [GNU General Public License v3.0](LICENSE). Anyone may use, study, modify and redistribute it under the GPLv3 terms; distributed modified versions must remain under GPLv3 with corresponding source code available.
+[GNU GPLv3](LICENSE): use, study, modify and redistribute under the license terms.

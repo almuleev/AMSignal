@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Keep the documented demonstration checksum stable in Windows checkouts.
+examples/demo-signals.txt text eol=lf
+examples/generate_demo.py text eol=lf

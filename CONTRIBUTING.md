@@ -10,6 +10,10 @@ Thanks for your interest in improving `AMSignal`.
 
 ## Build
 
+Start with [Build and CLI](docs/BUILD_EN.md) ([русская версия](docs/BUILD_RU.md)).
+The [architecture map](docs/ARCHITECTURE.md) and [testing matrix](docs/development/TESTING.md)
+describe module ownership and the checks required for each change.
+
 ### GUI
 
 ```powershell
@@ -28,6 +32,9 @@ make test
 - Keep changes focused.
 - Mention behavioural changes clearly.
 - Update documentation when UI, hotkeys or export behaviour changes.
+- Keep the Russian and English user pages in sync; `README.md` is the English
+  project page and `README_RU.md` is its Russian counterpart. `README_EN.md`
+  preserves the previous entry link. See [documentation](docs/README.md).
 - If you touch parser or FFT logic, add or update tests where practical.
 
 ## Reporting Bugs
