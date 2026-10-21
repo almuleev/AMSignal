@@ -259,7 +259,51 @@ void exports() {
     require(content == "KEEP THIS FILE", "failed export preserves destination");
 }
 
+void frf_project_roundtrip() {
+    std::vector<double> t(1024),x(1024),z(1024),y(1024);
+    for(std::size_t i=0;i<t.size();++i) {t[i]=i/1024.;x[i]=std::sin(2*std::acos(-1.)*32*i/1024.);z[i]=3*x[i];y[i]=4*x[i];}
+    reset_document({"support A","support B","response"},t,{x,z,y});
+    g.frf.inputs={0,1};g.frf.outputs={2};g.frf.options.segment_length=128;
+    g.frf.options.remove_mean=false;g.frf.options.reference_threshold=2e-5;
+    g.frf.display_smoothing_octaves=1./3.;g.frf.apply_processing=false;
+    g.frf.auto_y=false;g.frf.y_min=.2;g.frf.y_max=3.;g.frf.frequency_start=8;g.frf.frequency_end=400;
+    g.fft_window_active=true;g.fft_window_start=t[128];g.fft_window_end=t[895];
+    g.global_formula=L"2*x";rebuild_formula_cache_from_state();
+    require(ensure_current_frf(),"project regression computes the original selected FRF");
+    const auto expected=g.frf.result.common();const auto path=test_dir/"frf_reproducible.AMSig";
+    g.frf.auto_y=false;g.frf.y_min=.2;g.frf.y_max=3.;
+    require(set_frf_frequency_range(8,400),"project regression selects physical viewing limits after calculation");
+    require(save_project_file(path.wstring()),"FRF configuration saves with raw project data");reopen(path,true);
+    require(g.frf.inputs==std::vector<int>{0,1} && g.frf.outputs==std::vector<int>{2},"project restores multiple reference and response identities");
+    require(g.frf.options.estimator==lvm::FrfEstimator::H1 && g.frf.options.segment_length==128 && !g.frf.options.remove_mean && !g.frf.apply_processing,"project restores estimator, L, mean and raw/processed choice");
+    near(g.frf.options.reference_threshold,2e-5,"project restores reference threshold");
+    near(g.frf.display_smoothing_octaves,1./3.,"project restores display smoothing");
+    require(g.fft_window_active && g.fft_window_start==t[128] && g.fft_window_end==t[895],"project restores the shared numerical interval");
+    require(!g.frf.auto_y && g.frf.y_min==.2 && g.frf.y_max==3. && g.frf.frequency_start==8 && g.frf.frequency_end==400 && g.frf.view_initialized,"project restores FRF viewing limits");
+    require(ensure_current_frf(),"reopened project recalculates without reselecting channels or parameters");
+    const auto& actual=g.frf.result.common();
+    require(actual.frequencies==expected.frequencies && actual.valid==expected.valid && actual.segment_length==expected.segment_length && actual.averages==expected.averages && actual.sample_count==expected.sample_count,"recalculation restores frequency grid and segment counts");
+    for(std::size_t k=0;k<actual.valid.size();++k)if(actual.valid[k])require(std::abs(actual.transfer[k]-expected.transfer[k])<1e-12,"reopened complex H agrees with original");
+    require(save_frf_csv((test_dir/"frf_passport.csv").wstring()),"FRF exports its analysis passport");
+    const auto exported=lvm::read_lvm_file(path);
+    require(std::find(exported.export_comments.begin(),exported.export_comments.end(),"application_version="+to_utf8(APP_VERSION_W))!=exported.export_comments.end(),"project records producing build version");
+    g.frf.options.estimator=lvm::FrfEstimator::Direct;g.frf.options.segment_length=0;g.frf.display_smoothing_octaves=0;
+    require(save_project_file(path.wstring()),"Direct Auto and unsmoothed project saves");reopen(path,true);
+    require(g.frf.options.estimator==lvm::FrfEstimator::Direct && !g.frf.options.segment_length && !g.frf.display_smoothing_octaves,"Direct Auto and unsmoothed state survive reopening");
+    require(ensure_current_frf(),"restored Direct project recalculates");
+    reset_document({"hidden","support","response"},t,{z,x,y});g.visible={0,1,1};g.frf.inputs={1};g.frf.outputs={2};
+    ExportOptions subset;subset.selected_range=ExportRangeMode::Whole;subset.apply_processing_to_data=false;subset.include_hidden_channels=false;
+    require(save_tabular_export((test_dir/"frf_subset.csv").wstring(),subset),"subset export writes remapped FRF roles");reopen(test_dir/"frf_subset.csv");
+    require(g.frf.inputs==std::vector<int>{0} && g.frf.outputs==std::vector<int>{1},"subset roles refer to exported columns");
+    reset_document({"A","B"},t,{x,y});
+    apply_export_metadata_from_comments({"[frf_settings]","references=1","responses=1","segment_length=-4","reference_threshold=nan"});
+    require(g.frf.inputs.empty() && g.frf.outputs.empty() && !g.frf.options.segment_length && g.frf.options.reference_threshold==1e-6,"invalid or overlapping FRF settings rejected");
+    apply_export_metadata_from_comments({"[graph_settings]","show_channel_legend=0"});
+    require(!g.show_channel_legend && g.frf.inputs.empty(),"legacy project remains readable");
+}
+
 void processing() {
+    frf_project_roundtrip();
     reset_document({"same","same"},{0,.1,.2,.3,.4,.5,.6,.7},{{1,0,-1,0,1,0,-1,0},{2,0,-2,0,2,0,-2,0}});
     compute_spectrum_for_window(0,.7,false);
     require(g.spec_channel_indices == std::vector<int>{0,1}, "duplicate names retain independent spectrum identities");

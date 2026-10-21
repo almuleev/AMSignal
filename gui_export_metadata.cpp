@@ -9,6 +9,16 @@
 #include "gui_text.hpp"
 
 namespace gui {
+namespace {
+void write_export_provenance(std::ostream& out,const char* nl) {
+    write_export_key_value(out,L"application_version",APP_VERSION_W,nl);
+    SYSTEMTIME utc{};GetSystemTime(&utc);
+    wchar_t stamp[32]{};
+    swprintf(stamp,32,L"%04u-%02u-%02uT%02u:%02u:%02uZ",utc.wYear,utc.wMonth,utc.wDay,
+             utc.wHour,utc.wMinute,utc.wSecond);
+    write_export_key_value(out,L"exported_utc",stamp,nl);
+}
+}
 
 std::wstring export_channel_label_text(std::size_t channel_index, bool include_names) {
     if (!include_names) {
@@ -102,6 +112,7 @@ void write_export_metadata(std::ostream& out,
         write_export_key_value(out, L"document_kind", L"amsignal_project", line_end);
     }
     write_export_key_value(out, L"text_encoding", L"percent_utf8", line_end);
+    write_export_provenance(out,line_end);
     write_export_key_value(out, L"range_mode", export_range_mode_key(opts.selected_range), line_end);
     write_export_key_value(out, L"range_source", actual_selected_range ? L"selected" : L"visible", line_end);
     write_export_key_value(out, L"data_mode", export_processing_mode_key(opts.apply_processing_to_data), line_end);
@@ -140,6 +151,11 @@ void write_export_metadata(std::ostream& out,
         write_export_key_value(out, L"auto_y_amp", g.auto_y_amp ? L"1" : L"0", line_end);
         write_export_key_value(out, L"y_amp_max", format_optional_edit_number(g.y_amp_max), line_end);
         write_export_key_value(out, L"frf_apply_processing", g.frf.apply_processing ? L"1" : L"0", line_end);
+        write_export_key_value(out,L"frf_auto_y",g.frf.auto_y ? L"1" : L"0",line_end);
+        write_export_key_value(out,L"frf_y_min",format_optional_edit_number(g.frf.y_min),line_end);
+        write_export_key_value(out,L"frf_y_max",format_optional_edit_number(g.frf.y_max),line_end);
+        write_export_key_value(out,L"frf_frequency_start",format_edit_number(g.frf.frequency_start),line_end);
+        write_export_key_value(out,L"frf_frequency_end",format_edit_number(g.frf.frequency_end),line_end);
         write_export_key_value(out, L"frf_logarithmic_frequency_axis", g.frf.logarithmic_frequency_axis ? L"1" : L"0", line_end);
         write_export_key_value(out, L"frf_show_reference_amplitude", g.frf.show_reference_amplitude ? L"1" : L"0", line_end);
         write_export_key_value(out, L"frf_reference_height_fraction", format_edit_number(g.frf.reference_height_fraction), line_end);
@@ -149,6 +165,29 @@ void write_export_metadata(std::ostream& out,
         write_export_key_value(out, L"play_speed", format_edit_number(g.play_speed), line_end);
         write_export_key_value(out, L"point_display", export_point_display_text(g.pdisp), line_end);
         write_export_comment(out, L"", line_end);
+    }
+
+    if(opts.include_graph_settings && !g.ds.frequency_axis) {
+        write_export_comment(out,L"[frf_settings]",line_end);
+        write_export_key_value(out,L"estimator",g.frf.options.estimator==lvm::FrfEstimator::H1 ? L"h1" : L"direct",line_end);
+        write_export_key_value(out,L"segment_length",std::to_wstring(g.frf.options.segment_length),line_end);
+        write_export_key_value(out,L"remove_mean",g.frf.options.remove_mean ? L"1" : L"0",line_end);
+        write_export_key_value(out,L"reference_threshold",to_w(numfmt(g.frf.options.reference_threshold)),line_end);
+        write_export_key_value(out,L"display_smoothing_octaves",to_w(numfmt(g.frf.display_smoothing_octaves)),line_end);
+        const auto role_list=[&](const std::vector<int>& roles) {
+            std::wstring value;
+            for(int channel:roles) {
+                if(channel<0)continue;
+                const auto found=std::find(exported_channels.begin(),exported_channels.end(),static_cast<std::size_t>(channel));
+                if(found==exported_channels.end())continue;
+                if(!value.empty())value+=L",";
+                value+=std::to_wstring(found-exported_channels.begin()+1);
+            }
+            return value;
+        };
+        write_export_key_value(out,L"references",role_list(g.frf.inputs),line_end);
+        write_export_key_value(out,L"responses",role_list(g.frf.outputs),line_end);
+        write_export_comment(out,L"",line_end);
     }
 
     if (opts.include_filter_settings) {
@@ -254,6 +293,7 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
         PointGroups,
         Markers,
         Guides,
+        Frf,
     };
 
     auto trim_copy = [](const std::string& text) {
@@ -399,6 +439,7 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
         if (section == "[point_groups]") return ExportSection::PointGroups;
         if (section == "[markers]") return ExportSection::Markers;
         if (section == "[guides]") return ExportSection::Guides;
+        if (section == "[frf_settings]") return ExportSection::Frf;
         return ExportSection::None;
     };
     auto parse_indexed_line = [&](const std::string& text, const char* prefix, int& out_index, std::string& tail) {
@@ -426,6 +467,25 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
     int last_time_group = -1;
     int last_freq_group = -1;
     int last_frf_group = -1;
+    std::vector<int> references,responses;
+    bool have_references=false,have_responses=false,valid_roles=true;
+    bool have_frf_start=false,have_frf_end=false;
+    const auto parse_roles=[&](const std::string& value,std::vector<int>& roles) {
+        roles.clear();
+        if(value.empty())return true;
+        std::size_t start=0;
+        while(start<value.size()) {
+            const auto end=value.find(',',start);
+            int index=0;
+            if(!parse_int(value.substr(start,end==std::string::npos ? end : end-start),index) ||
+               index<=0 || static_cast<std::size_t>(index)>g.ds.channel_count() ||
+               std::find(roles.begin(),roles.end(),index-1)!=roles.end())return false;
+            roles.push_back(index-1);
+            if(end==std::string::npos)return true;
+            start=end+1;
+        }
+        return false;
+    };
 
     for (const std::string& raw_comment : comments) {
         const std::string line = trim_copy(raw_comment);
@@ -438,6 +498,33 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
             continue;
         }
         if (section == ExportSection::None) continue;
+
+        if(section==ExportSection::Frf && !g.ds.frequency_axis) {
+            const auto eq=line.find('=');
+            if(eq==std::string::npos)continue;
+            const auto key=lower_copy(trim_copy(line.substr(0,eq)));
+            const auto value=trim_copy(line.substr(eq+1));
+            if(key=="estimator") {
+                if(value=="h1")g.frf.options.estimator=lvm::FrfEstimator::H1;
+                else if(value=="direct")g.frf.options.estimator=lvm::FrfEstimator::Direct;
+            } else if(key=="segment_length") {
+                int length=0;
+                if(parse_int(value,length) && (length==0 || (length>=4 && length<=100000000 && length%2==0)))
+                    g.frf.options.segment_length=static_cast<std::size_t>(length);
+            } else if(key=="remove_mean")parse_bool(value,g.frf.options.remove_mean);
+            else if(key=="reference_threshold") {
+                double threshold=0;
+                if(parse_double(value,threshold) && threshold>0 && threshold<1)g.frf.options.reference_threshold=threshold;
+            } else if(key=="display_smoothing_octaves") {
+                double width=0;
+                if(parse_double(value,width) && width>=0 && width<=1)g.frf.display_smoothing_octaves=width;
+            } else if(key=="references") {
+                have_references=true;valid_roles=parse_roles(value,references) && valid_roles;
+            } else if(key=="responses") {
+                have_responses=true;valid_roles=parse_roles(value,responses) && valid_roles;
+            }
+            continue;
+        }
 
         if (section == ExportSection::Export) {
             const std::size_t eq = line.find('=');
@@ -508,6 +595,16 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
                 parse_double(value, g.y_amp_max);
             } else if (key == "frf_apply_processing") {
                 parse_bool(value, g.frf.apply_processing);
+            } else if(key=="frf_auto_y") {
+                parse_bool(value,g.frf.auto_y);
+            } else if(key=="frf_y_min") {
+                parse_double(value,g.frf.y_min);
+            } else if(key=="frf_y_max") {
+                parse_double(value,g.frf.y_max);
+            } else if(key=="frf_frequency_start") {
+                have_frf_start=parse_double(value,g.frf.frequency_start);
+            } else if(key=="frf_frequency_end") {
+                have_frf_end=parse_double(value,g.frf.frequency_end);
             } else if (key == "frf_logarithmic_frequency_axis") {
                 parse_bool(value, g.frf.logarithmic_frequency_axis);
             } else if (key == "frf_show_reference_amplitude") {
@@ -700,6 +797,16 @@ void apply_export_metadata_from_comments(const std::vector<std::string>& comment
         }
     }
 
+    if(have_references && have_responses && valid_roles) {
+        for(int channel:references)
+            if(std::find(responses.begin(),responses.end(),channel)!=responses.end())valid_roles=false;
+        if(valid_roles) {g.frf.inputs=std::move(references);g.frf.outputs=std::move(responses);}
+    }
+    if(have_frf_start && have_frf_end && g.frf.frequency_start>0 && g.frf.frequency_end>g.frf.frequency_start) {
+        g.frf.log_start=std::log10(g.frf.frequency_start);
+        g.frf.log_end=std::log10(g.frf.frequency_end);
+        g.frf.view_initialized=true;
+    }
     if (!point_groups.empty()) {
         g.point_groups = std::move(point_groups);
         g.time_active_point_group = active_time_group >= 0 ? active_time_group : last_time_group;
@@ -738,10 +845,13 @@ void write_frf_metadata(std::ostream& out) {
     write_export_key_value(out, L"data_kind", L"frf", nl);
     write_export_key_value(out, L"schema_version", L"1", nl);
     write_export_key_value(out, L"text_encoding", L"percent_utf8", nl);
+    write_export_provenance(out,nl);
     write_export_key_value(out, L"source_file", export_metadata_text(g.file_name), nl);
     write_export_comment(out, L"[frf]", nl);
     write_export_key_value(out, L"estimator", r.options.estimator==lvm::FrfEstimator::H1 ? L"h1_welch" : L"direct_y_over_x", nl);
     write_export_key_value(out, L"segment_length", std::to_wstring(r.segment_length), nl);
+    write_export_key_value(out,L"segment_length_requested",std::to_wstring(r.options.segment_length),nl);
+    write_export_key_value(out,L"display_smoothing_octaves",to_w(numfmt(s.display_smoothing_octaves)),nl);
     write_export_key_value(out, L"averages", std::to_wstring(r.averages), nl);
     write_export_key_value(out, L"overlap_samples", std::to_wstring(r.overlap_samples), nl);
     write_export_key_value(out, L"overlap_fraction", to_w(numfmt(static_cast<double>(r.overlap_samples)/r.segment_length)), nl);

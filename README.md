@@ -72,7 +72,7 @@ Medians of three processes: Windows 10, Ryzen 5 5600X, 32 GiB RAM; OS cache was 
 2. Open a LabVIEW `.lvm`, tabular `.txt` / `.csv`, or the [demonstration recording](examples/README.md).
 3. Analyse your data, save an `.AMSig` project to resume work, and export a PNG for your report.
 
-No installer, LabVIEW or Qt is required. To move your workspace, copy the EXE, its adjacent `AMS.ini` and your projects. Save FRF roles, method and L separately in CSV or experiment notes. [Quick start](docs/QUICK_START_EN.md) · [Moving your workspace](docs/PORTABLE_EN.md).
+No installer, LabVIEW or Qt is required. To move your workspace, copy the EXE, its adjacent `AMS.ini` and your projects. Starting with v0.17.8-cpu.2, projects save FRF roles, method and L; older projects need CSV or experiment notes. [Quick start](docs/QUICK_START_EN.md) · [Moving your workspace](docs/PORTABLE_EN.md).
 
 GitHub's **Source code** archives contain sources; the CLI can be [built separately](docs/BUILD_EN.md).
 

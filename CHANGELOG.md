@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.17.8-cpu.2 (2026-10-21)
+
+Проекты сохраняют условия повторного расчёта АЧХ: роли каналов, H1/Direct,
+L, удаление среднего, порог опоры, сглаживание и границы отображения.
+Метаданные экспорта содержат версию приложения и UTC-время; CSV АЧХ также
+записывает запрошенный L и сглаживание. Сохранены CPU-изменения родительского
+v0.17.8-cpu.1, включая исправление амплитуды опоры на Найквисте.
+Полный набор ядра: 1405 утверждений; GUI: 7193, без ошибок.
+Новых замеров производительности нет. Локальный тег исходников;
+публикация и новый комплект EXE не выполнялись.
+[Полный журнал RU/EN](docs/releases/v0.17.8-cpu.2.md).
+
+Projects preserve FRF recalculation settings, channel roles, estimator,
+requested L, mean removal, reference threshold, smoothing and view bounds.
+Export metadata records the application version and UTC timestamp; FRF CSV
+also records requested L and display smoothing. Includes the parent CPU
+changes and Nyquist reference-amplitude correction. Full core: 1405 assertions;
+GUI: 7193, all passed. No new performance measurements. Local source tag;
+no publication or newly versioned executable package.
+
 ## v0.17.7 (2026-10-17)
 
 Тематические меню и стрелки подменю, выровненные флажки ролей АЧХ,
