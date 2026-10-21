@@ -3706,7 +3706,7 @@ void demotion_edge_cases() {
     cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};DestroyWindow(g.main);g.main=nullptr;
 }
 
-void unified_source_opening(const std::filesystem::path& external={}) {
+void unified_source_opening(const std::filesystem::path& external={},bool opening_only=false) {
     reset_document({"previous"},{0,1},{{7,8}});
     const auto path=external.empty() ? std::filesystem::absolute(test_dir/"whole_source.txt") : std::filesystem::absolute(external);
     if(external.empty()) {
@@ -3747,6 +3747,9 @@ void unified_source_opening(const std::filesystem::path& external={}) {
         <<std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count()<<", seed_rows="<<g.ds.rows()
         <<", peak_ws_mib="<<memory.PeakWorkingSetSize/1048576.0<<", private_mib="<<memory.PrivateUsage/1048576.0<<std::endl;
     require(g.overview.index->sample_count()==g.recording_rows,"display sample count describes the full source, not its seed");
+    if(opening_only) {
+        cancel_recording_overview();g.overview={};DestroyWindow(g.main);g.main=nullptr;return;
+    }
     if(external.empty()) {
         require(g.ds.source_columns==std::vector<std::size_t>{2,3,4},"whole-source discovery removes true time copies and keeps prefix-matching and late columns");
         auto original=lvm::read_lvm_file(path);lvm::drop_duplicate_time_channels(original,original.raw_time);
@@ -4045,7 +4048,9 @@ int main(int argc,char** argv) {
     try {
         if((argc==3 || argc==4) && std::string(argv[1])=="--source-opening") {
             HANDLE job=nullptr;
-            if(argc==4) {
+            const bool opening_only=argc==4 && std::string(argv[3])=="--opening-only";
+            if(opening_only)configure_recording_disk_cache(std::filesystem::absolute(test_dir/("opening-"+std::to_string(GetTickCount64()))));
+            if(argc==4 && !opening_only) {
                 require(std::string(argv[3])=="--commit-128","known process commit cap option");
                 job=CreateJobObjectW(nullptr,nullptr);
                 JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
@@ -4055,7 +4060,7 @@ int main(int argc,char** argv) {
                     AssignProcessToJobObject(job,GetCurrentProcess()),"128 MiB process commit cap is enforced by Windows Job Object");
                 std::cout<<"Windows process commit cap: 128 MiB; data admission: Manual 64 MiB (not physical 8 GiB hardware)"<<std::endl;
             }
-            unified_source_opening(std::filesystem::u8path(argv[2]));
+            unified_source_opening(std::filesystem::u8path(argv[2]),opening_only);
             g_spectrum_worker.shutdown();g_overview_worker.shutdown();g_frf_worker.shutdown();
             if(job)CloseHandle(job);
             std::cout<<checks<<" source opening checks passed\n";return 0;

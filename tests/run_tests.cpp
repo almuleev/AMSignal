@@ -4,8 +4,11 @@
 // temporary .lvm/.txt file, parses it, and checks the result. Exit code is
 // non-zero if any check fails, so it works as a `make test` gate.
 #include <cmath>
+#include <cctype>
 #include <random>
 #include <cstdio>
+#include <cstring>
+#include <cstdlib>
 #include <fstream>
 #include <future>
 #include <string>
@@ -429,6 +432,119 @@ void test_scan_and_window_load() {
     check(ds.ok && !ds.resident_limit_exceeded && ds.rows()==1,"smaller display fragment succeeds within the same memory budget");
     ds=lvm::read_lvm_file(temp.path+".missing",options);
     check(!ds.ok && !ds.resident_limit_exceeded,"file access error is not a display budget retry");
+}
+
+void test_parallel_text_parsing() {
+    std::printf("test_parallel_text_parsing\n");
+    const std::vector<std::string> tokens={"0","-0","+0","-.0",".125","+1.25","+-1","--1","1.2.3","",
+        " 1.25 ","+ 1","+nan","nan(payload)","-inf","0x1.8p+1","1.e2","1,25","5e-324","1e-9999",
+        "-1e-9999","1e9999","9007199254740993","1.7976931348623157e308","2.2250738585072014e-308",
+        "1.00000000000000011102230246251565404236316680908203125"};
+    std::string decimals="Time\tValue\tKeep\n";
+    for(std::size_t i=0;i<tokens.size();++i)decimals+=std::to_string(i)+"\t"+tokens[i]+"\t1\n";
+    const TempFile decimal_file("decimal_fast.lvm",decimals);
+    const auto decimal_data=lvm::read_lvm_file(decimal_file.path);
+    bool decimal_exact=decimal_data.ok && decimal_data.rows()==tokens.size();
+    for(std::size_t i=0;i<tokens.size() && decimal_exact;++i) {
+        auto token=tokens[i];std::replace(token.begin(),token.end(),',','.');char* end=nullptr;
+        double expected=std::strtod(token.c_str(),&end);
+        const bool converted=end!=token.c_str();
+        while(*end && std::isspace(static_cast<unsigned char>(*end)))++end;
+        if(!converted || *end || !std::isfinite(expected))expected=std::nan("");
+        const auto actual=decimal_data.channels[0][i];
+        decimal_exact=(std::isnan(actual) && std::isnan(expected)) || std::memcmp(&actual,&expected,sizeof actual)==0;
+    }
+    check(decimal_exact,"decimal fast path preserves CRT rounding, signed zero, ranges and non-decimal/error fallback");
+    const auto equal_values=[](const auto& a,const auto& b) {
+        if(a.size()!=b.size())return false;
+        for(std::size_t i=0;i<a.size();++i)
+            if(a[i]!=b[i] && !(std::isnan(a[i]) && std::isnan(b[i])))return false;
+        return true;
+    };
+    const auto equal_data=[&](const auto& a,const auto& b) {
+        if(!a.ok || !b.ok || a.names!=b.names || a.source_columns!=b.source_columns ||
+           a.generated_names!=b.generated_names || a.export_comments!=b.export_comments ||
+           a.stats.header_markers!=b.stats.header_markers || a.stats.data_rows!=b.stats.data_rows ||
+           a.stats.data_sections!=b.stats.data_sections || a.stats.max_columns!=b.stats.max_columns ||
+           !equal_values(a.time,b.time) || !equal_values(a.raw_time,b.raw_time) || a.channels.size()!=b.channels.size())return false;
+        for(std::size_t c=0;c<a.channels.size();++c)if(!equal_values(a.channels[c],b.channels[c]))return false;
+        return true;
+    };
+    std::string text="\xEF\xBB\xBF# batch regression\r\n***End_of_Header***\r\nTime\tA\tB\r\n";
+    for(int i=0;i<12301;++i) {
+        if(i && i%4096==0)text+="***End_of_Header***\r\n";
+        text+=std::to_string((i%4096)*.125)+"\t"+(i%113==0 ? std::string("1.2.3") : std::string(" 1,25 "))+"\t";
+        text+=(i%79==0 ? "nan" : "0x1.8p+1");
+        if(i>=502)text+="\t-2.5e-3";
+        text+="\r\n";
+    }
+    const TempFile file("parallel.lvm",text);
+    lvm::LoadOptions sequential;sequential.parse_participants=1;
+    lvm::LoadOptions parallel;parallel.parse_participants=6;
+    const auto expected=lvm::read_lvm_file(file.path,sequential);
+    auto normalized_time=expected.time;lvm::make_monotonic(normalized_time);
+    check(equal_data(expected,lvm::read_lvm_file(file.path,parallel)),
+          "parallel batches preserve sections, late columns, missing values and all numeric bits");
+    double first=0,last=0;std::string error;lvm::ScanIndex scanner,captured;
+    check(lvm::scan_time_bounds(file.path,first,last,error,nullptr,&scanner),"reference checkpoint scan succeeds");
+    std::vector<double> streamed_time;std::vector<std::vector<double>> streamed;
+    parallel.stream_all_columns=true;parallel.capture_scan_index=&captured;parallel.block_rows=37;
+    parallel.consume_block=[&](const auto& time,const auto& values) {
+        streamed_time.insert(streamed_time.end(),time.begin(),time.end());
+        streamed.resize(values.size());
+        for(std::size_t c=0;c<values.size();++c)streamed[c].insert(streamed[c].end(),values[c].begin(),values[c].end());
+    };
+    const auto metadata=lvm::read_lvm_file(file.path,parallel);
+    bool checkpoints=metadata.ok && captured.checkpoints.size()==scanner.checkpoints.size();
+    for(std::size_t i=0;i<captured.checkpoints.size() && checkpoints;++i) {
+        const auto& a=captured.checkpoints[i];const auto& b=scanner.checkpoints[i];
+        checkpoints=a.offset==b.offset && a.adjusted_time==b.adjusted_time && a.time_offset==b.time_offset;
+    }
+    check(checkpoints,"read-ahead preserves physical checkpoint offsets with BOM, CRLF and section resets");
+    check(metadata.ok && streamed.size()==4 && equal_values(streamed_time,normalized_time) &&
+          equal_values(streamed[0],expected.raw_time) && equal_values(streamed[1],expected.channels[0]),
+          "streamed parallel discovery keeps original time and sample order across consumer blocks");
+    lvm::LoadOptions window;window.parse_participants=6;window.scan_index=std::make_shared<lvm::ScanIndex>(captured);
+    window.use_time_window=true;window.time_start=normalized_time[8195];window.time_end=normalized_time[8300];
+    const auto indexed=lvm::read_lvm_file(file.path,window);window.scan_index.reset();window.parse_participants=1;
+    const auto from_start=lvm::read_lvm_file(file.path,window);
+    check(indexed.ok && from_start.ok && equal_values(indexed.time,from_start.time) &&
+          equal_values(indexed.raw_time,from_start.raw_time) && equal_values(indexed.channels[0],from_start.channels[0]),
+          "parallel indexed replay matches sequential window after a section reset");
+    const TempFile csv("parallel.csv","\xEF\xBB\xBF\"Time\",\"Signal\nA\"\r\n0,\"1.25\"\r\n1,2\r\n2,3\r\n\"incomplete");
+    lvm::LoadOptions selected;selected.parse_participants=6;selected.use_time_window=true;
+    selected.time_start=0;selected.time_end=.5;
+    const auto prefix=lvm::read_lvm_file(csv.path,selected);
+    check(prefix.ok && prefix.rows()==1 && prefix.channels[0][0]==1.25,
+          "CSV read-ahead errors beyond a selected interval do not reject valid selected samples");
+    selected.use_time_window=false;
+    check(!lvm::read_lvm_file(csv.path,selected).ok,"full CSV read still rejects an incomplete quoted tail");
+    std::string csv_text="\xEF\xBB\xBF\"Time\",\"Signal\nA\"\r\n";
+    for(int i=0;i<5001;++i)csv_text+=std::to_string(i)+",\"1\n\"\r\n";
+    const TempFile multiline("parallel_offsets.csv",csv_text);
+    lvm::ScanIndex csv_index,csv_scanned;lvm::LoadOptions discover;
+    discover.parse_participants=6;discover.stream_all_columns=true;discover.capture_scan_index=&csv_index;
+    discover.consume_block=[](const auto&,const auto&){};
+    const auto csv_metadata=lvm::read_lvm_file(multiline.path,discover);
+    const bool csv_scanned_ok=lvm::scan_time_bounds(multiline.path,first,last,error,nullptr,&csv_scanned);
+    check(csv_metadata.ok && csv_scanned_ok && csv_index.checkpoints.size()==2 && csv_scanned.checkpoints.size()==2 &&
+          csv_index.checkpoints[1].offset==csv_scanned.checkpoints[1].offset,
+          "parallel CSV checkpoints count physical embedded newlines, BOM and CRLF exactly");
+    selected.use_time_window=true;selected.time_start=4200;selected.time_end=4205;
+    selected.scan_index=std::make_shared<lvm::ScanIndex>(csv_index);
+    const auto csv_window=lvm::read_lvm_file(multiline.path,selected);
+    check(csv_window.ok && csv_window.rows()==6 && csv_window.time.front()==4200 && csv_window.time.back()==4205 &&
+          csv_window.channels[0]==std::vector<double>(6,1),"indexed parallel CSV resumes at the original physical record boundary");
+    std::atomic<bool> cancel{false};parallel.cancel_flag=&cancel;parallel.capture_scan_index=nullptr;
+    parallel.consume_block=[&](const auto&,const auto&){cancel=true;};
+    check(!lvm::read_lvm_file(file.path,parallel).ok,"consumer cancellation stops parallel parsing without publishing success");
+    std::promise<void> started,release;auto ready=release.get_future().share();
+    auto occupied=std::async(std::launch::async,[&] {
+        return lvm::analysis_executor().run(1,1,[&](auto){started.set_value();ready.wait();});
+    });
+    started.get_future().wait();parallel={};parallel.parse_participants=6;
+    const auto fallback=lvm::read_lvm_file(file.path,parallel);release.set_value();occupied.get();
+    check(equal_data(expected,fallback),"parser uses equivalent sequential conversion while the shared executor is busy");
 }
 
 void test_recording_source() {
@@ -1096,6 +1212,35 @@ void test_frf_streaming() {
 
 void test_frf_multi() {
     const double pi=std::acos(-1.0);
+    for(auto length:{256U,258U})for(auto estimator:{lvm::FrfEstimator::H1,lvm::FrfEstimator::Direct}) {
+        lvm::FrfBatchInput edge;edge.references.resize(1);edge.responses.resize(2);
+        for(std::size_t i=0;i<length*4;++i) {
+            const double x=1.25*(i%2 ? -1 : 1)+.4*std::cos(2*pi*7*i/length);
+            edge.time.push_back(i/1024.);edge.references[0].push_back(x);
+            edge.responses[0].push_back(2*x);edge.responses[1].push_back(-3*x);
+        }
+        lvm::FrfOptions options;options.segment_length=length;options.estimator=estimator;options.remove_mean=false;
+        const auto pair=lvm::analyze_frf({edge.time,edge.references[0],edge.responses[0]},options);
+        const auto shared=lvm::analyze_frf_batch(edge,options);
+        check(pair.ok && shared.ok,"Nyquist regression reaches pair and shared estimators");
+        for(const auto* result:{&pair,&shared.responses[0],&shared.responses[1]}) {
+            check_near(result->reference_amplitude.back(),1.25,1e-9,"even-length Nyquist amplitude has no doubled conjugate partner");
+            check_near(result->reference_amplitude[7*result->segment_length/length],.4,1e-9,"interior reference amplitude retains one-sided doubling");
+        }
+        check_near(std::abs(shared.responses[1].transfer.back()),3,1e-9,"Nyquist normalization leaves transfer gain unchanged");
+    }
+    {
+        lvm::FrfInput odd;
+        for(int i=0;i<255;++i) {
+            const double x=1.25*std::cos(2*pi*127*i/255);
+            odd.time.push_back(i/1024.);odd.reference.push_back(x);odd.response.push_back(2*x);
+        }
+        lvm::FrfOptions options;options.estimator=lvm::FrfEstimator::Direct;options.remove_mean=false;
+        const auto result=lvm::analyze_frf(odd,options);
+        check(result.ok,"odd-length Direct reference spectrum is available");
+        // Periodic Hann mixes the adjacent conjugate bin into the last bin.
+        check_near(result.reference_amplitude.back(),.625,1e-9,"odd-length last bin retains one-sided doubling under Hann");
+    }
     lvm::FrfBatchInput batch;
     batch.references.resize(2); batch.responses.resize(3);
     std::vector<double> average;
@@ -1573,6 +1718,33 @@ void test_analysis_resources() {
                   denied.common().transfer.empty(),"Auto and Direct refuse insufficient memory without changing L");
         }
     }
+    // Direct has a single segment: large independent channels must still be
+    // parallelizable without changing coefficients or spending unadmitted scratch.
+    for(auto n:{65536U,65538U}) {
+        lvm::FrfBatchInput data;data.time.resize(n);data.references.resize(1);data.responses.resize(3);
+        data.references[0].resize(n);for(auto& r:data.responses)r.resize(n);
+        for(std::size_t i=0;i<n;++i) {
+            data.time[i]=i/2048.;const auto x=std::sin(i*.017)+.2*std::cos(i*.11);
+            data.references[0][i]=x;
+            for(std::size_t c=0;c<3;++c)data.responses[c][i]=x*(c+1)+.03*std::cos(i*.07);
+        }
+        const auto prepared=lvm::prepare_frf_batch(std::move(data));
+        lvm::FrfOptions options;options.estimator=lvm::FrfEstimator::Direct;
+        lvm::AnalysisResources resources;resources.max_participants=1;
+        const auto serial=lvm::compute_prepared_frf(*prepared,options,nullptr,resources);
+        resources.max_participants=6;
+        const auto parallel=lvm::compute_prepared_frf(*prepared,options,nullptr,resources);
+        bool same=serial.ok && parallel.ok && serial.responses.size()==parallel.responses.size();
+        for(std::size_t c=0;c<serial.responses.size() && same;++c) {
+            const auto& a=serial.responses[c];const auto& b=parallel.responses[c];
+            same=a.frequencies==b.frequencies && a.valid==b.valid && a.segment_length==n && b.segment_length==n &&
+                a.averages==b.averages && arrays_equal(a.reference_amplitude,b.reference_amplitude) &&
+                a.transfer.size()==b.transfer.size();
+            for(std::size_t k=0;k<a.transfer.size() && same;++k)
+                same=equal(a.transfer[k].real(),b.transfer[k].real()) && equal(a.transfer[k].imag(),b.transfer[k].imag());
+        }
+        check(same,"single-segment parallel Direct FRF preserves exact radix-2 and Bluestein coefficients");
+    }
     // Cancellation while a source is blocked must not release live preparation buffers.
     auto budget=std::make_shared<lvm::MemoryBudget>();budget->configure(64*mib,0,64*mib);
     auto guard=budget->reserve(48*mib);lvm::AnalysisResources resources;resources.budget=budget;
@@ -1969,6 +2141,7 @@ int main(int argc, char** argv) {
     test_export_helpers();
     test_gap_details();
     test_scan_and_window_load();
+    test_parallel_text_parsing();
     test_recording_source();
     test_recording_indexed_range();
     test_resource_budget();

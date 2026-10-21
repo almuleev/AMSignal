@@ -12,7 +12,8 @@ namespace lvm {
 std::string csv_field(const std::string& value);
 std::string tsv_header_field(std::string value);
 bool split_csv_record(const std::string& record, std::vector<std::string>& fields);
-bool read_text_record(std::istream& in, std::string& record, bool csv);
+// For binary streams, optional physical byte count includes BOM, CRLF and quoted lines.
+bool read_text_record(std::istream& in, std::string& record, bool csv, std::size_t* bytes_read = nullptr);
 std::string strip_utf8_bom(std::string text);
 
 // Never truncate the destination on a failed write, flush, close or validation.

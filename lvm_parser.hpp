@@ -78,6 +78,9 @@ struct LoadOptions {
     bool stream_all_columns = false;
     std::size_t block_rows = 65536;
     std::size_t max_resident_bytes = 0; // 0 = caller-controlled; GUI supplies a bound.
+    // 0 = bounded automatic CPU parallelism; 1 = sequential numerical parsing.
+    // Only conversion is parallel: records, sections and consumers keep file order.
+    std::size_t parse_participants = 0;
     std::function<void(const std::vector<double>&,
                        const std::vector<std::vector<double>>&)> consume_block;
 };

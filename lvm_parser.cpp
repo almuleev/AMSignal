@@ -1,8 +1,12 @@
 #include "lvm_parser.hpp"
 #include "data_io.hpp"
+#include "analysis_executor.hpp"
+#include "processor_resources.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
+#include <cstring>
 #include <ctime>
 #include <cstdlib>
 #include <fstream>
@@ -116,10 +120,26 @@ bool is_metadata_line(const std::string& line) {
 
 // Parse a single cell to double, requiring the whole token to be numeric
 // (matches Python float(): "1.2.3" -> ValueError -> NaN). Empty -> NaN.
-double parse_cell(const std::string& cell, bool& is_numeric) {
+double parse_token(const char* begin, bool& is_numeric) {
     is_numeric = false;
-    if (cell.empty()) return std::nan("");
-    const char* begin = cell.c_str();
+    if (!*begin) return std::nan("");
+    // Avoid CRT conversion contention in the common decimal path. Standard
+    // conversion is locale independent; retain strtod for hex, special
+    // values, under/overflow and any token the fast path cannot consume fully.
+    const auto space=[](char ch) {return ch==' ' || ch=='\t' || ch=='\r' || ch=='\n' || ch=='\f' || ch=='\v';};
+    auto first=begin;auto last=begin+std::strlen(begin);
+    while(first!=last && space(*first))++first;
+    while(last!=first && space(last[-1]))--last;
+    auto digits=first;
+    if(digits!=last && (*digits=='+' || *digits=='-'))++digits;
+    if(digits!=last && ((*digits>='0' && *digits<='9') || *digits=='.')) {
+        if(*first=='+')++first;
+        double value=0;
+        const auto parsed=std::from_chars(first,last,value,std::chars_format::general);
+        if(parsed.ec==std::errc{} && parsed.ptr==last) {
+            is_numeric=true;return std::isfinite(value) ? value : std::nan("");
+        }
+    }
     char* end = nullptr;
     const double value = std::strtod(begin, &end);
     if(end==begin)return std::nan("");
@@ -128,6 +148,99 @@ double parse_cell(const std::string& cell, bool& is_numeric) {
     is_numeric = true;
     return std::isfinite(value) ? value : std::nan("");
 }
+
+double parse_cell(const std::string& cell, bool& is_numeric) {
+    return parse_token(cell.c_str(), is_numeric);
+}
+
+// Convert independent records in bounded batches. Only this stage uses helpers;
+// timeline normalization, metadata and consumers are applied in acquisition order.
+class NumericRecords {
+    struct Record {
+        std::string text;
+        std::vector<double> values;
+        std::uint64_t end_offset=0;
+        int numeric=0;
+        bool malformed=false;
+    };
+    std::ifstream& input_;
+    bool csv_, ended_=false, pending_error_=false, failed_=false;
+    const std::atomic<bool>* cancel_;
+    std::size_t participants_, position_=0, count_=0, byte_limit_;
+    std::uint64_t offset_;
+    std::vector<Record> records_;
+    bool cancelled() const { return cancel_ && cancel_->load(std::memory_order_relaxed); }
+
+    void convert(std::size_t first, std::size_t end) {
+        std::string scratch;
+        std::vector<std::string> cells;
+        for(auto i=first;i<end && !cancelled();++i) {
+            auto& row=records_[i];row.numeric=0;row.malformed=false;row.values.clear();
+            if(row.text.empty() || row.text[0]=='#' || (!csv_ && starts_with(row.text,"***")))continue;
+            const auto add=[&](const char* token) {
+                bool numeric=false;
+                row.values.push_back(parse_token(token,numeric));
+                row.numeric+=numeric;
+            };
+            if(csv_) {
+                row.malformed=!split_csv_record(row.text,cells);
+                if(!row.malformed)for(const auto& cell:cells)add(cell.c_str());
+            } else {
+                // One reusable copy, no per-cell strings/allocations for TXT/LVM.
+                scratch=row.text;
+                for(auto& ch:scratch)if(ch==',')ch='.';
+                auto* token=scratch.data();
+                for(auto& ch:scratch)if(ch=='\t') {ch='\0';add(token);token=&ch+1;}
+                add(token);
+            }
+        }
+    }
+    void fill() {
+        count_=position_=0;
+        std::size_t bytes=0;
+        while(count_<records_.size() && bytes<byte_limit_ && !cancelled()) {
+            auto& row=records_[count_];std::size_t physical=0;
+            if(!read_text_record(input_,row.text,csv_,&physical)) {
+                ended_=true;pending_error_=input_.bad();break;
+            }
+            offset_+=physical;
+            // Match tellg's historical zero sentinel on an unterminated last row.
+            row.end_offset=input_.eof() ? 0 : offset_;
+            bytes+=row.text.size()+sizeof(Record);++count_;
+        }
+        constexpr std::size_t group=64;
+        const auto job=[&](std::size_t index){convert(index*group,std::min(count_,(index+1)*group));};
+        if(participants_<=1 || bytes<32768 ||
+           !analysis_executor().run((count_+group-1)/group,participants_,job))convert(0,count_);
+    }
+public:
+    NumericRecords(std::ifstream& input,bool csv,const LoadOptions& options,const std::filesystem::path& path)
+        :input_(input),csv_(csv),cancel_(options.cancel_flag),offset_(current_offset(input)) {
+        std::error_code ec;
+        const auto large=std::filesystem::file_size(path,ec)>=1024*1024 && !ec;
+        participants_=options.parse_participants ? options.parse_participants : large ? processor_participants() : 1;
+        participants_=std::clamp<std::size_t>(participants_,1,std::min<std::size_t>(8,processor_participants()));
+        byte_limit_=256*1024;
+        if(options.max_resident_bytes)byte_limit_=std::min(byte_limit_,std::max<std::size_t>(4096,options.max_resident_bytes/16));
+        if(byte_limit_<32768)participants_=1;
+        records_.resize(participants_>1 ? std::min<std::size_t>(1024,byte_limit_/256) : 1);
+    }
+    static std::uint64_t current_offset(std::ifstream& input) {
+        const auto pos=input.tellg();return pos==std::streampos(-1) ? 0 : static_cast<std::uint64_t>(pos);
+    }
+    bool next(std::string& text,std::vector<double>& values,int& numeric,bool& malformed,std::uint64_t& end_offset) {
+        if(cancelled())return false;
+        if(position_==count_) {
+            if(!ended_)fill();
+            if(!count_ || position_==count_) {failed_=pending_error_;return false;}
+        }
+        auto& row=records_[position_++];
+        text.swap(row.text);values.swap(row.values);numeric=row.numeric;
+        malformed=row.malformed;end_offset=row.end_offset;return true;
+    }
+    // Read-ahead errors past a selected interval must not reject that interval.
+    bool failed() const {return failed_;}
+};
 
 struct RowSummary {
     bool first_numeric = false;
@@ -649,7 +762,9 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         stream_time.clear();
         for (auto& channel:stream_channels) channel.clear();
     };
-    for (; read_text_record(in, raw_line, csv_mode); ++line_index) {
+    NumericRecords records(in,csv_mode,options,path);
+    int numeric_count=0;bool malformed=false;std::uint64_t record_end=0;
+    for (; records.next(raw_line,parsed,numeric_count,malformed,record_end); ++line_index) {
         if (options.cancel_flag && (line_index & 0xFF) == 0 &&
             options.cancel_flag->load(std::memory_order_relaxed)) {
             ds.error = "Operation cancelled.";
@@ -682,19 +797,9 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         if (!csv_mode && starts_with(line, "***")) {
             continue;
         }
-        // Parse numeric cells once. Header discovery used to parse each row
-        // twice for otherwise valid TXT/LVM files without column labels.
-        int numeric_count = 0;
-        split_cells_into(line, delimiter, normalize_decimal_commas, cells);
-        if (csv_mode && cells.empty()) { ds.error = "Malformed CSV record."; return ds; }
-        parsed.clear();
-        parsed.reserve(cells.size());
-        for (const std::string& cell : cells) {
-            bool is_numeric = false;
-            const double v = parse_cell(cell, is_numeric);
-            parsed.push_back(v);
-            if (is_numeric) ++numeric_count;
-        }
+        if(malformed) { ds.error = "Malformed CSV record."; return ds; }
+        if(numeric_count==0 && column_labels.empty())
+            split_cells_into(line,delimiter,normalize_decimal_commas,cells);
         if (!csv_mode && header_count > 0 && !section_metadata_seen && column_labels.empty()) {
             if (numeric_count == 0) {
                 if (cells.size() > 1) {
@@ -753,7 +858,7 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
                     const auto growth=captured->checkpoints.size()==captured->checkpoints.capacity() ?
                         (captured->checkpoints.capacity()+1)*sizeof(ScanIndexCheckpoint) : 0;
                     if(!capture_within_budget(growth))return ds;
-                    maybe_add_scan_checkpoint(captured,static_cast<std::size_t>(row_count)+1,current_stream_offset(in),adjusted_time,
+                    maybe_add_scan_checkpoint(captured,static_cast<std::size_t>(row_count)+1,record_end,adjusted_time,
                         prev_raw_time,prev_adjusted_time,time_offset,fallback_step,have_time_state,have_section_anchor,section_anchor_seconds,active_section);
                     if(!capture_within_budget())return ds;
                 }
@@ -821,7 +926,7 @@ Dataset read_lvm_file(const std::filesystem::path& path, const LoadOptions& opti
         ++row_count;
     }
 
-    if (in.bad()) { ds.error = "Error reading file or incomplete CSV record."; return ds; }
+    if (records.failed()) { ds.error = "Error reading file or incomplete CSV record."; return ds; }
     if (options.cancel_flag && options.cancel_flag->load(std::memory_order_relaxed)) {
         ds.error = "Operation cancelled."; return ds;
     }

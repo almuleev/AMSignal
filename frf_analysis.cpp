@@ -22,6 +22,12 @@ void transform(std::vector<std::complex<double>>& a,const std::atomic<bool>* can
     if ((a.size() & (a.size()-1))==0) fft_radix2(a,false,cancel);
     else a=dft(a,cancel);
 }
+long double reference_amplitude(long double power, std::size_t averages,
+                                long double window_sum, std::size_t bin, std::size_t length) {
+    // The even-length Nyquist bin has no distinct negative-frequency partner.
+    const long double scale=(length%2==0 && bin==length/2) ? 1 : 2;
+    return scale*std::sqrt(power/averages)/window_sum;
+}
 long double reference_threshold(const std::vector<long double>& xx, double peak,
                                 std::size_t L, std::size_t averages, const FrfOptions& options) {
     const long double maximum=*std::max_element(xx.begin()+1,xx.end());
@@ -53,7 +59,7 @@ void finish_frf(FrfResult& r, const std::vector<long double>& xx,
         if (!common) {
             r.frequencies[k]=(static_cast<double>(k)/L)/r.sample_dt;
             if (k && window_sum>0 && xx[k]>=0) {
-                const long double amplitude=2*std::sqrt(xx[k]/r.averages)/window_sum;
+                const long double amplitude=reference_amplitude(xx[k],r.averages,window_sum,k,L);
                 if (std::isfinite(amplitude)) {
                     r.reference_amplitude[k]=static_cast<double>(amplitude);
                     r.reference_amplitude_valid[k]=1;
@@ -118,7 +124,8 @@ FrfBatchResult compute_shared_frf(const PreparedFrf& input,
         tile_capacity=std::max<std::size_t>(1,std::min({segments,2*std::min<std::size_t>(32,std::max<std::size_t>(1,resources.max_participants)),
             static_cast<std::size_t>(std::min(buffer_limit,available-fixed-scratch)/frame_bytes)}));
         if(segments<7)tile_capacity=1;
-        participants=segments>=7 && L>=256 ? std::min({tile_capacity,std::size_t(32),
+        const auto tasks=tile_capacity*std::min<std::size_t>(32,response_count+1);
+        participants=L>=256 && (segments>=7 || L>=65536) ? std::min({tasks,std::size_t(32),
             std::size_t(hardware ? hardware : 1),std::max<std::size_t>(1,resources.max_participants)}) : 1;
         while(participants>1 && fixed+tile_capacity*frame_bytes+participants*scratch>available)--participants;
         if(!resources.budget)break;
@@ -158,27 +165,32 @@ FrfBatchResult compute_shared_frf(const PreparedFrf& input,
         if(segment==tile_base) {
             tile_used=std::min(tile_capacity,segments-segment);
             input.read(at,L+(tile_used-1)*hop,raw,cancel);
-            const auto job=[&](std::size_t index) {
-                auto& frame=frames[index];frame.peak=0;frame.spectra.resize(response_count+1);
-                for(std::size_t c=0;c<=response_count;++c) {
-                    if(c && batch.responses[c-1].error!=FrfError::None)continue;
-                    auto& a=frame.spectra[c];a.resize(L);long double sum=0;
-                    for(std::size_t j=0;j<L;++j) {
-                        if((j & 65535)==0)check_cancel(cancel);
-                        const auto value=raw[c][index*hop+j];
-                        if(options.remove_mean)sum+=value;
-                        if(!c)frame.peak=std::max(frame.peak,std::abs(value));
-                    }
-                    const long double mean=options.remove_mean ? sum/L : 0;
-                    for(std::size_t j=0;j<L;++j) {
-                        if((j & 65535)==0)check_cancel(cancel);
-                        a[j]=static_cast<double>((raw[c][index*hop+j]-mean)*window[j]);
-                    }
-                    transform(a,cancel);
+            for(std::size_t i=0;i<tile_used;++i) {
+                frames[i].peak=0;frames[i].spectra.resize(response_count+1);
+            }
+            // Independent (segment, channel) transforms share no writable arrays.
+            // Accumulation below retains acquisition order and exact arithmetic.
+            const auto job=[&](std::size_t task) {
+                const auto index=task/(response_count+1),c=task%(response_count+1);
+                auto& frame=frames[index];
+                if(c && batch.responses[c-1].error!=FrfError::None)return;
+                auto& a=frame.spectra[c];a.resize(L);long double sum=0;
+                for(std::size_t j=0;j<L;++j) {
+                    if((j & 65535)==0)check_cancel(cancel);
+                    const auto value=raw[c][index*hop+j];
+                    if(options.remove_mean)sum+=value;
+                    if(!c)frame.peak=std::max(frame.peak,std::abs(value));
                 }
+                const long double mean=options.remove_mean ? sum/L : 0;
+                for(std::size_t j=0;j<L;++j) {
+                    if((j & 65535)==0)check_cancel(cancel);
+                    a[j]=static_cast<double>((raw[c][index*hop+j]-mean)*window[j]);
+                }
+                transform(a,cancel);
             };
-            if(participants<=1 || !analysis_executor().run(tile_used,participants,job))
-                for(std::size_t i=0;i<tile_used;++i)job(i);
+            const auto tasks=tile_used*(response_count+1);
+            if(participants<=1 || !analysis_executor().run(tasks,participants,job))
+                for(std::size_t i=0;i<tasks;++i)job(i);
         }
         auto& frame=frames[segment-tile_base];
         auto& x=frame.spectra[0];peak=std::max(peak,frame.peak);
@@ -355,7 +367,7 @@ FrfResult compute_frf(const FrfSamples& s, const FrfOptions& options, const std:
         if ((k & 0xffff)==0) check_cancel(cancel);
         r.frequencies[k]=(static_cast<double>(k)/L)/s.sample_dt;
         if (k && window_sum>0 && xx[k]>=0) {
-            const long double amplitude=2*std::sqrt(xx[k]/r.averages)/window_sum;
+            const long double amplitude=reference_amplitude(xx[k],r.averages,window_sum,k,L);
             if (std::isfinite(amplitude)) {
                 r.reference_amplitude[k]=static_cast<double>(amplitude);
                 r.reference_amplitude_valid[k]=1;

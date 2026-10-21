@@ -59,8 +59,10 @@ bool split_csv_record(const std::string& record, std::vector<std::string>& field
     return true;
 }
 
-bool read_text_record(std::istream& in, std::string& record, bool csv) {
+bool read_text_record(std::istream& in, std::string& record, bool csv, std::size_t* bytes_read) {
+    if (bytes_read) *bytes_read = 0;
     if (!std::getline(in, record)) return false;
+    if (bytes_read) *bytes_read = record.size() + (in.eof() ? 0 : 1);
     if (!record.empty() && record.back() == '\r') record.pop_back();
     record = strip_utf8_bom(std::move(record));
     if (!csv || (!record.empty() && record.front() == '#')) return true;
@@ -70,6 +72,7 @@ bool read_text_record(std::istream& in, std::string& record, bool csv) {
     while (quotes % 2) {
         std::string next;
         if (!std::getline(in, next)) { in.setstate(std::ios::badbit); return false; }
+        if (bytes_read) *bytes_read += next.size() + (in.eof() ? 0 : 1);
         if (!next.empty() && next.back() == '\r') next.pop_back();
         for (char ch : next) if (ch == '"') ++quotes;
         record += '\n'; record += next;

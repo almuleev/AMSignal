@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
@@ -28,11 +29,15 @@ struct Options {
     std::size_t responses = 4;
     int repeats = 3;
     std::string input_path;
+    std::size_t parse_participants=0;
+    bool stream_input=false;
+    bool direct=false;
 };
 
 void usage(const char* program) {
     std::cout << "Usage: " << program
-              << " [--samples N] [--responses N] [--repeats N] [--input FILE]\n"
+              << " [--samples N] [--responses N] [--repeats N] [--input FILE]"
+                 " [--parse-participants N] [--stream-input] [--frf-direct]\n"
               << "\n"
               << "Measures synthetic uniform signals for FFT, H1/FRF and MinMaxIndex.\n"
               << "--input additionally measures parsing of an existing LVM/TXT/CSV file.\n";
@@ -59,6 +64,9 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--responses") options.responses = parse_size(require_value("--responses"), "--responses");
         else if (arg == "--repeats") options.repeats = static_cast<int>(parse_size(require_value("--repeats"), "--repeats"));
         else if (arg == "--input") options.input_path = require_value("--input");
+        else if (arg == "--parse-participants") options.parse_participants = parse_size(require_value("--parse-participants"),"--parse-participants");
+        else if (arg == "--stream-input") options.stream_input=true;
+        else if (arg == "--frf-direct") options.direct=true;
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); std::exit(0); }
         else throw std::runtime_error("Unknown option: " + arg);
     }
@@ -133,6 +141,7 @@ int main(int argc, char** argv) {
         lvm::FrfOptions frf_options;
         frf_options.estimator = lvm::FrfEstimator::H1;
         frf_options.segment_length = std::min<std::size_t>(65536, options.samples & ~std::size_t(1));
+        if(options.direct)frf_options.estimator=lvm::FrfEstimator::Direct;
         if (frf_options.segment_length < 4) frf_options.segment_length = 4;
 
         std::cout << "AMSignal manual performance baseline\n"
@@ -145,12 +154,32 @@ int main(int argc, char** argv) {
 
         if (!options.input_path.empty()) {
             lvm::Dataset parsed;
+            lvm::LoadOptions load;
+            load.parse_participants=options.parse_participants;
+            load.stream_all_columns=options.stream_input;
+            std::uint64_t hash=0,rows=0;
+            const auto add=[&](double value) {
+                std::uint64_t bits;std::memcpy(&bits,&value,sizeof bits);
+                if(std::isnan(value))bits=0x7ff8000000000000ULL;
+                hash=(hash^bits)*1099511628211ULL;
+            };
+            if(options.stream_input)load.consume_block=[&](const auto& time,const auto& channels) {
+                rows+=time.size();for(std::size_t i=0;i<time.size();++i) {
+                    add(time[i]);for(const auto& channel:channels)add(channel[i]);
+                }
+            };
             const double parse_ms = median_milliseconds(options.repeats, [&] {
-                parsed = lvm::read_lvm_file(options.input_path);
+                hash=14695981039346656037ULL;rows=0;
+                parsed = lvm::read_lvm_file(options.input_path,load);
                 if (!parsed.ok) throw std::runtime_error(parsed.error);
             });
             print_result("Parse input file", parse_ms);
-            std::cout << "  Parsed rows/channels: " << parsed.rows() << "/" << parsed.channel_count() << "\n";
+            if(!options.stream_input)for(std::size_t i=0;i<parsed.rows();++i) {
+                add(parsed.time[i]);add(parsed.raw_time[i]);
+                for(const auto& channel:parsed.channels)add(channel[i]);
+            }
+            std::cout << "  Parsed rows/channels: " << (options.stream_input ? rows : parsed.rows()) << "/" << parsed.names.size()
+                      << ", input hash: " << hash << ", parse participants: " << options.parse_participants << " (0=Auto)\n";
         }
 
         lvm::Spectrum spectrum;
@@ -165,7 +194,20 @@ int main(int argc, char** argv) {
             frf = lvm::analyze_frf_batch(frf_input, frf_options);
             if (!frf.ok) throw std::runtime_error(lvm::frf_error_text(frf.error));
         });
-        print_result("H1 FRF batch", frf_ms);
+        print_result(options.direct ? "Direct FRF batch" : "H1 FRF batch", frf_ms);
+        std::uint64_t numerical_hash=14695981039346656037ULL;
+        const auto add_result=[&](double value) {
+            std::uint64_t bits;std::memcpy(&bits,&value,sizeof bits);
+            if(std::isnan(value))bits=0x7ff8000000000000ULL;
+            numerical_hash=(numerical_hash^bits)*1099511628211ULL;
+        };
+        for(const auto& a:spectrum.amp)for(auto value:a)add_result(value);
+        for(const auto& r:frf.responses) {
+            for(auto value:r.transfer){add_result(value.real());add_result(value.imag());}
+            for(auto value:r.coherence)add_result(value);
+            for(auto value:r.valid)add_result(value);
+        }
+        std::cout<<"  Numerical hash: "<<numerical_hash<<"\n";
 
         MinMaxIndex envelope;
         const double index_ms = median_milliseconds(options.repeats, [&] {

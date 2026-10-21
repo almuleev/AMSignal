@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace lvm {
-// Shared by Spectrum and FRF. Synchronous admission; contention never waits.
+// Shared by parsing, Spectrum and FRF. Synchronous admission; contention never waits.
 class AnalysisExecutor {
     std::mutex admission_, mutex_;
     std::condition_variable ready_, done_;
