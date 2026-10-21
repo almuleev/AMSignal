@@ -10,7 +10,7 @@ $version = git -c core.excludesFile= describe --tags --always --dirty 2>$null
 if (-not $version) { $version = 'dev' }
 $releaseVersion = $version -replace '^v', ''
 $versionDefine = '-DAPP_VERSION_W=L\"' + $version + '\"'
-$compileFlags = @('-std=c++17', '-O2', '-Wall', '-Wextra', '-finput-charset=UTF-8', $versionDefine, '-I.')
+$compileFlags = @('-std=c++17', '-O2', '-Wall', '-Wextra', '-finput-charset=UTF-8', $versionDefine, '-I.', '-Ithird_party/OpenCL-Headers', '-Ithird_party/VkFFT/vkFFT')
 $objectDir = '.build/gui'
 New-Item -ItemType Directory -Force -Path $objectDir | Out-Null
 $flagsPath = Join-Path $objectDir 'compile_flags.txt'
@@ -19,11 +19,13 @@ if (-not (Test-Path -LiteralPath $flagsPath) -or [IO.File]::ReadAllText((Join-Pa
     [IO.File]::WriteAllText((Join-Path $PSScriptRoot $flagsPath), $signature)
 }
 $latestDependency = (Get-ChildItem *.hpp | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+$gpuDependency = (Get-ChildItem third_party -Recurse -Filter *.h | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+if ($gpuDependency -gt $latestDependency) { $latestDependency = $gpuDependency }
 $flagsModified = (Get-Item -LiteralPath $flagsPath).LastWriteTimeUtc
 if ($flagsModified -gt $latestDependency) { $latestDependency = $flagsModified }
 $sources = @((Get-ChildItem gui_*.cpp | Sort-Object Name).Name) + @(
     'gap_details.cpp', 'lvm_parser.cpp', 'data_io.cpp', 'filter_engine.cpp',
-    'spectrum_worker.cpp', 'fft.cpp', 'analysis.cpp', 'disk_spectrum.cpp', 'export_helpers.cpp', 'formula_engine.cpp',
+    'spectrum_worker.cpp', 'fft.cpp', 'gpu_fft.cpp', 'analysis.cpp', 'disk_spectrum.cpp', 'export_helpers.cpp', 'formula_engine.cpp',
     'frf_analysis.cpp', 'frf_stream.cpp', 'frf_worker.cpp', 'recording_source.cpp', 'recording_overview.cpp', 'overview_worker.cpp', 'disk_cache.cpp', 'scan_index_cache.cpp'
 )
 if ($Test) { $sources += 'tests/gui_regression.cpp' }
@@ -32,6 +34,10 @@ foreach ($source in $sources) {
     $object = Join-Path $objectDir (([IO.Path]::GetFileNameWithoutExtension($source)) + '.o')
     $objects += $object
     $sourceModified = (Get-Item -LiteralPath $source).LastWriteTimeUtc
+    if ($source -eq 'gpu_fft.cpp') {
+        $noticeModified = (Get-Item third_party/NOTICES.inc).LastWriteTimeUtc
+        if ($noticeModified -gt $sourceModified) { $sourceModified = $noticeModified }
+    }
     $stale = -not (Test-Path -LiteralPath $object)
     if (-not $stale) {
         $objectModified = (Get-Item -LiteralPath $object).LastWriteTimeUtc

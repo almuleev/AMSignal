@@ -14,6 +14,7 @@
 | Обзор и точный Snap | `recording_overview`, `overview_worker`: индекс/view/разрывы; `gui_overview`, `gui_overview_render`, `gui_overview_snap`: связь с UI |
 | Общий дисковый кэш | `disk_cache`: LRU, owner-lock, quota, lease; `scan_index_cache`: AMSCIDX1 и managed overview; `gui_recording_cache`: каталог GUI |
 | RAM и исполнение | `resource_budget.hpp`, `analysis_resources.hpp`, `analysis_executor.hpp` (общий пул парсера/FFT/FRF); `gui_resources`: бюджет загрузки |
+| Необязательные GPU-вычисления | `gpu_fft`: динамический OpenCL, FP64 VkFFT, ограниченные планы и калибровка Auto; `third_party/README.md`: версии и лицензии зависимостей |
 | Загрузка и отмена | `gui_loading`, `gui_loading_drop`: очередь файлов, прогресс, drop и приём результата |
 | Документы | `gui_documents`, `gui_state`: App/DocumentState, переключение/закрытие, готовые кэши и контрольная точка сохранения |
 | Сообщения и команды | `gui_main`: маршрутизация WndProc; `gui_window`: окна и контролы; `gui_commands`: меню, кнопки, смена режима |

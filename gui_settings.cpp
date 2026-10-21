@@ -12,6 +12,7 @@
 #include "gui_theme.hpp"
 #include "gui_resources.hpp"
 #include "gui_input.hpp"
+#include "gpu_fft.hpp"
 
 namespace gui {
 
@@ -126,6 +127,8 @@ void save_runtime_settings_now() {
     WritePrivateProfileStringW(L"ui", L"vertical_pan", g.vertical_pan ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"ui", L"snap_to_data", g.snap_to_data ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"resources", L"automatic", g.resource_policy.automatic ? L"1" : L"0", g_config_path.c_str());
+    WritePrivateProfileStringW(L"resources",L"compute_backend",
+        std::to_wstring(static_cast<int>(lvm::compute_backend())).c_str(),g_config_path.c_str());
     WritePrivateProfileStringW(L"resources", L"manual_mib", std::to_wstring(g.resource_policy.manual_mib).c_str(), g_config_path.c_str());
     WritePrivateProfileStringW(L"resources", L"disk_cache_unlimited", g.disk_cache_unlimited ? L"1" : L"0", g_config_path.c_str());
     WritePrivateProfileStringW(L"resources", L"disk_cache_mib", std::to_wstring(g.disk_cache_mib).c_str(), g_config_path.c_str());
@@ -281,6 +284,8 @@ void load_channel_formulas_from_ini() {
 
 void load_runtime_settings() {
     if (g_config_path.empty()) g_config_path = app_config_path();
+    const int backend=read_ini_int(L"resources",L"compute_backend",0);
+    lvm::set_compute_backend(static_cast<lvm::ComputeBackend>(backend>=0 && backend<=2 ? backend : 0));
 
     wchar_t lang_buf[16]{};
     GetPrivateProfileStringW(L"ui", L"language", L"ru", lang_buf, 16, g_config_path.c_str());

@@ -45,6 +45,7 @@
 #include "../gui_source_export.hpp"
 #include "../disk_spectrum.hpp"
 #include "../analysis_executor.hpp"
+#include "../gpu_fft.hpp"
 using namespace gui;
 #include <iostream>
 #include <stdexcept>
@@ -2778,6 +2779,23 @@ void document_source_and_resources() {
     save_runtime_settings_now();
     WritePrivateProfileStringW(L"resources",L"manual_mib",L"-1",g_config_path.c_str());load_runtime_settings();
     require(g.resource_policy.automatic && g.resource_policy.manual_mib==2048,"invalid saved memory policy falls back to Auto");
+    const auto gpu_before=lvm::gpu_fft_status().attempted;
+    const auto revision=g.numerical_revision;
+    g.menu=make_menu();
+    for(const auto mode:{lvm::ComputeBackend::Cpu,lvm::ComputeBackend::Gpu,lvm::ComputeBackend::Auto}) {
+        const auto command=mode==lvm::ComputeBackend::Cpu ? IDM_COMPUTE_CPU :
+            mode==lvm::ComputeBackend::Gpu ? IDM_COMPUTE_GPU : IDM_COMPUTE_AUTO;
+        handle_commands_message(g.main,WM_COMMAND,command,0);
+        require(lvm::compute_backend()==mode && (GetMenuState(g.menu,command,MF_BYCOMMAND)&MF_CHECKED),
+                "computation preference command updates the checked menu item");
+        save_runtime_settings_now();lvm::set_compute_backend(lvm::ComputeBackend::Cpu);load_runtime_settings();
+        require(lvm::compute_backend()==mode,"computation preference persists through INI reload");
+    }
+    require(g.numerical_revision==revision && lvm::gpu_fft_status().attempted==gpu_before,
+            "computation preference does not alter numerical input or initialize a GPU on the UI thread");
+    WritePrivateProfileStringW(L"resources",L"compute_backend",L"99",g_config_path.c_str());load_runtime_settings();
+    require(lvm::compute_backend()==lvm::ComputeBackend::Auto,"invalid saved computation preference falls back to Auto");
+    DestroyMenu(g.menu);g.menu=nullptr;lvm::set_compute_backend(lvm::ComputeBackend::Cpu);save_runtime_settings_now();
     // A request retains a descriptor after the document itself is closed.
     auto independent=lvm::RecordingSource::from_file(path,{0,2},{1,2});
     g.recording_source=independent;std::weak_ptr<const lvm::RecordingSource> weak=independent;

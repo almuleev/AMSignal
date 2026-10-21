@@ -32,6 +32,7 @@
 #include "gui_window.hpp"
 #include "gui_analysis_source.hpp"
 #include "gui_overview.hpp"
+#include "gpu_fft.hpp"
 
 namespace gui {
 
@@ -195,6 +196,23 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 case IDM_SETTINGS: open_settings(); return 0;
+                case IDM_COMPUTE_AUTO:
+                case IDM_COMPUTE_CPU:
+                case IDM_COMPUTE_GPU:
+                    lvm::set_compute_backend(id==IDM_COMPUTE_CPU ? lvm::ComputeBackend::Cpu :
+                        id==IDM_COMPUTE_GPU ? lvm::ComputeBackend::Gpu : lvm::ComputeBackend::Auto);
+                    save_runtime_settings();sync_menu();return 0;
+                case IDM_COMPUTE_INFO: {
+                    const auto info=lvm::gpu_fft_status();
+                    std::wstring message=g_str==&kEn ?
+                        L"The selection applies to future calculations. GPU uses double precision and falls back to CPU. Auto calibrates each new FFT shape once per session.\n\n" :
+                        L"Выбор применяется к следующим расчётам. GPU использует двойную точность с резервом CPU. Авто проверяет каждый новый размер FFT один раз за сеанс.\n\n";
+                    if(!info.attempted)message+=g_str==&kEn ? L"GPU detection occurs during the first eligible calculation." :
+                        L"GPU определяется при первом подходящем расчёте.";
+                    else message+=to_w(info.device+"\n"+info.driver+"\n"+info.detail);
+                    MessageBoxW(hwnd,message.c_str(),g_str==&kEn ? L"FFT / FRF computation" : L"Вычисления FFT / АЧХ",MB_OK|MB_ICONINFORMATION);
+                    return 0;
+                }
                 case IDC_SIDEPANEL:
                     g.side_panel_visible = !g.side_panel_visible;
                     save_runtime_settings();
