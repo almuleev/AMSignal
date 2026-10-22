@@ -122,6 +122,8 @@ void layout_welcome_controls(HWND hwnd) {
         int ay = hy;
         place(IDC_OPEN, ax, ay, aw, action_button_h + 2);
         ay += action_button_h + 2 + button_gap;
+        place(IDM_OPEN_INTERVAL, ax, ay, aw, action_button_h);
+        ay += action_button_h + button_gap;
         place(IDW_RECENT_FILES, ax, ay, aw, action_button_h);
         ay += action_button_h + button_gap;
         place(IDC_PTSETTINGS, ax, ay, aw, action_button_h);
@@ -135,10 +137,12 @@ void layout_welcome_controls(HWND hwnd) {
         int right_x = ax + col_w + settings_col_gap;
         int grid_y = hy;
         place(IDC_OPEN, left_x, grid_y, col_w, action_button_h + 2);
-        place(IDC_PTSETTINGS, right_x, grid_y, col_w, action_button_h);
+        place(IDM_OPEN_INTERVAL, right_x, grid_y, col_w, action_button_h);
         grid_y += action_button_h + button_gap;
         place(IDW_RECENT_FILES, left_x, grid_y, col_w, action_button_h);
         place(IDM_HOTKEYS, right_x, grid_y, col_w, action_button_h);
+        grid_y += action_button_h + button_gap;
+        place(IDC_PTSETTINGS, ax, grid_y, aw, action_button_h);
         grid_y += action_button_h + button_gap;
         place(IDW_START, ax, grid_y, aw, action_button_h + 2);
     }
@@ -517,6 +521,7 @@ LRESULT CALLBACK WelcomeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             mkstatic(welcome_actions_title_text(), IDW_ACTIONS_TITLE, g.bold_font ? g.bold_font : font);
             mkstatic(welcome_actions_hint_text(), IDW_ACTIONS_HINT, font);
             mkbtn(welcome_open_button_text(), IDC_OPEN);
+            mkbtn(g_str==&kEn ? L"Open interval…" : L"Открыть участок…", IDM_OPEN_INTERVAL);
             mkbtn(g_str->welcome_btn_recent, IDW_RECENT_FILES);
             mkbtn(settings_button_text(), IDC_PTSETTINGS);
             mkbtn(g_str->welcome_btn_hotkeys, IDM_HOTKEYS);
@@ -594,6 +599,7 @@ LRESULT CALLBACK WelcomeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 hide_welcome_recent_files_panel();
             }
             switch (LOWORD(wp)) {
+                case IDM_OPEN_INTERVAL: SendMessageW(g.main, WM_COMMAND, IDM_OPEN_INTERVAL, 0); return 0;
                 case IDC_OPEN: ShowWindow(hwnd, SW_HIDE); show_ui_controls(); SendMessageW(g.main, WM_COMMAND, IDC_OPEN, 0); return 0;
                 case IDW_RECENT_FILES: show_recent_files_menu(hwnd); return 0;
                 case IDC_PTSETTINGS: open_settings(); return 0;
@@ -648,7 +654,7 @@ LRESULT CALLBACK WelcomeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 draw_welcome_action_button(dc, r, txt, pressed, true, false);
                 return TRUE;
             }
-            if (ctl_id == IDC_OPEN) {
+            if (ctl_id == IDC_OPEN || ctl_id == IDM_OPEN_INTERVAL) {
                 draw_welcome_action_button(dc, r, txt, pressed, false, true);
                 return TRUE;
             }

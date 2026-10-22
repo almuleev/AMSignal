@@ -80,6 +80,7 @@ LRESULT handle_commands_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             switch (id) {
                 case IDC_OPEN: open_file(); return 0;
+                case IDM_OPEN_INTERVAL: open_recording_interval(); return 0;
                 case IDC_SAVEPNG: save_png_dialog(); return 0;
                 case IDC_SAVECSV: save_as_dialog(); return 0;
                 case IDC_SAVE_PROJECT: save_current_project(); return 0;

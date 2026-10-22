@@ -9,6 +9,14 @@
 3. Run the EXE. Choose English or Russian and a light or dark theme.
 4. Use **Open file…** or drag a recording into the window. `.lvm`, `.txt`, `.csv` and `.AMSig` are supported.
 
+To load part of a time recording, choose **Open interval…** on the start screen
+or **File → Open recording interval…**. Select the file, enter the start and end
+in seconds, then click **Load**. Original samples and times are preserved; the
+document title shows the actual bounds. Analysis and export use this fragment,
+and the filter starts at its beginning. At least two samples are required.
+Without an index, reading the text preceding the interval can take time.
+Ordinary opening and drag and drop still open the entire recording.
+
 No LabVIEW or Qt installation is needed. The GUI is portable; it writes `AMS.ini` beside its executable and registers `.AMSig` for the current Windows user. Analysis can create disk caches. See [portable behaviour and signing](CODE_SIGNING.md).
 
 To follow the screenshots, download [demo-signals.txt](https://raw.githubusercontent.com/almuleev/AMSignal/main/examples/demo-signals.txt) with **Save link as**. It is [synthetic demonstration data](../examples/README.md).

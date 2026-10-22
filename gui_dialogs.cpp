@@ -538,6 +538,7 @@ LRESULT CALLBACK RangePromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 button_x, 164, autofill_w, 28, hwnd,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RANGE_PROMPT_AUTOFILL)),
                 reinterpret_cast<LPCREATESTRUCT>(lp)->hInstance, nullptr);
+            if(g_range_prompt.opening)ShowWindow(autofill,SW_HIDE);
             HWND ok = CreateWindowExW(
                 0, L"BUTTON", g_range_prompt.apply_text.c_str(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_DEFPUSHBUTTON,
@@ -564,6 +565,7 @@ LRESULT CALLBACK RangePromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COMMAND:
             switch (LOWORD(wp)) {
                 case IDC_RANGE_PROMPT_AUTOFILL: {
+                    if(g_range_prompt.opening)return 0;
                     g_range_prompt.start_value = g_range_prompt.min_value;
                     g_range_prompt.end_value = g_range_prompt.max_value;
                     if (g_range_prompt.start_edit) {
@@ -1124,7 +1126,7 @@ bool prompt_numeric_value(const wchar_t* title, const wchar_t* label,
     return true;
 }
 
-bool prompt_analysis_window(double range_start, double range_end, double& out_start, double& out_end) {
+bool prompt_analysis_window(double range_start, double range_end, double& out_start, double& out_end, bool opening) {
     static ATOM atom = 0;
     if (!atom) {
         WNDCLASSEXW wc{};
@@ -1139,6 +1141,7 @@ bool prompt_analysis_window(double range_start, double range_end, double& out_st
 
     const bool en = (g_str == &kEn);
     g_range_prompt.done = false;
+    g_range_prompt.opening = opening;
     g_range_prompt.accepted = false;
     range_start = normalize_prompt_bound(range_start);
     range_end = normalize_prompt_bound(range_end);
@@ -1166,6 +1169,17 @@ bool prompt_analysis_window(double range_start, double range_end, double& out_st
         ? (L"Enter a finite number not less than " + format_edit_number(range_start) + L".")
         : (L"Введите конечное число не меньше " + format_edit_number(range_start) + L".");
     g_range_prompt.invalid_end_text = g_str->analysis_range_invalid_end;
+    if (opening) {
+        g_range_prompt.title = en ? L"Open recording interval" : L"Открыть участок записи";
+        g_range_prompt.apply_text = en ? L"Load" : L"Загрузить";
+        g_range_prompt.info_label = en ? L"Enter the interval in seconds of the recording.\r\nThe original time axis is preserved."
+            : L"Укажите участок в секундах записи.\r\nИсходная временная шкала сохраняется.";
+        g_range_prompt.start_value = 0;
+        g_range_prompt.end_value = 10;
+        g_range_prompt.min_value = -std::numeric_limits<double>::max();
+        g_range_prompt.max_value = std::numeric_limits<double>::max();
+        g_range_prompt.invalid_start_text = en ? L"Enter a finite start time." : L"Введите конечное время начала.";
+    }
     const DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE;
     const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW;
     RECT window_rect{0, 0, 460, 212};

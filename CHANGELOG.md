@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.17.13 (2026-10-22)
+
+Добавлено открытие участка временной записи с начального экрана и из меню
+«Файл»: границы задаются в секундах до загрузки. Фрагмент сохраняет исходные
+отсчёты и время, ограничивает анализ и экспорт, поддерживает RAM и дисковое
+чтение. Обычное открытие файла целиком сохранено. Фильтр начинает обработку
+с начала фрагмента; без индекса текст до участка читается последовательно.
+Локальный тег исходников, без публикации выпуска.
+[Полный журнал RU/EN](docs/releases/v0.17.13.md).
+
+Time recordings can now be opened as an interval from the start screen or File
+menu, with boundaries entered in seconds before loading. The fragment preserves
+original samples and time, bounds analysis and export, and supports RAM and disk
+reads. Ordinary full-file opening is unchanged. Filtering starts at the fragment
+beginning; without an index, preceding text is read sequentially.
+Local source tag; no release publication. See the bilingual notes above.
+
 ## v0.17.12 (2026-10-22)
 
 Auto адаптивно удерживает исходные данные в RAM с резервом физической памяти,

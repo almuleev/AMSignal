@@ -42,6 +42,7 @@ enum {
     IDC_LOCK_ANNOTATIONS,
 
     // Menu-only commands (no toolbar button).
+    IDM_OPEN_INTERVAL = 1090,
     IDM_EXIT = 1100,
     IDM_VISMOOTH,       // visual (spline) smoothing toggle
     IDM_VPAN,           // vertical pan toggle

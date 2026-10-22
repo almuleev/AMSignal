@@ -18,6 +18,7 @@ struct AsyncScanResult {
     std::string error;
     std::shared_ptr<lvm::ScanIndex> index;
     bool index_from_disk_cache=false;
+    bool opened_interval=false;
     lvm::Dataset source_metadata;
     std::uint64_t source_rows=0;
     lvm::Dataset resident_data;
@@ -53,7 +54,8 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
 // Releases full resident samples without changing the numerical input/settings.
 bool move_resident_recordings_to_disk(std::uint64_t required=0);
 
-bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident=false);
+bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident=false,
+                           std::optional<lvm::TimeRange> interval = {});
 
 // Publishes a bounded metadata snapshot and opens the full source overview.
 bool apply_scanned_recording(AsyncScanResult& result);
@@ -70,6 +72,7 @@ bool load_path_interactive(const std::wstring& wpath);
 bool retry_load_as_source(AsyncLoadResult& result);
 
 void open_file();
+void open_recording_interval();
 
 void show_recent_files_menu(HWND owner);
 

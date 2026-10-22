@@ -300,7 +300,10 @@ bool move_resident_recordings_to_disk(std::uint64_t required) {
     convert(g,true);if(changed)invalidate_plot();return changed;
 }
 
-bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
+bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident,std::optional<lvm::TimeRange> interval) {
+    if(interval && (!interval->valid() || interval->end<=interval->start)) {
+        g.last_error="Invalid recording interval.";return false;
+    }
     if (g.async_load_stage != AsyncLoadStage::None) {
         g.last_error = "A file is already loading.";
         return false;
@@ -319,11 +322,12 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
         const auto policy=g.resource_policy;
         g_frf_worker.clear_cache();g_overview_worker.trim_cache(0);
         if (g_load_worker.joinable()) g_load_worker.join();
-        g_load_worker = std::thread([token, path_copy, target, cancel_flag,memory_budget,adaptive_resident,policy]() {
+        g_load_worker = std::thread([token, path_copy, target, cancel_flag,memory_budget,adaptive_resident,policy,interval]() {
           try {
             auto result = std::make_unique<AsyncScanResult>();
             result->token = token;
             result->path = path_copy;
+            result->opened_interval=interval.has_value();
             try {
                 std::shared_ptr<lvm::DiskCache> cache;
                 // Optional persistence must not prevent valid source opening.
@@ -391,6 +395,10 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                         }
                         for(std::size_t i=0;i<time.size();++i) {
                             if(!std::isfinite(time[i]))continue;
+                            if(interval) {
+                                if(!result->source_rows)result->index->range_start=time[i];
+                                result->index->range_end=time[i];
+                            }
                             if(seed.time.size()<2) {
                                 seed.time.push_back(time[i]);seed.raw_time.push_back(values[0][i]);
                                 for(std::size_t c=1;c<values.size();++c)seed.channels[c-1].push_back(values[c][i]);
@@ -421,6 +429,7 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                         kept.generated_names.push_back(seed.generated_names[c]);kept.source_columns.push_back(seed.source_columns[c]);
                     }
                     if(kept.rows()<2 || !kept.channel_count())throw std::runtime_error("No signal channels or fewer than two samples.");
+                    if(interval && kept.frequency_axis)throw std::runtime_error("Open interval requires a time recording, not a stored spectrum.");
                     // Frequency-axis imports stay on the existing spectrum path.
                     if(kept.frequency_axis && !resident_admission)throw std::runtime_error("Insufficient memory for this stored spectrum.");
                     if(resident_admission) {
@@ -454,12 +463,22 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                         throw lvm::RecordingFailure(lvm::RecordingError::SourceChanged,"The source changed while opening. Reopen it.");
                     discovered=true;
                 };
+                if(interval) {
+                    // A fragment index must never replace the full-file scan cache.
+                    result->index=std::make_shared<lvm::ScanIndex>();
+                    result->index->file_size=std::filesystem::file_size(path_copy);
+                    result->index->modified=std::filesystem::last_write_time(path_copy);
+                    result->range_start=interval->start;result->range_end=interval->end;
+                    discover(nullptr,0);
+                } else {
                 lvm::ScanIndexCacheOptions options;options.budget=memory_budget;
                 options.scan=[&](lvm::ScanIndex& index,std::size_t limit,std::string&) {discover(&index,limit);return true;};
                 auto scanned=lvm::scan_index_cached(std::filesystem::path(path_copy),std::move(cache),options,cancel_flag.get());
                 result->index=std::move(scanned.index);result->index_from_disk_cache=scanned.from_cache;
                 result->range_start=result->index->range_start;result->range_end=result->index->range_end;result->ok=true;
                 if(!discovered)discover(nullptr,0);
+                }
+                result->range_start=result->index->range_start;result->range_end=result->index->range_end;result->ok=true;
             }catch(const std::exception& e){result->ok=false;result->error=e.what();}
             result->cancelled = cancel_flag->load(std::memory_order_relaxed);
             post_async_result(target, WM_APP_ASYNC_SCAN_DONE, std::move(result));
@@ -608,6 +627,20 @@ void open_file() {
     queue_open_paths(std::move(paths));
 }
 
+void open_recording_interval() {
+    if(g.async_load_stage!=AsyncLoadStage::None)return;
+    std::vector<wchar_t> file(65536,L'\0');
+    OPENFILENAMEW ofn{};ofn.lStructSize=sizeof(ofn);ofn.hwndOwner=g.main;
+    ofn.lpstrFilter=L"Recordings (*.lvm;*.txt;*.csv)\0*.lvm;*.txt;*.csv\0\0";
+    ofn.lpstrFile=file.data();ofn.nMaxFile=static_cast<DWORD>(file.size());
+    ofn.Flags=OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if(!GetOpenFileNameW(&ofn))return;
+    double start=0,end=10;
+    if(!prompt_analysis_window(0,10,start,end,true))return;
+    if(!start_async_scan_task(file.data(),true,lvm::TimeRange{start,end}))
+        show_styled_info_prompt(g.main,g_str->msg_read_err,to_w(g.last_error).c_str(),true);
+}
+
 void show_recent_files_menu(HWND owner) {
     toggle_welcome_recent_files_panel(owner);
 }
@@ -649,6 +682,13 @@ LRESULT handle_loading_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     result->resident_gap_step,true,lvm::RecordingStamp{result->index->file_size,result->index->modified},result->resident_filter_step);
                 result->resident_data={};result->resident_reservation.reset();
             } else accepted=apply_scanned_recording(*result);
+            if(accepted && result->opened_interval) {
+                // This is a complete document for the chosen source bounds.
+                g.current_file_partial=false;
+                g.file_name+=L" ["+format_edit_number(result->range_start)+L"–"+format_edit_number(result->range_end)+L" s]";
+                SetWindowTextW(g.main,(std::wstring(g_str->app_title)+L" — "+g.file_name).c_str());
+                refresh_open_document_selector();set_status();
+            }
             if(!accepted)MessageBoxW(hwnd,to_w(g.last_error).c_str(),g_str->msg_read_err,MB_ICONERROR | MB_OK);
             continue_open_queue();return 0;
         }

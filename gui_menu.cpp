@@ -302,6 +302,7 @@ HMENU make_menu() {
     const std::wstring undo_text = menu_text(text(L"Undo", L"Отменить"), IDM_UNDO);
     const std::wstring redo_text = menu_text(text(L"Redo", L"Повторить"), IDM_REDO);
     append_menu_item_owner_draw(file, IDC_OPEN, open_text);
+    append_menu_item_owner_draw(file, IDM_OPEN_INTERVAL, text(L"Open recording interval…", L"Открыть участок записи…"));
     const HMENU recent = CreatePopupMenu();
     if (g.recent_files.empty()) {
         append_menu_item_owner_draw(recent, IDM_RECENT_FILE_BASE, text(L"No recent files", L"Недавних файлов нет"));

@@ -38,6 +38,7 @@ extern GuidePromptState g_guide_prompt;
 LRESULT CALLBACK GuidePromptProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
 struct RangePromptState {
+    bool opening = false;
     HWND wnd = nullptr;
     HWND start_edit = nullptr;
     HWND end_edit = nullptr;
@@ -212,7 +213,8 @@ bool prompt_numeric_value(const wchar_t* title, const wchar_t* label,
                           const wchar_t* invalid_text, double initial_value,
                           bool positive_only, double& out_value);
 
-bool prompt_analysis_window(double range_start, double range_end, double& out_start, double& out_end);
+bool prompt_analysis_window(double range_start, double range_end, double& out_start, double& out_end,
+                            bool opening = false);
 
 bool prompt_export_options(ExportOptions& out_options);
 

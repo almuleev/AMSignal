@@ -3859,6 +3859,36 @@ void adaptive_opening_and_cache() {
     cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};DestroyWindow(g.main);g.main=nullptr;
 }
 
+void interval_opening() {
+    reset_document({"previous"},{0,1},{{7,8}});
+    const auto path=std::filesystem::absolute(test_dir/"interval-open.txt");
+    {std::ofstream out(path);out<<"Time\tA\n";for(int i=0;i<=1000;++i)out<<i*.125<<'\t'<<i+10<<'\n';}
+    g.main=CreateWindowExW(0,L"STATIC",L"Interval opening",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    const auto receive=[&]{g_load_worker.join();MSG message{};
+        require(PeekMessageW(&message,g.main,WM_APP_ASYNC_SCAN_DONE,WM_APP_ASYNC_SCAN_DONE,PM_REMOVE),"interval result arrives");
+        handle_loading_message(g.main,message.message,message.wParam,message.lParam);};
+    require(!start_async_scan_task(path.wstring(),true,lvm::TimeRange{20,10}),"reversed interval is rejected before starting a worker");
+    for(bool resident:{true,false}) {
+        require(start_async_scan_task(path.wstring(),resident,lvm::TimeRange{10,12}),"interval discovery starts");receive();
+        require(analysis_recording_bounds().start==10 && analysis_recording_bounds().end==12 &&
+            g.win_start==10 && g.win_end==12 && !g.current_file_partial,"fragment bounds govern source and viewport in both storage modes");
+        require(g.file_name.find(L"[10")!=std::wstring::npos,"document title identifies the fragment");
+        std::vector<double> time,values;
+        lvm::RecordingReadRequest read;read.channels={0};
+        current_recording_source()->replay(read,[&](const auto& t,const auto& v){time.insert(time.end(),t.begin(),t.end());values.insert(values.end(),v[0].begin(),v[0].end());});
+        require(time.size()==17 && time.front()==10 && time.back()==12 && values.front()==90 && values.back()==106,
+            "entire-source replay contains exactly the selected original samples");
+        double start,end;bool selected;
+        require(current_fft_source_window(start,end,selected) && start==10 && end==12 && !selected,"default analysis uses the complete fragment");
+        if(resident)require(move_resident_recordings_to_disk() && analysis_recording_bounds().start==10 &&
+            analysis_recording_bounds().end==12,"demotion retains fragment bounds");
+        cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};
+    }
+    require(start_async_scan_task(path.wstring(),true),"ordinary full opening remains available");receive();
+    require(g.ds.rows()==1001 && analysis_recording_bounds().start==0 && analysis_recording_bounds().end==125,"fragment does not poison the full-file cache");
+    DestroyWindow(g.main);g.main=nullptr;
+}
+
 void adaptive_ram_admission() {
     reset_document({"previous"},{0,1},{{7,8}});
     const auto growth_path=std::filesystem::absolute(test_dir/"ram-growth.txt");
@@ -4282,7 +4312,7 @@ int main(int argc,char** argv) {
         }
         document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); global_gap_markers_setting(); multiple_open_documents(); processing(); fft_recording_recovery();
         display_load_budget(); loading_window_ownership(); bounded_load_recovery(); document_source_and_resources(); background_document_overview(); overview_renderer(); resource_settings_and_load_ownership(); configurable_point_cursor(); analysis_admission_and_publication(); persistent_recording_cache(); filter_bound_crossing(); resident_envelope_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
-        persistent_filter_continuations();background_filtered_resident_view();adaptive_opening_and_cache();adaptive_ram_admission();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
+        persistent_filter_continuations();background_filtered_resident_view();adaptive_opening_and_cache();interval_opening();adaptive_ram_admission();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
         analysis_preempts_background_overview();
         user_axis_names_outside_plot();
         spectrum_pending_message();
