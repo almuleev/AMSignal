@@ -82,11 +82,16 @@ std::shared_ptr<lvm::MemoryBudget> refresh_load_memory_budget() {
                       lvm::resource_headroom(memory));
     return budget;
 }
+void refresh_system_memory_budget(const std::shared_ptr<lvm::MemoryBudget>& budget,const lvm::ResourcePolicy& policy) {
+    MEMORYSTATUSEX status{};status.dwLength=sizeof(status);
+    if(GlobalMemoryStatusEx(&status))budget->refresh_headroom(policy,status.ullAvailPhys,status.ullAvailPageFile);
+    else budget->refresh_headroom(policy,256ULL*1024*1024,256ULL*1024*1024);
+}
 bool set_resource_policy(bool automatic,unsigned manual_mib) {
     if(!lvm::ResourcePolicy::valid_manual(manual_mib))return false;
     g.resource_policy={automatic,manual_mib};
     trim_processed_caches();
-    auto budget=refresh_load_memory_budget();g_frf_worker.trim_cache(budget->limit()/3,256ULL*1024*1024);
+    auto budget=refresh_load_memory_budget();g_frf_worker.trim_cache(budget->limit()/(g.resource_policy.automatic ? 2 : 3),256ULL*1024*1024);
     g_overview_worker.trim_cache(std::min<std::uint64_t>(128ULL*1024*1024,budget->limit()/8));
     trim_document_analysis_caches(static_cast<std::size_t>(budget->limit()/8));
     lvm::trim_fft_cached_plans(static_cast<std::size_t>(budget->limit()/8));
@@ -109,29 +114,30 @@ bool set_disk_cache_policy(bool unlimited,unsigned manual_mib,bool persist) {
 }
 lvm::AnalysisResources current_analysis_resources(std::uint64_t required) {
     lvm::AnalysisResources result;result.budget=refresh_load_memory_budget();
-    g_frf_worker.trim_cache(result.budget->limit()/3,result.cache_disk_bytes);
+    const auto target=std::max<std::uint64_t>(required,32ULL*1024*1024);
+    g_frf_worker.trim_cache(result.budget->limit()/(g.resource_policy.automatic ? 2 : 3),result.cache_disk_bytes);
     g_overview_worker.trim_cache(std::min<std::uint64_t>(128ULL*1024*1024,result.budget->limit()/8));
     trim_document_analysis_caches(static_cast<std::size_t>(result.budget->limit()/8));
     lvm::trim_fft_cached_plans(static_cast<std::size_t>(result.budget->limit()/8));
-    if(refresh_load_memory_budget()->available()<std::max<std::uint64_t>(required,32ULL*1024*1024))
+    if(refresh_load_memory_budget()->available()<target)
         trim_processed_caches();
-    if(refresh_load_memory_budget()->available()<32ULL*1024*1024)move_resident_recordings_to_disk();
-    if(required && refresh_load_memory_budget()->available()<required) {
+    if(refresh_load_memory_budget()->available()<target) {
         // Caches borrow the shared budget; a new operation has priority. Live
         // requests keep their own shared owners even after idle retention ends.
         g_frf_worker.clear_cache();g_overview_worker.trim_cache(0);
         trim_processed_caches();
         trim_document_analysis_caches(0);lvm::trim_fft_cached_plans(0);
-        if(refresh_load_memory_budget()->available()<required) {
+        if(refresh_load_memory_budget()->available()<target) {
             g.spec={};g.spec_valid=false;if(!g.spec_pending)g.spec_attempted=false;
             g.frf.result={};if(!g.frf.pending)g.frf.attempted=false;
         }
+        if(refresh_load_memory_budget()->available()<target)move_resident_recordings_to_disk(target);
     }
     result.budget=refresh_load_memory_budget();
     result.memory_bytes=static_cast<std::size_t>(result.budget->available());
     result.cached_plans_accounted=true;
     result.max_participants=lvm::processor_participants();
-    result.cache_memory_bytes=result.budget->limit()/3;
+    result.cache_memory_bytes=result.budget->limit()/(g.resource_policy.automatic ? 2 : 3);
     return result;
 }
 std::shared_ptr<lvm::MemoryBudget::Reservation> reserve_analysis_input(

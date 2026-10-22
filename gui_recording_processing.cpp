@@ -167,6 +167,7 @@ std::shared_ptr<const lvm::RecordingSource> processed_recording_source(bool appl
                 for(std::size_t c=0;c<raw->channel_count();++c)column(c);
             if(cancel && cancel->load())throw lvm::RecordingFailure(lvm::RecordingError::Cancelled,"Operation cancelled.");
             raw->check_current();
+            building->reservation->mark_resident();
             std::lock_guard<std::mutex> lock(cadence->mutex);
             if(epoch!=cadence->cache_epoch)return {};
             if(!cadence->processed) {
@@ -341,6 +342,7 @@ std::shared_ptr<const lvm::RecordingSource> processed_recording_source(bool appl
             if(building && cached_rows==resident->rows()) {
                 if(cancel && cancel->load())throw lvm::RecordingFailure(lvm::RecordingError::Cancelled,"Operation cancelled.");
                 raw->check_current();
+                building->reservation->mark_resident();
                 std::lock_guard<std::mutex> lock(cadence->mutex);
                 if(cache_epoch==cadence->cache_epoch && !cadence->processed)cadence->processed=std::move(building);
             }

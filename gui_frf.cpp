@@ -561,7 +561,12 @@ void compute_frf_from_current_source() {
     if(g.frf.apply_processing && g.noise_threshold_enabled)share_resident_recording();
     refresh_frf_channel_names();
     try {
-        auto resources=current_analysis_resources();
+        const auto selected_rows=analysis_source_rows(a,b);
+        const auto workspace=lvm::frf_workspace_bytes(selected_rows,g.frf.outputs.size(),g.frf.options);
+        const auto work_bytes=workspace>=std::numeric_limits<std::uint64_t>::max() ?
+            std::numeric_limits<std::uint64_t>::max() : static_cast<std::uint64_t>(workspace);
+        const auto required=lvm::saturated_add(48ULL*1024*1024,work_bytes);
+        auto resources=current_analysis_resources(required);resources.working_memory_bytes=work_bytes;
         g.frf.attempted=true;
         if(!resources.memory_bytes)throw lvm::FrfSourceFailure(lvm::FrfError::ResourceLimit);
         std::vector<std::size_t> channels(g.frf.inputs.begin(),g.frf.inputs.end());
@@ -597,17 +602,20 @@ void compute_frf_from_current_source() {
                 // The previous key cannot serve this request. Free its cache
                 // before admitting a new input; active cancelled work still owns it.
                 g_frf_worker.clear_cache();
-                resources=current_analysis_resources();g.frf.attempted=true;
+                resources=current_analysis_resources(required);resources.working_memory_bytes=work_bytes;
+                g.frf.attempted=true;g.frf.pending=true;
                 const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),a);
                 const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),b);
                 const bool stream=(g.recording_source && g.ds.rows()<3 && g.recording_rows>g.ds.rows()) ||
                     (g.current_file_partial && g.source_scan_index) ||
-                    (1024.0L*1024+static_cast<long double>(hi-lo)*(channels.size()+1)*8+
-                     std::min<std::size_t>(hi-lo,1048576)*16.0L)>resources.budget->available()/2;
+                    (1024.0L*1024+static_cast<long double>(selected_rows)*(channels.size()+1)*8+
+                     std::min<std::size_t>(selected_rows,1048576)*16.0L+workspace)>resources.budget->available();
                 if(stream && (ec || g.ds.source_columns.size()!=g.ds.channel_count()))
                     throw std::runtime_error("Streaming FRF requires an unchanged source file and physical column mapping.");
                 if(stream && !ec && g.ds.source_columns.size()==g.ds.channel_count()) {
-                    resources=current_analysis_resources(48ULL*1024*1024);g.frf.attempted=true;
+                    share_resident_recording();
+                    resources=current_analysis_resources(required);resources.working_memory_bytes=work_bytes;
+                    g.frf.attempted=true;g.frf.pending=true;
                     const auto recording=current_recording_source();
                     lvm::RecordingReadRequest read;
                     read.range=lvm::AnalysisRange::selected(a,b);
@@ -639,7 +647,8 @@ void compute_frf_from_current_source() {
                     if(filtering)read.range.interval.start=full_filter && g.source_scan_index
                         ? g.source_scan_index->range_start : std::min(a,g.ds.time.front());
                     lvm::FrfSource source;source.references=g.frf.inputs.size();source.responses=g.frf.outputs.size();
-                    if(g.overview.index) {
+                    if(selected_rows)source.expected_samples=selected_rows;
+                    else if(g.overview.index) {
                         const auto rows=g.overview.index->sample_range(lvm::AnalysisRange::selected(a,b));
                         source.expected_samples=static_cast<std::size_t>(rows.second-rows.first);
                     } else if(a<=recording->bounds().start && b>=recording->bounds().end)source.expected_samples=g.recording_rows;

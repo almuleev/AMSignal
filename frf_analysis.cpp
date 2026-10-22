@@ -10,6 +10,11 @@
 
 namespace lvm {
 namespace {
+std::size_t segment_length(std::size_t n,const FrfOptions& options) {
+    std::size_t length=options.estimator==FrfEstimator::Direct ? n : options.segment_length;
+    if(!length) {const auto target=std::max<std::size_t>(4,n/4);length=4;while(length<=target/2)length*=2;}
+    return length;
+}
 void check_cancel(const std::atomic<bool>* cancel) {
     if (cancel && cancel->load(std::memory_order_relaxed)) throw std::runtime_error("Operation cancelled.");
 }
@@ -95,8 +100,7 @@ FrfBatchResult compute_shared_frf(const PreparedFrf& input,
         options.window!=FrfWindow::Hann || !std::isfinite(options.reference_threshold) ||
         options.reference_threshold<=0 || options.reference_threshold>=1 ||
         (options.segment_length && (options.segment_length<4 || options.segment_length%2))) error=FrfError::InvalidOptions;
-    std::size_t L=options.estimator==FrfEstimator::Direct ? n : options.segment_length;
-    if (!L) { const std::size_t target=std::max<std::size_t>(4,n/4); L=4; while (L<=target/2) L*=2; }
+    const auto L=segment_length(n,options);
     if (error==FrfError::None && (L>n || L<4)) error=FrfError::TooShort;
     if (error==FrfError::None && L>static_cast<std::size_t>(std::numeric_limits<int>::max()/2)) error=FrfError::Overflow;
     batch.responses.resize(response_count);
@@ -305,11 +309,7 @@ FrfResult compute_frf(const FrfSamples& s, const FrfOptions& options, const std:
         options.window!=FrfWindow::Hann || !std::isfinite(options.reference_threshold) ||
         options.reference_threshold<=0 || options.reference_threshold>=1 ||
         (options.segment_length && (options.segment_length<4 || options.segment_length%2))) return fail(FrfError::InvalidOptions);
-    std::size_t L=options.estimator==FrfEstimator::Direct ? n : options.segment_length;
-    if (!L) {
-        const std::size_t target=std::max<std::size_t>(4,n/4);
-        L=4; while (L<=target/2) L*=2;
-    }
+    const auto L=segment_length(n,options);
     if (L>n || L<4) return fail(FrfError::TooShort);
     if (L>static_cast<std::size_t>(std::numeric_limits<int>::max()/2)) return fail(FrfError::Overflow);
     r.segment_length=L; r.overlap_samples=options.estimator==FrfEstimator::H1 ? L/2 : 0;
@@ -397,6 +397,16 @@ FrfResult analyze_frf(const FrfInput& in, const FrfOptions& options, const std::
 double frf_dynamic_coefficient(const FrfResult& r, std::size_t k) {
     if (k>=r.valid.size() || !r.valid[k] || k>=r.transfer.size()) return std::numeric_limits<double>::quiet_NaN();
     return std::abs(r.transfer[k]);
+}
+
+long double frf_workspace_bytes(std::size_t n,std::size_t responses,const FrfOptions& options) {
+    const auto length=segment_length(n,options);
+    if(n<4 || length<4 || length>n || length>static_cast<std::size_t>(std::numeric_limits<int>::max()/2))return 0;
+    std::size_t m=1;
+    if(length&(length-1))while(m<2*length-1)m*=2;
+    const long double scratch=(length&(length-1)) ? (length+static_cast<long double>(m))*32 : 0;
+    return 1024.0L*1024+4096.0L*(responses+1)*8+length*8.0L+
+        (length/2+1)*(16.0L+responses*100.0L)+length*(responses+1.0L)*24+scratch;
 }
 
 const FrfResult& FrfBatchResult::common() const {

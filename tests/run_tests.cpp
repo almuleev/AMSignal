@@ -1797,6 +1797,26 @@ void test_analysis_resources() {
 void test_resource_budget() {
     constexpr std::uint64_t mib=1024*1024,gib=1024*mib;
     {
+        auto ledger=std::make_shared<lvm::MemoryBudget>();ledger->configure(100,0,100);
+        auto values=ledger->reserve(40);values->mark_resident();
+        check(ledger->shared_resident()==40 && ledger->available()==60,
+            "committing allocated buffers does not create new headroom before an OS refresh");
+        // Byte-sized snapshots exercise Auto's low-memory reserve as well.
+        ledger->refresh_headroom({},100,100);
+        check(ledger->available()==50,"retained buffers are not subtracted a second time from measured free memory");
+        check(values->grow_to(70) && ledger->shared_resident()==40 && ledger->reserved()==70,
+            "growing a retained owner reserves only prospective bytes");
+        check(!values->grow_to(200) && values->bytes()==70,"denied growth preserves the live allocation and its admission");
+        values->mark_resident();ledger->refresh_headroom({},70,70);
+        check(ledger->shared_resident()==70 && ledger->available()==35,"committed growth follows reduced physical/commit headroom");
+        auto held=values;values.reset();ledger->refresh_headroom({},0,0);
+        check(ledger->available()==0 && ledger->shared_resident()==70,"pressure cannot release a cancelled owner's live buffers");
+        held.reset();check(ledger->reserved()==0 && ledger->shared_resident()==0,"last owner releases committed growth exactly once");
+        ledger->configure(100,0,100);
+        auto temporary=ledger->reserve(40);temporary->mark_resident();temporary.reset();
+        check(ledger->available()==100,"standalone ledgers recover committed headroom when no OS refresh intervenes");
+    }
+    {
         auto ledger=std::make_shared<lvm::MemoryBudget>();ledger->configure(120,20,100);
         const auto before=ledger->available();auto retained=ledger->transfer_resident(20);
         check(retained && ledger->reserved()==20 && ledger->shared_resident()==20 && ledger->available()==before,

@@ -142,20 +142,18 @@ void compute_spectrum_for_window(double start, double end, bool from_selection) 
     try {
         if(g.noise_threshold_enabled)share_resident_recording();
         if(g.main) {g_spectrum_worker.cancel();++g.spec_generation;}
-        const auto selected_rows=static_cast<std::size_t>(std::upper_bound(g.ds.time.begin(),g.ds.time.end(),end)-
-            std::lower_bound(g.ds.time.begin(),g.ds.time.end(),start));
+        const auto selected_rows=analysis_source_rows(start,end);
         const auto required=lvm::spectrum_workspace_bytes(selected_rows,visible_channels.size())+
             1024.0L*1024+selected_rows*(visible_channels.size()+1.0L)*8;
         const auto resources=current_analysis_resources(static_cast<std::uint64_t>(required));
         g.spec_source_start=start;g.spec_source_end=end;g.spec_source_from_selection=from_selection;g.spec_source_valid=end>start;
         const auto lo=std::lower_bound(g.ds.time.begin(),g.ds.time.end(),start);
         const auto hi=std::upper_bound(g.ds.time.begin(),g.ds.time.end(),end);
-        const auto rows=static_cast<std::size_t>(hi-lo);
-        const auto ram_required=lvm::spectrum_workspace_bytes(rows,visible_channels.size())+
-            1024.0L*1024+rows*(visible_channels.size()+1.0L)*8;
+        const auto ram_required=required;
         const bool source_needed=(g.recording_source && g.ds.rows()<3 && g.recording_rows>g.ds.rows()) ||
             (g.current_file_partial && g.source_scan_index) ||
             (g.recording_source && ram_required>resources.budget->available());
+        if(source_needed)share_resident_recording();
         lvm::SpectrumWorker::Compute disk_retry;
         if(g.recording_source) {
             const auto source=processed_recording_source(true,0,resources.budget);

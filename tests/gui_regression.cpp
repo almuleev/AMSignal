@@ -3859,6 +3859,54 @@ void adaptive_opening_and_cache() {
     cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};DestroyWindow(g.main);g.main=nullptr;
 }
 
+void adaptive_ram_admission() {
+    reset_document({"previous"},{0,1},{{7,8}});
+    const auto growth_path=std::filesystem::absolute(test_dir/"ram-growth.txt");
+    {std::ofstream out(growth_path);out<<"Time";for(int c=1;c<=8;++c)out<<"\tC"<<c;out<<'\n';
+        for(int i=0;i<100000;++i){out<<i;for(int c=1;c<=8;++c)out<<'\t'<<(1+i%17)*c;out<<'\n';}}
+    g.main=CreateWindowExW(0,L"STATIC",L"Adaptive RAM",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(set_resource_policy(false,64) && start_async_scan_task(growth_path.wstring(),true),"bounded RAM growth fixture starts");
+    g_load_worker.join();MSG message{};
+    require(PeekMessageW(&message,g.main,WM_APP_ASYNC_SCAN_DONE,WM_APP_ASYNC_SCAN_DONE,PM_REMOVE),"RAM growth result arrives");
+    handle_loading_message(g.main,message.message,message.wParam,message.lParam);
+    require(g.ds.rows()==100000 && g.ds.channel_count()==8 && g.ds.channels.back().back()==(1+99999%17)*8,
+        "a capped allocation keeps all samples when the following blocks require no further growth");
+    cancel_recording_overview();g_overview_worker.trim_cache(0);
+
+    const auto path=std::filesystem::absolute(test_dir/"ram-stream-frf.txt");
+    constexpr std::size_t rows=524288;
+    {std::ofstream out(path);out<<"Time";for(int c=1;c<=16;++c)out<<"\tC"<<c;out<<'\n';
+        for(std::size_t i=0;i<rows;++i){out<<i;for(int c=1;c<=16;++c)out<<'\t'<<(1+i%17)*c;out<<'\n';}}
+    require(set_resource_policy(false,160),"resident streaming test has a bounded manual budget");
+    auto data=lvm::read_lvm_file(path);
+    require(data.ok && apply_loaded_dataset(std::move(data),path.wstring(),false,1,true),"resident source opens for streaming analysis");
+    g.ds.time.reserve(4000000);
+    const auto revision=g.numerical_revision;
+    g.frf.inputs={0};g.frf.outputs.clear();for(int c=1;c<16;++c)g.frf.outputs.push_back(c);
+    g.frf.apply_processing=false;g.frf.options.segment_length=1024;
+    compute_frf_from_current_source();
+    const auto began=std::chrono::steady_clock::now();
+    while(g.frf.pending && std::chrono::steady_clock::now()-began<std::chrono::seconds(30)){poll_frf_result();Sleep(1);}
+    require(!g.frf.pending && g.frf.result.ok && g.frf.result.common().sample_count==rows,
+        "bounded streaming FRF preserves full N for a resident document");
+    require(g.ds.rows()==2 && g.recording_source->resident_backed() && g.recording_rows==rows,
+        "unprocessed streaming analysis transfers the original RAM owner instead of rereading its file");
+    for(std::size_t c=0;c<g.frf.result.responses.size();++c) {
+        const auto& response=g.frf.result.responses[c];const auto at=std::find(response.valid.begin(),response.valid.end(),1);
+        require(at!=response.valid.end() && std::abs(response.transfer[at-response.valid.begin()]-std::complex<double>(c+2,0))<1e-9,
+            "resident streaming H1 preserves the expected channel gain");
+    }
+    auto held=g.recording_source;auto resources=current_analysis_resources(100ULL*1024*1024);
+    require(!g.recording_source->resident_backed() && held->resident_backed() && held->sample_count()==rows &&
+            resources.memory_bytes<100ULL*1024*1024 && g.numerical_revision==revision,
+        "workspace pressure demotes the document without claiming memory still held by a snapshot");
+    held.reset();const auto released=std::chrono::steady_clock::now();
+    while(refresh_load_memory_budget()->available()<100ULL*1024*1024 &&
+          std::chrono::steady_clock::now()-released<std::chrono::seconds(3))Sleep(1);
+    require(refresh_load_memory_budget()->available()>=100ULL*1024*1024,"last snapshot release restores the requested workspace");
+    cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};DestroyWindow(g.main);g.main=nullptr;
+}
+
 void demotion_edge_cases() {
     reset_document({"previous"},{0,1},{{7,8}});
     const auto path=std::filesystem::absolute(test_dir/"demotion-step.txt");
@@ -4234,7 +4282,7 @@ int main(int argc,char** argv) {
         }
         document_history_and_save_state(); exports(); save_hotkeys(); channel_coefficient_fields(); point_display_defaults(); status_bar_text(); mode_button_text(); global_gap_markers_setting(); multiple_open_documents(); processing(); fft_recording_recovery();
         display_load_budget(); loading_window_ownership(); bounded_load_recovery(); document_source_and_resources(); background_document_overview(); overview_renderer(); resource_settings_and_load_ownership(); configurable_point_cursor(); analysis_admission_and_publication(); persistent_recording_cache(); filter_bound_crossing(); resident_envelope_and_history(); reopen_spectrum(); fft_selected_gap_range(); stitched_gap_regressions();
-        persistent_filter_continuations();background_filtered_resident_view();adaptive_opening_and_cache();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
+        persistent_filter_continuations();background_filtered_resident_view();adaptive_opening_and_cache();adaptive_ram_admission();demotion_edge_cases();unified_source_opening();spectrum_visibility_cache();
         analysis_preempts_background_overview();
         user_axis_names_outside_plot();
         spectrum_pending_message();

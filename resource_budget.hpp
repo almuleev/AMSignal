@@ -40,27 +40,61 @@ public:
     class Reservation {
     public:
         ~Reservation() { std::lock_guard<std::mutex> lock(owner_->mutex_); owner_->reserved_ -= bytes_;
-            if(resident_)owner_->shared_resident_-=bytes_; }
+            release_resident(resident_bytes_); }
         std::uint64_t bytes() const { std::lock_guard<std::mutex> lock(owner_->mutex_);return bytes_; }
         bool shrink_to(std::uint64_t bytes) {
             std::lock_guard<std::mutex> lock(owner_->mutex_);
             if(bytes>bytes_)return false;
             owner_->reserved_-=bytes_-bytes;
-            if(resident_)owner_->shared_resident_-=bytes_-bytes;
+            const auto retained=std::min(resident_bytes_,bytes);
+            release_resident(resident_bytes_-retained);resident_bytes_=retained;
             bytes_=bytes;return true;
+        }
+        // Reserve growth before allocating. Failure leaves the old owner intact.
+        bool grow_to(std::uint64_t bytes) {
+            std::lock_guard<std::mutex> lock(owner_->mutex_);
+            if(bytes<bytes_ || bytes-bytes_>owner_->available_locked())return false;
+            owner_->reserved_+=bytes-bytes_;bytes_=bytes;return true;
+        }
+        // Completed buffers are already reflected in OS free memory. Preserve
+        // the old admission until the next OS snapshot instead of spending it twice.
+        void mark_resident() {
+            std::lock_guard<std::mutex> lock(owner_->mutex_);
+            const auto added=bytes_-resident_bytes_;
+            owner_->shared_resident_+=added;resident_bytes_=bytes_;
+            if(charged_snapshot_!=owner_->snapshot_) {charged_bytes_=0;charged_snapshot_=owner_->snapshot_;}
+            const auto charge=std::min(owner_->headroom_,added);
+            charged_bytes_+=charge;owner_->headroom_-=charge;
         }
         Reservation(const Reservation&) = delete;
         Reservation& operator=(const Reservation&) = delete;
     private:
         friend class MemoryBudget;
+        // Return only the debit made since the current snapshot. After an OS
+        // refresh, released resident memory becomes available on the next refresh.
+        void release_resident(std::uint64_t bytes) {
+            owner_->shared_resident_-=bytes;
+            if(charged_snapshot_==owner_->snapshot_) {
+                const auto restored=std::min(charged_bytes_,bytes);
+                owner_->headroom_=saturated_add(owner_->headroom_,restored);charged_bytes_-=restored;
+            }
+        }
         Reservation(std::shared_ptr<MemoryBudget> owner,std::uint64_t bytes) : owner_(std::move(owner)),bytes_(bytes) {}
         std::shared_ptr<MemoryBudget> owner_;
         std::uint64_t bytes_;
-        bool resident_=false;
+        std::uint64_t resident_bytes_=0;
+        std::uint64_t charged_bytes_=0,charged_snapshot_=0;
     };
     void configure(std::uint64_t limit,std::uint64_t resident,std::uint64_t free_headroom) {
         std::lock_guard<std::mutex> lock(mutex_);
-        limit_=limit; resident_=resident; headroom_=free_headroom;
+        limit_=limit; resident_=resident; headroom_=free_headroom;++snapshot_;
+    }
+    // Worker-safe OS refresh: document capacities stay with the GUI snapshot;
+    // retained reservations track buffers allocated since that snapshot.
+    void refresh_headroom(const ResourcePolicy& policy,std::uint64_t physical,std::uint64_t commit) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const ResourceSnapshot memory{physical,commit,saturated_add(resident_,shared_resident_)};
+        headroom_=resource_headroom(memory);limit_=resource_limit(policy,memory);++snapshot_;
     }
     std::uint64_t available() const {
         std::lock_guard<std::mutex> lock(mutex_); return available_locked();
@@ -88,7 +122,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         if(!bytes || bytes>resident_)return {};
         resident_-=bytes;reserved_+=bytes;shared_resident_+=bytes;
-        result->bytes_=bytes;result->resident_=true;return result;
+        result->bytes_=bytes;result->resident_bytes_=bytes;return result;
     }
 private:
     std::uint64_t available_locked() const {
@@ -100,5 +134,6 @@ private:
     }
     mutable std::mutex mutex_;
     std::uint64_t limit_=0,resident_=0,headroom_=0,reserved_=0,shared_resident_=0;
+    std::uint64_t snapshot_=0;
 };
 } // namespace lvm

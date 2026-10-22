@@ -260,9 +260,10 @@ bool apply_scanned_recording(AsyncScanResult& result) {
     sync_menu();set_status();invalidate_plot();return true;
 }
 
-bool move_resident_recordings_to_disk() {
+bool move_resident_recordings_to_disk(std::uint64_t required) {
     bool changed=false;
     const auto convert=[&](DocumentState& document,bool active) {
+        if(required && refresh_load_memory_budget()->available()>=required)return;
         if(document.current_file_partial || document.ds.frequency_axis || !document.recording_source ||
            (document.ds.rows()<3 && !document.recording_source->resident_backed()))return;
         std::shared_ptr<const lvm::RecordingSource> source;
@@ -315,9 +316,10 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
     const HWND target = g.main;
     try {
         const auto memory_budget=refresh_load_memory_budget();
+        const auto policy=g.resource_policy;
         g_frf_worker.clear_cache();g_overview_worker.trim_cache(0);
         if (g_load_worker.joinable()) g_load_worker.join();
-        g_load_worker = std::thread([token, path_copy, target, cancel_flag,memory_budget,adaptive_resident]() {
+        g_load_worker = std::thread([token, path_copy, target, cancel_flag,memory_budget,adaptive_resident,policy]() {
           try {
             auto result = std::make_unique<AsyncScanResult>();
             result->token = token;
@@ -343,7 +345,11 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                     // in the same pass. A rejected candidate is discarded before
                     // continuing bounded metadata discovery, without rereading.
                     const auto resident_limit=adaptive_resident ? memory_budget->available()/3 : 0;
-                    auto resident_admission=resident_limit ? memory_budget->reserve(resident_limit) : nullptr;
+                    auto resident_admission=adaptive_resident ? memory_budget->reserve(1024*1024) : nullptr;
+                    // Auto admits actual growth, retaining workspace for time
+                    // normalization/cadence. Manual keeps its existing load cap.
+                    auto preparation_admission=resident_admission && policy.automatic ? memory_budget->reserve(64ULL*1024*1024) : nullptr;
+                    if(policy.automatic && !preparation_admission)resident_admission.reset();
                     lvm::Dataset resident;
                     std::size_t capacity=0;
                     read.consume_block=[&](const auto& time,const auto& values) {
@@ -351,16 +357,25 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                             throw lvm::RecordingFailure(lvm::RecordingError::ResourceLimit,"Too many source columns for the metadata budget.");
                         valid.resize(values.size(),0);duplicate.resize(values.size(),1);
                         seed.channels.resize(values.size()>0 ? values.size()-1 : 0);
-                        if(resident_admission) {
+                        if(resident_admission && !resident.channels.empty() && resident.channels.size()+1!=values.size()) {
+                            resident={};resident_admission.reset();preparation_admission.reset();
+                        }
+                        if(resident_admission && resident.rows()+time.size()>capacity) {
                             const auto needed=resident.rows()+time.size();
-                            auto target=needed>capacity ? std::max(needed,capacity ? capacity*2 : std::size_t(65536)) : capacity;
+                            refresh_system_memory_budget(memory_budget,policy);
+                            if(preparation_admission && !preparation_admission->grow_to(std::max<std::uint64_t>(64ULL*1024*1024,needed*16ULL))) {
+                                resident={};resident_admission.reset();preparation_admission.reset();
+                            }
+                            const auto available=resident_admission ? lvm::saturated_add(resident_admission->bytes(),memory_budget->available()) : 0;
+                            const auto limit=policy.automatic ? available : std::min<std::uint64_t>(resident_limit,available);
+                            auto target=std::max(needed,capacity ? capacity*2 : std::size_t(65536));
                             const auto growth_overhead=capacity*8ULL+1024*1024;
-                            if(needed>capacity && resident_limit>growth_overhead)
-                                target=std::min<std::size_t>(target,(resident_limit-growth_overhead)/((values.size()+1)*8));
+                            if(limit>growth_overhead)
+                                target=std::min<std::size_t>(target,(limit-growth_overhead)/((values.size()+1)*8));
                             // Includes old vector storage during one-column growth.
                             const long double peak=target*(values.size()+1.0L)*8+capacity*8.0L+1024*1024;
-                            if(target<needed || peak>resident_limit || (!resident.channels.empty() && resident.channels.size()+1!=values.size())) {
-                                resident={};resident_admission.reset();
+                            if(!resident_admission || target<needed || peak>limit || !resident_admission->grow_to(static_cast<std::uint64_t>(peak))) {
+                                resident={};resident_admission.reset();preparation_admission.reset();
                             } else {
                                 try {
                                     resident.channels.resize(values.size()-1);
@@ -369,7 +384,9 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                                         for(auto& column:resident.channels)column.reserve(target);
                                         capacity=target;
                                     }
-                                } catch(const std::bad_alloc&) {resident={};resident_admission.reset();}
+                                    if(!resident_admission->shrink_to(lvm::RecordingSource::dataset_array_bytes(resident)))throw std::bad_alloc();
+                                    resident_admission->mark_resident();
+                                } catch(const std::bad_alloc&) {resident={};resident_admission.reset();preparation_admission.reset();}
                             }
                         }
                         for(std::size_t i=0;i<time.size();++i) {
@@ -407,6 +424,7 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                     // Frequency-axis imports stay on the existing spectrum path.
                     if(kept.frequency_axis && !resident_admission)throw std::runtime_error("Insufficient memory for this stored spectrum.");
                     if(resident_admission) {
+                      try {
                         lvm::Dataset complete;complete.time=std::move(resident.time);complete.raw_time=std::move(resident.raw_time);
                         for(std::size_t c=0;c<resident.channels.size();++c)if(valid[c+1] && (!duplicate[c+1] || kept.frequency_axis))complete.channels.push_back(std::move(resident.channels[c]));
                         complete.names=kept.names;complete.generated_names=kept.generated_names;complete.source_columns=kept.source_columns;
@@ -417,10 +435,16 @@ bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident) {
                         timeline.replay=[&complete](const auto& visitor,const auto*){visitor(complete.time,{});};
                         const auto cadence=lvm::inspect_frf_timeline(timeline,cancel_flag.get(),complete.rows());
                         if(cadence.error==lvm::FrfError::None)result->resident_filter_step=cadence.sample_dt;
-                        std::uint64_t bytes=(complete.time.capacity()+complete.raw_time.capacity())*8+1024*1024;
-                        for(const auto& column:complete.channels)bytes+=column.capacity()*8;
-                        resident_admission->shrink_to(bytes);
+                        const auto retained_bytes=lvm::RecordingSource::dataset_array_bytes(complete);
+                        if(retained_bytes>resident_admission->bytes()) {
+                            if(!resident_admission->grow_to(retained_bytes))throw std::bad_alloc();
+                        } else resident_admission->shrink_to(retained_bytes);
+                        resident_admission->mark_resident();
                         result->resident_reservation=std::move(resident_admission);result->resident_data=std::move(complete);
+                      } catch(const std::bad_alloc&) {
+                        if(kept.frequency_axis)throw;
+                        resident_admission.reset();preparation_admission.reset();
+                      }
                     }
                     result->source_metadata=std::move(kept);
                     std::error_code ec;
@@ -538,7 +562,7 @@ static bool start_source_open(const std::wstring& wpath) {
     g.cached_scan_valid = g.cached_scan_valid && g.cached_scan_index &&
         std::filesystem::file_size(std::filesystem::path(wpath), ec) == g.cached_scan_index->file_size && !ec &&
         std::filesystem::last_write_time(std::filesystem::path(wpath), ec) == g.cached_scan_index->modified && !ec;
-    return start_async_scan_task(wpath);
+    return start_async_scan_task(wpath,g.resource_policy.automatic);
 }
 
 bool retry_load_as_source(AsyncLoadResult& result) {

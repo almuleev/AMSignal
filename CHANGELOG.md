@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.17.12 (2026-10-22)
+
+Auto адаптивно удерживает исходные данные в RAM с резервом физической памяти,
+commit и подготовки расчётов. При нехватке бюджета освобождаются кэши и исходники
+переводятся на чтение с диска с сохранением полного участка и живых снимков.
+Потоковый FFT/АЧХ использует резидентный источник, пока он доступен.
+Пройдены профильные проверки ядра, GUI-регрессия и сценарий 10 GB; длительный
+стресс-тест не проводился. Локальный тег исходников, без публикации выпуска.
+[Полный журнал RU/EN](docs/releases/v0.17.12.md).
+
+Auto retains source samples in RAM through incremental admission with physical,
+commit and preparation headroom. Under budget pressure, caches are released and
+sources fall back to file reads while preserving the full range and live owners.
+Streaming FFT/FRF uses resident sources when available. Targeted core checks,
+GUI regression and a 10 GB scenario passed; no prolonged stress test was run.
+Local source tag; no release publication. See the bilingual notes above.
+
 ## v0.17.11 (2026-10-22)
 
 GPU-вычисления полностью исключены из рабочего кода, настроек и поставки;

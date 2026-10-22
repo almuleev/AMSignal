@@ -6,6 +6,8 @@ namespace gui {
 
 std::shared_ptr<const lvm::RecordingSource> current_recording_source();
 lvm::TimeRange analysis_recording_bounds();
+// Exact selected N when a full timeline/index is available; zero means unknown.
+std::size_t analysis_source_rows(double start,double end);
 
 bool has_fft_window();
 

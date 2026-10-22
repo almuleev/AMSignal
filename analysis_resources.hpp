@@ -13,6 +13,8 @@ struct AnalysisResources {
     std::size_t cache_memory_bytes=64ULL*1024*1024;
     std::size_t cache_disk_bytes=256ULL*1024*1024;
     bool cached_plans_accounted=false;
+    // Preparation must leave this minimum for the unchanged estimator.
+    std::uint64_t working_memory_bytes=0;
 };
 inline long double spectrum_workspace_bytes(std::size_t n,std::size_t channels) {
     long double scratch=16.0L*n;

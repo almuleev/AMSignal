@@ -5,6 +5,7 @@
 #include "gui_frf.hpp"
 #include "gui_spectrum.hpp"
 #include "gui_state_history.hpp"
+#include "recording_overview.hpp"
 
 namespace gui {
 
@@ -23,6 +24,20 @@ std::shared_ptr<const lvm::RecordingSource> current_recording_source() {
 
 bool has_fft_window() {
     return g.fft_window_active && g.fft_window_end > g.fft_window_start;
+}
+
+std::size_t analysis_source_rows(double start,double end) {
+    const auto* timeline=g.recording_source ? g.recording_source->resident_timeline() : nullptr;
+    const auto& time=timeline ? timeline->time : g.ds.time;
+    if(time.size()>2 && (timeline || !g.current_file_partial))return static_cast<std::size_t>(std::upper_bound(time.begin(),time.end(),end)-
+        std::lower_bound(time.begin(),time.end(),start));
+    if(g.overview.index) {
+        const auto rows=g.overview.index->sample_range(lvm::AnalysisRange::selected(start,end));
+        return static_cast<std::size_t>(rows.second-rows.first);
+    }
+    const auto bounds=analysis_recording_bounds();
+    if(start<=bounds.start && end>=bounds.end)return static_cast<std::size_t>(g.recording_rows);
+    return 0;
 }
 
 lvm::TimeRange analysis_recording_bounds() {

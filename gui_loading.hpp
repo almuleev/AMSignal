@@ -51,7 +51,7 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
                           bool cached_global_gap_step_ready,
                           std::optional<lvm::RecordingStamp> expected_stamp = {},double source_filter_step=0);
 // Releases full resident samples without changing the numerical input/settings.
-bool move_resident_recordings_to_disk();
+bool move_resident_recordings_to_disk(std::uint64_t required=0);
 
 bool start_async_scan_task(const std::wstring& wpath,bool adaptive_resident=false);
 

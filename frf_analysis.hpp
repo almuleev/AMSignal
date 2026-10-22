@@ -22,6 +22,8 @@ struct FrfOptions {
     // 0 = automatic. H1 requires an even length >= 4; overlap is fixed at 50%.
     std::size_t segment_length = 0;
 };
+// Minimum one-frame workspace, excluding the prepared input and cached plans.
+long double frf_workspace_bytes(std::size_t samples,std::size_t responses,const FrfOptions& options);
 
 // File/GUI-independent pair, still on the acquisition timeline.
 struct FrfInput {

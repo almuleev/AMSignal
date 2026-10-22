@@ -238,6 +238,10 @@ std::shared_ptr<const PreparedFrf> prepare_frf_batch(FrfBatchInput input,const s
             if(!std::isfinite(values[i])) {prepared->response_errors[c]=FrfError::MissingValues;break;}
         }
     }
+    if(prepared->memory_reservation) {
+        if(!prepared->memory_reservation->shrink_to(prepared->resident_bytes))throw FrfSourceFailure(FrfError::ResourceLimit);
+        prepared->memory_reservation->mark_resident();
+    }
     return prepared;
 }
 
@@ -249,7 +253,8 @@ std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,co
     p->response_errors.resize(source.responses,FrfError::None);
     std::shared_ptr<FrfBatchInput> memory;
     const long double required=1024.0L*1024+source.expected_samples*(source.responses+1.0L)*8;
-    if(source.expected_samples && required<=resources.cache_memory_bytes && resources.budget) {
+    if(source.expected_samples && required<=resources.cache_memory_bytes && resources.budget &&
+       required+resources.working_memory_bytes<=std::min<std::uint64_t>(resources.memory_bytes,resources.budget->available())) {
         auto admission=resources.budget->reserve(static_cast<std::uint64_t>(required));
         if(admission)try {
             memory=std::make_shared<FrfBatchInput>();memory->references.resize(1);memory->responses.resize(source.responses);
@@ -311,6 +316,7 @@ std::shared_ptr<const PreparedFrf> prepare_frf_stream(const FrfSource& source,co
         p->resident_bytes=memory->references[0].capacity()*8;
         for(const auto& c:memory->responses)p->resident_bytes+=c.capacity()*8;
         p->memory_reservation->shrink_to(p->resident_bytes);
+        p->memory_reservation->mark_resident();
     } else {out.close();if(!out)throw FrfSourceFailure(FrfError::ResourceLimit);}
     if(reference_error!=FrfError::None) {m.error=reference_error;return p;}
     if(m.source_count<4) {m.error=FrfError::TooShort;return p;}

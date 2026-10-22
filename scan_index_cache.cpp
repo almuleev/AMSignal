@@ -176,6 +176,7 @@ CachedScanIndex scan_index_cached(const std::filesystem::path& original,std::sha
         current(path,expected,cancel);
         if(result.index->memory_bytes()>limit || (reservation && !reservation->shrink_to(result.index->memory_bytes())))
             fail(RecordingError::ResourceLimit,"Scan index exceeded its admission.");
+        if(reservation)reservation->mark_resident();
         result.index->memory_reservation=std::move(reservation);return result;
     }catch(const std::bad_alloc&){fail(RecordingError::ResourceLimit,"Insufficient memory for scan index.");}
 }
