@@ -16,7 +16,6 @@
 #include <vector>
 
 #include "analysis.hpp"
-#include "gpu_fft.hpp"
 #include "frf_analysis.hpp"
 #include "lvm_parser.hpp"
 #include "minmax_index.hpp"
@@ -33,13 +32,12 @@ struct Options {
     std::size_t parse_participants=0;
     bool stream_input=false;
     bool direct=false;
-    lvm::ComputeBackend backend=lvm::ComputeBackend::Auto;
 };
 
 void usage(const char* program) {
     std::cout << "Usage: " << program
               << " [--samples N] [--responses N] [--repeats N] [--input FILE]"
-                 " [--parse-participants N] [--stream-input] [--frf-direct] [--backend auto|cpu|gpu]\n"
+                 " [--parse-participants N] [--stream-input] [--frf-direct]\n"
               << "\n"
               << "Measures synthetic uniform signals for FFT, H1/FRF and MinMaxIndex.\n"
               << "--input additionally measures parsing of an existing LVM/TXT/CSV file.\n";
@@ -69,12 +67,6 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--parse-participants") options.parse_participants = parse_size(require_value("--parse-participants"),"--parse-participants");
         else if (arg == "--stream-input") options.stream_input=true;
         else if (arg == "--frf-direct") options.direct=true;
-        else if(arg=="--backend") {
-            const std::string value=require_value("--backend");
-            if(value=="cpu")options.backend=lvm::ComputeBackend::Cpu;
-            else if(value=="gpu")options.backend=lvm::ComputeBackend::Gpu;
-            else if(value!="auto")throw std::runtime_error("Invalid backend");
-        }
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); std::exit(0); }
         else throw std::runtime_error("Unknown option: " + arg);
     }
@@ -144,7 +136,6 @@ void print_result(const char* label, double milliseconds) {
 int main(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
-        lvm::set_compute_backend(options.backend);
         const lvm::Dataset fft_input = make_fft_input(options.samples);
         const lvm::FrfBatchInput frf_input = make_frf_input(fft_input, options.responses);
         lvm::FrfOptions frf_options;
@@ -192,8 +183,6 @@ int main(int argc, char** argv) {
         }
 
         lvm::Spectrum spectrum;
-        const double fft_cold=median_milliseconds(1,[&]{spectrum=lvm::compute_spectrum(fft_input,0);});
-        std::cout<<"FFT first call: "<<fft_cold<<" ms\n";
         const double fft_ms = median_milliseconds(options.repeats, [&] {
             spectrum = lvm::compute_spectrum(fft_input, 0);
             if (!spectrum.ok) throw std::runtime_error(spectrum.error);
@@ -201,8 +190,6 @@ int main(int argc, char** argv) {
         print_result("FFT all channels", fft_ms);
 
         lvm::FrfBatchResult frf;
-        const double frf_cold=median_milliseconds(1,[&]{frf=lvm::analyze_frf_batch(frf_input,frf_options);});
-        std::cout<<"FRF first call: "<<frf_cold<<" ms\n";
         const double frf_ms = median_milliseconds(options.repeats, [&] {
             frf = lvm::analyze_frf_batch(frf_input, frf_options);
             if (!frf.ok) throw std::runtime_error(lvm::frf_error_text(frf.error));
@@ -230,9 +217,6 @@ int main(int argc, char** argv) {
             if (!(range.first <= range.second)) throw std::runtime_error("Invalid min/max range");
         });
         print_result("MinMaxIndex build + query", index_ms);
-        const auto gpu=lvm::gpu_fft_status();
-        std::cout<<"GPU: "<<gpu.device<<"; driver: "<<gpu.driver<<"; "<<gpu.detail
-                 <<"; batches: "<<gpu.gpu_batches<<"; calibrations: "<<gpu.calibrations<<"\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Benchmark failed: " << error.what() << "\n";

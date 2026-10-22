@@ -12,7 +12,6 @@
 #include "gui_side_panel.hpp"
 #include "gui_settings.hpp"
 #include "gui_analysis_source.hpp"
-#include "gpu_fft.hpp"
 
 namespace gui {
 
@@ -268,9 +267,6 @@ void sync_menu() {
     chk(IDM_MODE_TIME, (g.mode == AnalysisMode::Time));
     chk(IDM_MODE_FREQ, (g.mode == AnalysisMode::FFT));
     chk(IDM_MODE_FRF, g.mode == AnalysisMode::FRF);
-    chk(IDM_COMPUTE_AUTO,lvm::compute_backend()==lvm::ComputeBackend::Auto);
-    chk(IDM_COMPUTE_CPU,lvm::compute_backend()==lvm::ComputeBackend::Cpu);
-    chk(IDM_COMPUTE_GPU,lvm::compute_backend()==lvm::ComputeBackend::Gpu);
     chk(IDM_VISMOOTH, g.visual_smooth);
     chk(IDM_CURVE_SYMBOLS, g.distinguish_curves);
     chk(IDM_CHANNEL_LEGEND, g.show_channel_legend);
@@ -410,12 +406,6 @@ HMENU make_menu() {
 
     const HMENU settings = CreatePopupMenu();
     append_menu_item_owner_draw(settings, IDM_SETTINGS, text(L"General settings", L"Общие настройки"));
-    const HMENU compute=CreatePopupMenu();
-    append_menu_item_owner_draw(compute,IDM_COMPUTE_AUTO,text(L"Auto",L"Авто"));
-    append_menu_item_owner_draw(compute,IDM_COMPUTE_CPU,L"CPU");
-    append_menu_item_owner_draw(compute,IDM_COMPUTE_GPU,text(L"GPU (CPU fallback)",L"GPU (с резервом CPU)"));
-    append_menu_item_owner_draw(compute,IDM_COMPUTE_INFO,text(L"Computation status…",L"Состояние вычислений…"));
-    append_menu_popup_owner_draw(settings,compute,text(L"FFT / FRF computation",L"Вычисления FFT / АЧХ"));
     append_menu_popup_owner_draw(bar, settings, text(L"Settings", L"Настройки"));
 
     const HMENU help = CreatePopupMenu();

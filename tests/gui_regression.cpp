@@ -17,6 +17,8 @@
 #include "../gui_layout.hpp"
 #include "../gui_export.hpp"
 #include "../gui_export_metadata.hpp"
+#include "../gui_project_state.hpp"
+#include "../gui_project_results.hpp"
 #include "../gui_ids.hpp"
 #include "../gui_loading.hpp"
 #include "../gui_loading_drop.hpp"
@@ -45,7 +47,6 @@
 #include "../gui_source_export.hpp"
 #include "../disk_spectrum.hpp"
 #include "../analysis_executor.hpp"
-#include "../gpu_fft.hpp"
 using namespace gui;
 #include <iostream>
 #include <stdexcept>
@@ -303,7 +304,128 @@ void frf_project_roundtrip() {
     require(!g.show_channel_legend && g.frf.inputs.empty(),"legacy project remains readable");
 }
 
+void project_workspace_roundtrip() {
+    std::vector<double> t(1024),x(1024),y(1024);
+    for(std::size_t i=0;i<t.size();++i) {t[i]=i/1024.;x[i]=std::sin(2*std::acos(-1.)*32*t[i]);y[i]=3*x[i];}
+    reset_document({"input","output"},t,{x,y});
+    // Non-binary endpoints catch accidental 12-digit rounding of the interval.
+    set_fft_window(.123456789012345,.876543210987654);
+    compute_spectrum_from_current_source();require(g.spec_valid,"workspace fixture computes FFT");
+    g.frf.inputs={0};g.frf.outputs={1};g.frf.options.segment_length=128;
+    require(ensure_current_frf(),"workspace fixture computes FRF");
+    g.win_start=.234567890123456;g.win_end=.654321098765432;g.freq_start=20;g.freq_end=100;
+    g.annotations_locked=true;g.playhead=.456789012345678;g.playhead_active=true;
+    const auto fft=g.spec.amp;const auto transfer=g.frf.result.common().transfer;
+    const auto time_start=g.win_start,time_end=g.win_end,playhead=g.playhead;
+    auto path=std::filesystem::absolute(test_dir/"workspace.AMSig");
+    const auto open=[&](lvm::Dataset data) {
+        lvm::drop_duplicate_time_channels(data,data.raw_time);
+        require(apply_loaded_dataset(std::move(data),path.wstring(),false,0,false),"actual loading restores workspace after processing");
+    };
+    for(auto mode:{AnalysisMode::Time,AnalysisMode::FFT,AnalysisMode::FRF}) {
+        set_mode(mode);
+        require(save_project_file(path.wstring()),"workspace project saves in every analysis mode");
+        auto data=lvm::read_lvm_file(path);require(data.ok && !data.frequency_axis,"project saved in FFT remains original time samples");
+        open(std::move(data));
+        require(g.mode==mode && g.annotations_locked && g.playhead_active && !g.playing,"mode, annotation lock and paused playback cursor restore");
+        require(g.win_start==time_start && g.win_end==time_end && g.playhead==playhead,"workspace coordinates round-trip without precision loss");
+        require(g.spec_valid,"completed FFT restores even while the Time plot is active");
+        require(g.spec.amp==fft,"cached FFT restores bit-exact amplitudes");
+        require(g.frf.result.ok,"completed FRF restores even while the Time plot is active");
+        const auto& actual=g.frf.result.common();require(actual.transfer.size()==transfer.size(),"cached complex H retains every bin");
+        for(std::size_t k=0;k<actual.valid.size();++k)if(actual.valid[k])require(actual.transfer[k]==transfer[k],"cached complex H restores bit-exact values");
+        near(g.freq_start,20,"FFT lower viewing limit survives opening and mode switches");
+        near(g.freq_end,100,"FFT upper viewing limit survives opening and mode switches");
+    }
+    set_mode(AnalysisMode::Time);require(save_project_file(path.wstring()),"Time workspace saves for cache fallback scenarios");
+    const auto original=lvm::read_lvm_file(path);
+    auto damaged=original;
+    for(auto& comment:damaged.export_comments)if(comment.rfind("checksum=",0)==0)comment="checksum=0";
+    open(std::move(damaged));
+    require(!g.spec_valid && !g.frf.result.ok && g.mode==AnalysisMode::Time && g.annotations_locked,"corrupt cache does not lose workspace or original samples");
+    require(ensure_current_spectrum() && ensure_current_frf(),"corrupt cache falls back to full calculation");
+    auto stale=original;
+    for(auto& comment:stale.export_comments)if(comment=="global=x")comment="global=2*x";
+    open(std::move(stale));require(!g.spec_valid && !g.frf.result.ok && g.global_formula==L"2*x","cache from other numerical settings is rejected");
+    open(original);
+    // Disk preflight must skip an oversized result without trying to read it.
+    auto oversized=std::make_shared<lvm::DiskSpectrum>();oversized->bins=4*1024*1024;g.spec.disk=oversized;
+    std::ostringstream compact;write_project_results(compact,"\n");
+    require(compact.str().find("[analysis_cache]")!=std::string::npos && compact.str().size()<4*1024*1024,"oversized disk FFT leaves compact FRF cache available");
+    auto no_cache=original;bool cache=false;
+    no_cache.export_comments.erase(std::remove_if(no_cache.export_comments.begin(),no_cache.export_comments.end(),[&](const std::string& line) {
+        if(line=="[analysis_cache]")cache=true;
+        const bool remove=cache;if(line=="[analysis_cache_end]")cache=false;return remove;
+    }),no_cache.export_comments.end());
+    for(auto& line:no_cache.export_comments)if(line=="mode=time")line="mode=fft";
+    open(no_cache);
+    require(g.mode==AnalysisMode::FFT && g.spec_valid,"workspace without cache calculates the saved active mode");
+    near(g.freq_start,20,"fresh FFT keeps restored lower limit");near(g.freq_end,100,"fresh FFT keeps restored upper limit");
+    g.main=CreateWindowExW(0,L"STATIC",L"Project background restore",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(g.main!=nullptr,"background workspace fixture has a message target");
+    open(std::move(no_cache));
+    require(g.spec_pending && g.spec_restore_view_pending,"cache-free project preserves FFT viewport while worker runs");
+    std::optional<lvm::SpectrumWorker::Result> result;
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    while(!result && std::chrono::steady_clock::now()<deadline) {result=g_spectrum_worker.take_result();if(!result)Sleep(1);}
+    require(result && result->generation==g.spec_generation,"background project FFT publishes the current generation");
+    apply_spectrum_result(std::move(result->spectrum));
+    require(g.spec_valid && !g.spec_restore_view_pending,"background FFT completes saved viewport restoration");
+    near(g.freq_start,20,"async FFT keeps lower viewing limit");near(g.freq_end,100,"async FFT keeps upper viewing limit");
+    require(start_async_scan_task(path.wstring(),false),"project opens through the bounded source path");
+    g_load_worker.join();MSG scan{};
+    require(PeekMessageW(&scan,g.main,WM_APP_ASYNC_SCAN_DONE,WM_APP_ASYNC_SCAN_DONE,PM_REMOVE)!=FALSE,"source project metadata arrives");
+    handle_loading_message(g.main,scan.message,scan.wParam,scan.lParam);
+    require(g.ds.rows()==2 && g.recording_rows==t.size() && g.overview.render_enabled,"project fixture uses full source bounds and a two-row seed");
+    require(g.mode==AnalysisMode::Time && g.spec_valid && g.frf.result.ok,"bounded source restores complete cached analyses before entering a mode");
+    require(g.win_start==time_start && g.win_end==time_end && g.playhead==playhead,"source setup does not overwrite saved workspace");
+    cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};DestroyWindow(g.main);g.main=nullptr;
+    const auto start=g.win_start,end=g.win_end;const auto mode=g.mode;
+    restore_project_workspace({"document_kind=amsignal_project","[workspace]","time_start=nan","time_end=inf","fft_start=100","fft_end=20","playhead=nan","mode=unknown"});
+    require(g.win_start==start && g.win_end==end && g.mode==mode,"invalid workspace values leave valid state intact");
+    auto legacy=original;bool workspace=false;
+    legacy.export_comments.erase(std::remove_if(legacy.export_comments.begin(),legacy.export_comments.end(),[&](const std::string& line) {
+        if(line=="[workspace]")workspace=true;
+        else if(!line.empty() && line.front()=='[')workspace=false;
+        return workspace;
+    }),legacy.export_comments.end());
+    open(std::move(legacy));
+    require(g.mode==AnalysisMode::Time && !g.annotations_locked && !g.playhead_active,"legacy project opens with default workspace");
+    reset_document({"input","output"},t,{x,y});
+    require(save_project_file(path.wstring()),"project without prior FFT saves");open(lvm::read_lvm_file(path));set_mode(AnalysisMode::FFT);
+    require(g.spec_valid && g.freq_start==0 && g.freq_end==g.spec.nyquist,"first FFT of a Signal-only project uses its full natural frequency range");
+    set_mode(AnalysisMode::Time);
+    g.main=CreateWindowExW(0,L"STATIC",L"Processed project restore",WS_POPUP,0,0,1000,650,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    require(g.main!=nullptr,"processed source fixture uses the production worker path");
+    g.global_formula=L"1.234567890123456*x";g.channel_formulas={L"x",L"2*x"};
+    g.noise_threshold_enabled=true;g.noise_threshold_min=3.123456789012345;g.noise_threshold_max=200.1234567890123;
+    rebuild_formula_cache_from_state();recompute_transforms_from_state();compute_spectrum_from_current_source();
+    if(g.spec_pending) {
+        result.reset();const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(!result && std::chrono::steady_clock::now()<end) {result=g_spectrum_worker.take_result();if(!result)Sleep(1);}
+        require(result && result->generation==g.spec_generation,"filtered source FFT finishes before project save");
+        apply_spectrum_result(std::move(result->spectrum));
+    }
+    g.frf.inputs={0};g.frf.outputs={1};g.frf.options.segment_length=128;
+    ensure_current_frf();const auto frf_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    while(g.frf.pending && std::chrono::steady_clock::now()<frf_deadline) {poll_frf_result();if(g.frf.pending)Sleep(1);}
+    require(g.spec_valid && g.frf.result.ok,"processed project computes formula and filter results");
+    const auto processed=g.spec.amp;
+    path=std::filesystem::absolute(test_dir/"workspace-filtered.AMSig");
+    require(save_project_file(path.wstring()),"processed workspace saves");open(lvm::read_lvm_file(path));
+    require(g.spec_valid && g.spec.amp==processed && g.frf.result.ok && g.noise_threshold_enabled,"processed numerical settings match their cached results after loading");
+    require(move_resident_recordings_to_disk() && g.overview.render_enabled,"processed project demotes to a replayable source");
+    const auto streamed_path=std::filesystem::absolute(test_dir/"workspace-streamed.AMSig");
+    require(save_project_file(streamed_path.wstring()),"source writer streams a project with workspace and completed analyses");
+    auto streamed=lvm::read_lvm_file(streamed_path);lvm::drop_duplicate_time_channels(streamed,streamed.raw_time);
+    require(streamed.ok && streamed.channels[0]==x && streamed.channels[1]==y,"streamed project keeps original samples rather than cached processed amplitudes");
+    require(apply_loaded_dataset(std::move(streamed),streamed_path.wstring(),false,0,false),"streamed workspace opens through the actual loader");
+    require(g.mode==AnalysisMode::Time && g.spec_valid && g.spec.amp==processed && g.frf.result.ok,"streamed project restores ready processed results without calculation");
+    cancel_recording_overview();g_overview_worker.trim_cache(0);g.overview={};DestroyWindow(g.main);g.main=nullptr;
+}
+
 void processing() {
+    project_workspace_roundtrip();
     frf_project_roundtrip();
     reset_document({"same","same"},{0,.1,.2,.3,.4,.5,.6,.7},{{1,0,-1,0,1,0,-1,0},{2,0,-2,0,2,0,-2,0}});
     compute_spectrum_for_window(0,.7,false);
@@ -397,12 +519,12 @@ void fft_recording_recovery() {
     require(g.spec_valid && !g.spec_pending && !g.spec_fit_pending, "GUI accepts background FFT result");
     near(g.freq_end, g.spec.nyquist, "background FFT restores full frequency axis");
 
-    // Re-entering the same source window must still request a fresh axis fit.
+    // Returning to an unchanged source retains the user's frequency viewport.
     set_mode(AnalysisMode::FFT);
     require(g.spec_valid && g.freq_end > 100, "entering FFT fits the frequency axis");
     set_mode(AnalysisMode::Time); g.freq_end = 1;
     set_mode(AnalysisMode::FFT);
-    near(g.freq_end, g.spec.nyquist, "re-entering FFT restores full frequency axis");
+    near(g.freq_end, 1, "re-entering unchanged FFT preserves its frequency viewport");
 
     ExportOptions opts; opts.selected_range = ExportRangeMode::Whole; opts.include_hidden_channels = true;
     const auto path = test_dir / "recovered_fft.csv";
@@ -2779,23 +2901,6 @@ void document_source_and_resources() {
     save_runtime_settings_now();
     WritePrivateProfileStringW(L"resources",L"manual_mib",L"-1",g_config_path.c_str());load_runtime_settings();
     require(g.resource_policy.automatic && g.resource_policy.manual_mib==2048,"invalid saved memory policy falls back to Auto");
-    const auto gpu_before=lvm::gpu_fft_status().attempted;
-    const auto revision=g.numerical_revision;
-    g.menu=make_menu();
-    for(const auto mode:{lvm::ComputeBackend::Cpu,lvm::ComputeBackend::Gpu,lvm::ComputeBackend::Auto}) {
-        const auto command=mode==lvm::ComputeBackend::Cpu ? IDM_COMPUTE_CPU :
-            mode==lvm::ComputeBackend::Gpu ? IDM_COMPUTE_GPU : IDM_COMPUTE_AUTO;
-        handle_commands_message(g.main,WM_COMMAND,command,0);
-        require(lvm::compute_backend()==mode && (GetMenuState(g.menu,command,MF_BYCOMMAND)&MF_CHECKED),
-                "computation preference command updates the checked menu item");
-        save_runtime_settings_now();lvm::set_compute_backend(lvm::ComputeBackend::Cpu);load_runtime_settings();
-        require(lvm::compute_backend()==mode,"computation preference persists through INI reload");
-    }
-    require(g.numerical_revision==revision && lvm::gpu_fft_status().attempted==gpu_before,
-            "computation preference does not alter numerical input or initialize a GPU on the UI thread");
-    WritePrivateProfileStringW(L"resources",L"compute_backend",L"99",g_config_path.c_str());load_runtime_settings();
-    require(lvm::compute_backend()==lvm::ComputeBackend::Auto,"invalid saved computation preference falls back to Auto");
-    DestroyMenu(g.menu);g.menu=nullptr;lvm::set_compute_backend(lvm::ComputeBackend::Cpu);save_runtime_settings_now();
     // A request retains a descriptor after the document itself is closed.
     auto independent=lvm::RecordingSource::from_file(path,{0,2},{1,2});
     g.recording_source=independent;std::weak_ptr<const lvm::RecordingSource> weak=independent;

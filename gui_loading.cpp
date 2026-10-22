@@ -8,6 +8,7 @@
 #include "gui_commands.hpp"
 #include "gui_settings_window.hpp"
 #include "gui_export_metadata.hpp"
+#include "gui_project_state.hpp"
 #include "gui_dialogs.hpp"
 #include "gui_documents.hpp"
 #include "gui_ids.hpp"
@@ -178,6 +179,8 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
     stop_play();
     g.playhead = g.data_t0;
     g.playhead_active = false;
+    g.annotations_locked = false;
+    g.spec_restore_view_pending = false;
     g.auto_y = true;   // a fresh file starts on auto-fit
     if (g.mode != AnalysisMode::Time) {
         // New files should open in the time plot by default.
@@ -216,6 +219,8 @@ bool apply_loaded_dataset(lvm::Dataset ds, const std::wstring& wpath,
     const std::filesystem::path source_path(wpath);
     g.source_path = wpath;
     g.project_path = lstrcmpiW(source_path.extension().c_str(), kProjectExtension) == 0 ? wpath : L"";
+    // Scanned sources finish establishing their full bounds below.
+    if (!source_preview) restore_project_workspace(g.ds.export_comments);
     SetWindowTextW(g.main, (std::wstring(g_str->app_title) + L" — " + g.file_name).c_str());
     add_recent_file(wpath);
     if (g.welcome_wnd) { ShowWindow(g.welcome_wnd, SW_HIDE); show_ui_controls(); }
@@ -250,6 +255,7 @@ bool apply_scanned_recording(AsyncScanResult& result) {
     g.stitch_time_gaps=false;
     g.cached_global_gap_step_ready=false;
     g.approx_dt=result.source_rows>1 ? (result.range_end-result.range_start)/(result.source_rows-1) : 1;
+    restore_project_workspace(g.ds.export_comments);
     synchronize_overview_viewport(1024);
     sync_menu();set_status();invalidate_plot();return true;
 }

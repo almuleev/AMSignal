@@ -7,6 +7,7 @@
 #include "gui_state.hpp"
 #include "gui_theme.hpp"
 #include "gui_text.hpp"
+#include "gui_project_state.hpp"
 
 namespace gui {
 namespace {
@@ -116,7 +117,8 @@ void write_export_metadata(std::ostream& out,
     write_export_key_value(out, L"range_mode", export_range_mode_key(opts.selected_range), line_end);
     write_export_key_value(out, L"range_source", actual_selected_range ? L"selected" : L"visible", line_end);
     write_export_key_value(out, L"data_mode", export_processing_mode_key(opts.apply_processing_to_data), line_end);
-    write_export_key_value(out, L"plot_mode", (g.mode == AnalysisMode::FFT) ? L"frequency" : L"time", line_end);
+    const bool frequency_data = opts.save_mode == ExportSaveMode::Project ? g.ds.frequency_axis : g.mode == AnalysisMode::FFT;
+    write_export_key_value(out, L"plot_mode", frequency_data ? L"frequency" : L"time", line_end);
     write_export_key_value(out, L"range_start", format_edit_number(range_start), line_end);
     write_export_key_value(out, L"range_end", format_edit_number(range_end), line_end);
     if (!g.file_name.empty()) {
@@ -140,8 +142,8 @@ void write_export_metadata(std::ostream& out,
         write_export_key_value(out, L"show_channel_legend", g.show_channel_legend ? L"1" : L"0", line_end);
         write_export_key_value(out, L"show_marker_values", g.show_marker_values ? L"1" : L"0", line_end);
         write_export_key_value(out,L"analysis_interval",g.fft_window_active ? L"1" : L"0",line_end);
-        write_export_key_value(out,L"analysis_start",format_edit_number(g.fft_window_start),line_end);
-        write_export_key_value(out,L"analysis_end",format_edit_number(g.fft_window_end),line_end);
+        write_export_key_value(out,L"analysis_start",to_w(numfmt(g.fft_window_start)),line_end);
+        write_export_key_value(out,L"analysis_end",to_w(numfmt(g.fft_window_end)),line_end);
         write_export_key_value(out, L"vertical_pan", g.vertical_pan ? L"1" : L"0", line_end);
         write_export_key_value(out, L"snap_to_data", g.snap_to_data ? L"1" : L"0", line_end);
         write_export_key_value(out, L"stitch_time_gaps", g.stitch_time_gaps ? L"1" : L"0", line_end);
@@ -170,6 +172,7 @@ void write_export_metadata(std::ostream& out,
     if(opts.include_graph_settings && !g.ds.frequency_axis) {
         write_export_comment(out,L"[frf_settings]",line_end);
         write_export_key_value(out,L"estimator",g.frf.options.estimator==lvm::FrfEstimator::H1 ? L"h1" : L"direct",line_end);
+        write_export_key_value(out,L"window",L"hann_periodic",line_end);
         write_export_key_value(out,L"segment_length",std::to_wstring(g.frf.options.segment_length),line_end);
         write_export_key_value(out,L"remove_mean",g.frf.options.remove_mean ? L"1" : L"0",line_end);
         write_export_key_value(out,L"reference_threshold",to_w(numfmt(g.frf.options.reference_threshold)),line_end);
@@ -190,13 +193,15 @@ void write_export_metadata(std::ostream& out,
         write_export_comment(out,L"",line_end);
     }
 
+    if (opts.save_mode == ExportSaveMode::Project) write_project_workspace(out, line_end);
+
     if (opts.include_filter_settings) {
         write_export_comment(out, L"[filter_settings]", line_end);
         write_export_key_value(out, L"enabled", g.noise_threshold_enabled ? L"1" : L"0", line_end);
         write_export_key_value(out, L"mode", export_filter_mode_key(g.noise_threshold_mode), line_end);
         write_export_key_value(out, L"topology", export_filter_topology_key(g.noise_threshold_topology), line_end);
-        write_export_key_value(out, L"low_cutoff", format_optional_edit_number(g.noise_threshold_min), line_end);
-        write_export_key_value(out, L"high_cutoff", format_optional_edit_number(g.noise_threshold_max), line_end);
+        write_export_key_value(out, L"low_cutoff", std::isfinite(g.noise_threshold_min) ? to_w(numfmt(g.noise_threshold_min)) : L"", line_end);
+        write_export_key_value(out, L"high_cutoff", std::isfinite(g.noise_threshold_max) ? to_w(numfmt(g.noise_threshold_max)) : L"", line_end);
         write_export_comment(out, L"", line_end);
     }
 

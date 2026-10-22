@@ -49,9 +49,6 @@ $files = @(
     "README_EN.md",
     "README_RU.md",
     "LICENSE",
-    "third_party\README.md",
-    "third_party\VkFFT\LICENSE",
-    "third_party\OpenCL-Headers\LICENSE",
     "docs\CODE_SIGNING.md"
 )
 

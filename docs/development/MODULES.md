@@ -14,7 +14,6 @@
 | Обзор и точный Snap | `recording_overview`, `overview_worker`: индекс/view/разрывы; `gui_overview`, `gui_overview_render`, `gui_overview_snap`: связь с UI |
 | Общий дисковый кэш | `disk_cache`: LRU, owner-lock, quota, lease; `scan_index_cache`: AMSCIDX1 и managed overview; `gui_recording_cache`: каталог GUI |
 | RAM и исполнение | `resource_budget.hpp`, `analysis_resources.hpp`, `analysis_executor.hpp` (общий пул парсера/FFT/FRF); `gui_resources`: бюджет загрузки |
-| Необязательные GPU-вычисления | `gpu_fft`: динамический OpenCL, FP64 VkFFT, ограниченные планы и калибровка Auto; `third_party/README.md`: версии и лицензии зависимостей |
 | Загрузка и отмена | `gui_loading`, `gui_loading_drop`: очередь файлов, прогресс, drop и приём результата |
 | Документы | `gui_documents`, `gui_state`: App/DocumentState, переключение/закрытие, готовые кэши и контрольная точка сохранения |
 | Сообщения и команды | `gui_main`: маршрутизация WndProc; `gui_window`: окна и контролы; `gui_commands`: меню, кнопки, смена режима |
@@ -29,7 +28,7 @@
 | Графики и шкалы | `gui_render`, `gui_render_data`, `minmax_index.hpp`, `gui_time_axis`; `gap_details`, `gui_gap_details`: карточки разрывов |
 | Мышь и навигация | `gui_input`, `gui_navigation`, `gui_playback`; FRF-ввод также в `gui_frf_render` |
 | Разметка и её отображение | `gui_state_history`: Undo/Redo; `gui_marker_values`: карточка текущего маркера; `gui_guide_dialog`: точная линия |
-| Экспорт | `gui_export`, `gui_source_export`, `gui_export_metadata`, `export_helpers`, `data_io` |
+| Экспорт | `gui_export`, `gui_source_export`, `gui_export_metadata`, `export_helpers`, `data_io`; `gui_project_state` — рабочее состояние проекта, `gui_project_results` — необязательные готовые результаты |
 | Настройки и горячие клавиши | `gui_settings`, `gui_settings_window`, `gui_settings_hotkeys`, `gui_hotkeys` |
 | Общие диалоги и оформление | `gui_dialogs`, `gui_controls`, `gui_theme`, `gui_text`; `gui_welcome`: стартовый экран |
 | Меню, статус и ID | `gui_menu`, `gui_status`, `gui_ids.hpp`, `gui_platform.hpp` |

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.17.11 (2026-10-22)
+
+GPU-вычисления полностью исключены из рабочего кода, настроек и поставки;
+CPU-ускорения парсера и FFT/АЧХ сохранены. Исходники GPU v0.17.10,
+зависимости и лицензии сохранены в отдельном историческом ZIP.
+Проекты `.AMSig` восстанавливают режим, диапазоны Signal/FFT, блокировку
+разметки, положение курсора на паузе и компактные готовые результаты FFT/АЧХ.
+Кэш ограничен 4 MiB до кодирования, проверяется и не обязателен для открытия.
+Сохранение проекта не запускает новый расчёт и не подменяет исходные отсчёты.
+Границы анализа и параметры фильтра сохраняются без округления для полей ввода.
+[Полный журнал RU/EN](docs/releases/v0.17.11.md).
+
+GPU computation has been removed from active code, settings and packaging;
+the CPU parser and FFT/FRF improvements remain. The complete v0.17.10 GPU
+implementation is retained in a historical source ZIP. AMSig projects restore
+the active mode, Signal/FFT viewports, annotation lock, paused playhead and
+optional completed FFT/FRF results. The validated cache is limited to 4 MiB
+before encoding and is never required to open a project. Saving preserves
+original samples without starting a calculation. Analysis and filter parameters
+retain their numerical precision. See the complete bilingual notes above.
+
 ## v0.17.8-cpu.2 (2026-10-21)
 
 Проекты сохраняют условия повторного расчёта АЧХ: роли каналов, H1/Direct,

@@ -18,7 +18,6 @@
 #include "disk_spectrum.hpp"
 #include "analysis_executor.hpp"
 #include "fft.hpp"
-#include "gpu_fft.hpp"
 #include "frf_analysis.hpp"
 #include "frf_worker.hpp"
 #include "frf_stream.hpp"
@@ -2073,126 +2072,7 @@ void test_adaptive_analysis() {
     }
 }
 
-void test_gpu_fft() {
-    using Complex=std::complex<double>;
-    lvm::set_compute_backend(lvm::ComputeBackend::Cpu);
-    std::vector<Complex> signal(65536);
-    for(std::size_t j=0;j<signal.size();++j)signal[j]={std::sin(j*.17)+.3*std::cos(j*.031),std::sin(j*.041)};
-    const auto original=signal;
-    const auto before=lvm::gpu_fft_status();
-    check(!lvm::try_gpu_fft({&signal}) && signal==original,"CPU preference leaves GPU input untouched");
-    check(lvm::gpu_fft_status().attempted==before.attempted,"CPU mode never initializes OpenCL");
-    lvm::set_compute_backend(lvm::ComputeBackend::Gpu);
-    std::atomic<bool> cancel{true};bool caught=false;
-    try {lvm::try_gpu_fft({&signal},&cancel);}catch(const std::runtime_error&){caught=true;}
-    check(caught && signal==original,"cancelled GPU submission publishes no result");
-    check(!lvm::try_gpu_fft({nullptr}),"null GPU batch rejected");
-    std::vector<Complex> small(16);
-    check(!lvm::try_gpu_fft({&small}) && !lvm::gpu_fft_candidate(16,1),"small jobs stay on CPU");
-    lvm::AnalysisResources limited;limited.budget=std::make_shared<lvm::MemoryBudget>();
-    limited.budget->configure(1024,0,1024);
-    check(!lvm::try_gpu_fft({&signal},nullptr,limited) && signal==original && !limited.budget->reserved(),
-          "GPU scratch admission failure preserves CPU input and releases reservation");
-    for(std::size_t n:{std::size_t(65536),std::size_t(65538),std::size_t(65537)}) {
-        std::vector<std::vector<Complex>> input(2,std::vector<Complex>(n));
-        for(std::size_t c=0;c<2;++c)for(std::size_t j=0;j<n;++j)
-            input[c][j]={std::sin(j*.17+c)+.3*std::cos(j*.031),std::cos(j*.041+c)};
-        const auto raw=input;
-        std::vector<std::vector<Complex>> expected;for(const auto& a:input)expected.push_back(lvm::dft(a));
-        lvm::AnalysisResources gpu_resources;
-        if(n==65536)gpu_resources.memory_bytes=2*n*sizeof(Complex); // force independent-channel batching
-        const bool used=lvm::try_gpu_fft({&input[0],&input[1]},nullptr,gpu_resources);
-        if(!used) {
-            check(input==raw,"unavailable GPU preserves every complete batch input");
-            check(!lvm::gpu_fft_status().available,"GPU fallback has an explicit unavailable reason");
-            continue;
-        }
-        double error=0,scale=0;
-        for(std::size_t c=0;c<2;++c)for(std::size_t k=0;k<n;++k) {
-            error=std::max(error,std::abs(input[c][k]-expected[c][k]));
-            scale=std::max(scale,std::abs(expected[c][k]));
-        }
-        check(error<=1e-9*std::max(1.0,scale),"GPU forward FFT agrees for power-of-two, composite and prime lengths");
-    }
-    std::vector<Complex> tiny(65536,Complex{1e-310,0});auto tiny_expected=lvm::dft(tiny);
-    if(lvm::try_gpu_fft({&tiny})) {
-        long double error=0,scale=0;
-        for(std::size_t j=0;j<tiny.size();++j){error=std::max(error,static_cast<long double>(std::abs(tiny[j]-tiny_expected[j])));scale=std::max(scale,static_cast<long double>(std::abs(tiny_expected[j])));}
-        check(error<=1e-9L*scale,"FP64 GPU retains subnormal inputs and small physical amplitudes");
-    } else check(tiny.front()==Complex{1e-310,0},"small-amplitude GPU fallback preserves subnormal samples");
-    const auto info=lvm::gpu_fft_status();
-    std::printf("GPU validation: %s; %s; %s; batches=%zu\n",info.device.c_str(),info.driver.c_str(),info.detail.c_str(),info.gpu_batches);
-    if(std::getenv("AMSIGNAL_REQUIRE_GPU"))check(info.available && info.gpu_batches>0,"required real GPU executed validated transforms");
-    // Exercise production preparation, scaling, H1/Direct and zero response masks.
-    lvm::Dataset ds;ds.ok=true;ds.names={"reference","response"};ds.time.resize(65538);ds.channels.resize(2);
-    for(auto& c:ds.channels)c.resize(ds.time.size());
-    std::mt19937 random(701);std::uniform_real_distribution<double> noise(-1,1);
-    for(std::size_t i=0;i<ds.time.size();++i) {ds.time[i]=i/2048.;ds.channels[0][i]=noise(random);ds.channels[1][i]=2*ds.channels[0][i]+.01*noise(random);}
-    lvm::set_compute_backend(lvm::ComputeBackend::Cpu);const auto cpu_spectrum=lvm::compute_spectrum(ds,0);
-    lvm::set_compute_backend(lvm::ComputeBackend::Gpu);const auto gpu_spectrum=lvm::compute_spectrum(ds,0);
-    bool same=cpu_spectrum.ok && gpu_spectrum.ok && cpu_spectrum.freqs==gpu_spectrum.freqs;
-    for(std::size_t c=0;c<cpu_spectrum.amp.size() && same;++c)for(std::size_t k=0;k<cpu_spectrum.amp[c].size();++k)
-        same=same && std::abs(cpu_spectrum.amp[c][k]-gpu_spectrum.amp[c][k])<1e-8;
-    check(same,"GPU production spectrum preserves frequencies and one-sided amplitude scaling");
-    lvm::FrfBatchInput batch;batch.time=ds.time;batch.references={ds.channels[0]};
-    batch.responses={ds.channels[1],std::vector<double>(ds.time.size(),0)};
-    for(auto estimator:{lvm::FrfEstimator::H1,lvm::FrfEstimator::Direct}) {
-        lvm::FrfOptions options;options.estimator=estimator;options.segment_length=4096;
-        lvm::set_compute_backend(lvm::ComputeBackend::Cpu);const auto cpu=lvm::analyze_frf_batch(batch,options);
-        lvm::set_compute_backend(lvm::ComputeBackend::Gpu);const auto gpu=lvm::analyze_frf_batch(batch,options);
-        same=cpu.ok && gpu.ok && cpu.responses.size()==gpu.responses.size();
-        for(std::size_t c=0;c<cpu.responses.size() && same;++c) {
-            const auto& a=cpu.responses[c];const auto& b=gpu.responses[c];
-            same=a.valid==b.valid && a.coherence_valid==b.coherence_valid && a.frequencies==b.frequencies &&
-                a.segment_length==b.segment_length && a.averages==b.averages;
-            for(std::size_t k=0;k<a.valid.size() && same;++k) {
-                if(a.valid[k])same=std::abs(a.transfer[k]-b.transfer[k])<1e-8;
-                if(a.coherence_valid[k])same=same && std::abs(a.coherence[k]-b.coherence[k])<1e-8;
-                if(a.reference_amplitude_valid[k])same=same && std::abs(a.reference_amplitude[k]-b.reference_amplitude[k])<1e-8;
-            }
-        }
-        check(same,"GPU H1/Direct preserves complex H, coherence, masks, zero response and reference amplitude");
-    }
-    lvm::set_compute_backend(lvm::ComputeBackend::Auto);signal=original;
-    if(lvm::try_gpu_fft({&signal})) {
-        auto expected=lvm::dft(original);double error=0,scale=0;
-        for(std::size_t i=0;i<signal.size();++i){error=std::max(error,std::abs(signal[i]-expected[i]));scale=std::max(scale,std::abs(expected[i]));}
-        check(error<1e-9*std::max(1.0,scale),"Auto publishes exactly one forward transform");
-    } else check(signal==original,"Auto CPU fallback preserves input");
-    if(lvm::gpu_fft_status().available) {
-        // First independent FFT finishes on GPU; the second fails, and the
-        // remaining raw signals must be transformed exactly once on CPU.
-        lvm::set_compute_backend(lvm::ComputeBackend::Gpu);
-        std::vector<std::vector<Complex>> work(3,original),expected(3,lvm::dft(original));
-        lvm::AnalysisResources constrained;constrained.memory_bytes=2*original.size()*sizeof(Complex);
-#ifdef _WIN32
-        _putenv_s("AMSIGNAL_GPU_TEST_FAIL_AFTER","1");
-#else
-        setenv("AMSIGNAL_GPU_TEST_FAIL_AFTER","1",1);
-#endif
-        const auto gpu_before_failure=lvm::gpu_fft_status().gpu_batches;
-        const bool done=lvm::try_gpu_fft({&work[0],&work[1],&work[2]},nullptr,constrained);
-#ifdef _WIN32
-        _putenv_s("AMSIGNAL_GPU_TEST_FAIL_AFTER","");
-#else
-        unsetenv("AMSIGNAL_GPU_TEST_FAIL_AFTER");
-#endif
-        bool correct=done;
-        for(std::size_t c=0;c<work.size();++c)for(std::size_t k=0;k<work[c].size();++k)
-            correct=correct && std::abs(work[c][k]-expected[c][k])<1e-7;
-        const auto failure=lvm::gpu_fft_status();
-        check(correct && failure.gpu_batches==gpu_before_failure+1 && !failure.available &&
-              failure.detail.find("Injected")!=std::string::npos,
-              "failure after one GPU batch finishes remaining signals on CPU without double FFT");
-    }
-    lvm::set_compute_backend(lvm::ComputeBackend::Cpu);
-}
-
 int main(int argc, char** argv) {
-    lvm::set_compute_backend(lvm::ComputeBackend::Cpu);
-    if(argc>1 && std::string(argv[1])=="--gpu") {
-        test_gpu_fft();std::printf("\n%d GPU checks, %d failure(s)\n",g_checks,g_failures);return g_failures ? 1 : 0;
-    }
     if(argc>1 && std::string(argv[1])=="--edge") {
         std::setbuf(stdout,nullptr);
         test_edge_resources();std::printf("\n%d edge checks, %d failure(s)\n",g_checks,g_failures);return g_failures==0 ? 0 : 1;
@@ -2275,7 +2155,6 @@ int main(int argc, char** argv) {
     test_adaptive_analysis();
     test_edge_resources();
 
-    test_gpu_fft();
     std::printf("\n%d checks, %d failure(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

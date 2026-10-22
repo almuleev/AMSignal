@@ -11,13 +11,10 @@ RELEASE_VERSION := $(patsubst v%,%,$(VERSION))
 CPPFLAGS += -DAPP_VERSION=\"$(VERSION)\"
 
 # Parser/analysis library shared by the CLI and the tests.
-LIB_SRC  := lvm_parser.cpp recording_source.cpp recording_overview.cpp overview_worker.cpp disk_cache.cpp scan_index_cache.cpp fft.cpp gpu_fft.cpp analysis.cpp disk_spectrum.cpp data_io.cpp filter_engine.cpp spectrum_worker.cpp frf_analysis.cpp frf_stream.cpp frf_worker.cpp
-CPPFLAGS += -Ithird_party/OpenCL-Headers -Ithird_party/VkFFT/vkFFT
-CXXFLAGS += -Ithird_party/OpenCL-Headers -Ithird_party/VkFFT/vkFFT
-GPU_HEADERS := $(shell find third_party -name '*.h') third_party/NOTICES.inc
+LIB_SRC  := lvm_parser.cpp recording_source.cpp recording_overview.cpp overview_worker.cpp disk_cache.cpp scan_index_cache.cpp fft.cpp analysis.cpp disk_spectrum.cpp data_io.cpp filter_engine.cpp spectrum_worker.cpp frf_analysis.cpp frf_stream.cpp frf_worker.cpp
 APP_SRC  := main.cpp $(LIB_SRC)
 APP_OBJ  := $(APP_SRC:.cpp=.o)
-HDRS     := $(wildcard *.hpp) $(GPU_HEADERS)
+HDRS     := $(wildcard *.hpp)
 GUI_PARTS := $(wildcard gui_*.cpp)
 GUI_SOURCES := $(GUI_PARTS) $(LIB_SRC) export_helpers.cpp formula_engine.cpp gap_details.cpp
 GUI_OBJECTS := $(patsubst %.cpp,.build/make_gui/%.o,$(GUI_SOURCES))
@@ -36,7 +33,6 @@ ifeq ($(OS),Windows_NT)
     GUI_BIN  := AMSignal-$(RELEASE_VERSION)-x64.exe
     CLI_RES  := .build/cli/version.o
 else
-    LDFLAGS += -ldl
     BIN      := $(TARGET)
     TEST_BIN := tests/run_tests
     GUI_BIN  := AMSignal-$(RELEASE_VERSION)

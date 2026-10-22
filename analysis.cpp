@@ -13,7 +13,6 @@
 #include <thread>
 
 #include "fft.hpp"
-#include "gpu_fft.hpp"
 #include "sampling.hpp"
 #include "analysis_executor.hpp"
 
@@ -23,8 +22,7 @@ namespace {
 // Jobs never recursively submit work; the caller also processes channels.
 
 std::size_t admit_spectrum(std::size_t n,std::size_t channels,bool imported,
-                          const AnalysisResources& resources,Spectrum& result,const std::atomic<bool>* cancel,
-                          std::size_t* admitted_bytes=nullptr) {
+                          const AnalysisResources& resources,Spectrum& result,const std::atomic<bool>* cancel) {
     const auto hardware=std::thread::hardware_concurrency();
     std::size_t participants=n>=65536 && channels>1 && !imported
         ? std::min({channels,std::size_t(32),std::size_t(hardware ? hardware : 1),
@@ -46,7 +44,6 @@ std::size_t admit_spectrum(std::size_t n,std::size_t channels,bool imported,
         while(participants>1 && fixed+participants*scratch>available)--participants;
         const auto required=fixed+participants*scratch;
         if(required>available) {result.error="FFT resources are insufficient. Increase the data budget or select a smaller range.";return 0;}
-        if(admitted_bytes)*admitted_bytes=static_cast<std::size_t>(std::ceil(required));
         if(!resources.budget)return participants;
         result.memory_reservation=resources.budget->reserve(static_cast<std::uint64_t>(std::ceil(required)));
         if(result.memory_reservation)return participants;
@@ -128,11 +125,8 @@ Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<
         spec.error = "FFT is too large; select a smaller time window.";
         return spec;
     }
-    std::size_t admitted_bytes=0;
-    const auto participants=admit_spectrum(end,ds.channels.size(),false,resources,spec,cancel,&admitted_bytes);
+    const auto participants=admit_spectrum(end,ds.channels.size(),false,resources,spec,cancel);
     if(!participants)return spec;
-    auto gpu_resources=resources;
-    gpu_resources.memory_bytes=resources.memory_bytes>admitted_bytes ? resources.memory_bytes-admitted_bytes : 0;
 
     // Validate the axis and estimate its typical spacing. Small clock jitter and
     // rounded timestamps are common in real measurements, not a reason to fail.
@@ -235,10 +229,8 @@ Spectrum compute_spectrum(const Dataset& ds, int max_samples, const std::atomic<
         const double mean = total / static_cast<double>(n);
         for (auto& s : sig) s -= mean;  // remove DC
 
-        if(!try_gpu_fft({&sig},cancel,gpu_resources)) {
-            if((sig.size() & (sig.size()-1))==0)fft_radix2(sig,false,cancel);
-            else sig=dft(sig,cancel);
-        }
+        if((sig.size() & (sig.size()-1))==0)fft_radix2(sig,false,cancel);
+        else sig=dft(sig,cancel);
         std::vector<double> amp(half + 1);
         const double interior_scale = 2.0 / static_cast<double>(n);
         const double edge_scale = 1.0 / static_cast<double>(n);

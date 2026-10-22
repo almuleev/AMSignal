@@ -178,6 +178,8 @@ struct DocumentState {
     bool spec_attempted = false;
     bool spec_pending = false;
     bool spec_fit_pending = false;
+    // A project viewport waits for the first FFT result, including async work.
+    bool spec_restore_view_pending = false;
     std::uint64_t spec_generation = 0;
     std::vector<int> spec_channel_indices;
     std::vector<char> spec_visible_state;

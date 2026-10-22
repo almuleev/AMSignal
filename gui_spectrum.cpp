@@ -59,6 +59,7 @@ void clear_spectrum_cache_state() {
     ++g.spec_generation;
     g.spec_pending = false;
     g.spec_attempted = false;
+    g.spec_restore_view_pending = false;
     g.spec_valid = false;
     g.spec = lvm::Spectrum{};
     g.spec_channel_indices.clear();
@@ -81,7 +82,12 @@ void apply_spectrum_result(lvm::Spectrum spectrum) {
     g.spec_valid = g.spec.ok;
     g.spec_pending = false;
     refresh_spec_channel_indices();
-    if (g.spec_valid && g.spec_fit_pending) { g.freq_start = 0; g.freq_end = g.spec.nyquist; }
+    if (g.spec_valid && g.spec_restore_view_pending) {
+        g.freq_start = std::clamp(g.freq_start, 0.0, g.spec.nyquist);
+        g.freq_end = std::clamp(g.freq_end, 0.0, g.spec.nyquist);
+        if (g.freq_end <= g.freq_start) { g.freq_start = 0; g.freq_end = g.spec.nyquist; }
+        g.spec_restore_view_pending = false;
+    } else if (g.spec_valid && g.spec_fit_pending) { g.freq_start = 0; g.freq_end = g.spec.nyquist; }
     g.spec_fit_pending = false;
     trim_document_analysis_caches();
     sync_frequency_view_controls();

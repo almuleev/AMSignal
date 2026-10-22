@@ -1,6 +1,5 @@
 #include "frf_analysis.hpp"
 #include "fft.hpp"
-#include "gpu_fft.hpp"
 #include "sampling.hpp"
 #include "frf_stream.hpp"
 #include "analysis_executor.hpp"
@@ -171,7 +170,6 @@ FrfBatchResult compute_shared_frf(const PreparedFrf& input,
             }
             // Independent (segment, channel) transforms share no writable arrays.
             // Accumulation below retains acquisition order and exact arithmetic.
-            const bool gpu_candidate=gpu_fft_candidate(L,tile_used*(response_count+1));
             const auto job=[&](std::size_t task) {
                 const auto index=task/(response_count+1),c=task%(response_count+1);
                 auto& frame=frames[index];
@@ -188,22 +186,11 @@ FrfBatchResult compute_shared_frf(const PreparedFrf& input,
                     if((j & 65535)==0)check_cancel(cancel);
                     a[j]=static_cast<double>((raw[c][index*hop+j]-mean)*window[j]);
                 }
-                if(!gpu_candidate)transform(a,cancel);
+                transform(a,cancel);
             };
             const auto tasks=tile_used*(response_count+1);
             if(participants<=1 || !analysis_executor().run(tasks,participants,job))
                 for(std::size_t i=0;i<tasks;++i)job(i);
-            std::vector<std::vector<std::complex<double>>*> signals;
-            for(std::size_t i=0;i<tile_used;++i)for(std::size_t c=0;c<=response_count;++c)
-                if(!c || batch.responses[c-1].error==FrfError::None)signals.push_back(&frames[i].spectra[c]);
-            auto gpu_resources=resources;gpu_resources.max_participants=participants;
-            const auto admitted=static_cast<std::size_t>(std::ceil(fixed+tile_capacity*frame_bytes+participants*scratch));
-            gpu_resources.memory_bytes=cap>admitted ? cap-admitted : 0;
-            if(gpu_candidate && !try_gpu_fft(signals,cancel,gpu_resources)) {
-                const auto fft_job=[&](std::size_t i){transform(*signals[i],cancel);};
-                if(participants<=1 || !analysis_executor().run(signals.size(),participants,fft_job))
-                    for(std::size_t i=0;i<signals.size();++i)fft_job(i);
-            }
         }
         auto& frame=frames[segment-tile_base];
         auto& x=frame.spectra[0];peak=std::max(peak,frame.peak);
@@ -356,7 +343,7 @@ FrfResult compute_frf(const FrfSamples& s, const FrfOptions& options, const std:
             x[j]=static_cast<double>((s.reference[at+j]-mx)*window[j]);
             y[j]=static_cast<double>((s.response[at+j]-my)*window[j]);
         }
-        if(!try_gpu_fft({&x,&y},cancel)) {transform(x,cancel);transform(y,cancel);}
+        transform(x,cancel); transform(y,cancel);
         for (std::size_t k=0;k<bins;++k) {
             if ((k & 0xffff)==0) check_cancel(cancel);
             if (!finite_complex(x[k]) || !finite_complex(y[k])) return fail(FrfError::Overflow);
