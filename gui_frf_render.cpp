@@ -217,7 +217,7 @@ void draw_frf(HDC dc, const RECT& p) {
     if (!g.frf.result.ok || g.frf.pending) {
         RECT r = p; InflateRect(&r, -24, -24);
         std::wstring text = frf_status_text();
-        if (text.empty()) text = g_str == &kEn ? L"Select reference channels and responses, then Calculate." : L"Выберите опоры и отклики и нажмите «Рассчитать».";
+        if (text.empty()) text = g_str == &kEn ? L"Select reference channels and responses, then Calculate." : L"Выберите узлы крепления и отклики и нажмите «Рассчитать».";
         DrawTextW(dc, text.c_str(), -1, &r, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
         SelectObject(dc, previous_font); g.vvalid = false; return;
     }
@@ -445,7 +445,7 @@ void draw_frf(HDC dc, const RECT& p) {
     RestoreDC(dc,reference_saved);
 
     RECT reference_title{reference_plot.left,coefficient_plot.bottom+4,reference_plot.right,reference_plot.top-3};
-    const std::wstring reference_text=(g_str==&kEn ? L"Mean reference amplitude: " : L"Ср. опора: ")+g.frf.input_name;
+    const std::wstring reference_text=(g_str==&kEn ? L"Mean reference amplitude: " : L"Средний сигнал узлов крепления: ")+g.frf.input_name;
     SetTextColor(dc,g_theme->axis_text);
     if (g.frf.show_reference_amplitude) DrawTextW(dc,reference_text.c_str(),-1,&reference_title,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     // A small familiar grip keeps the splitter discoverable without competing
@@ -618,7 +618,7 @@ void draw_frf(HDC dc, const RECT& p) {
                                   g_str==&kEn ? L"FRF magnitude |H|" : L"АЧХ |H|");
     if (g.frf.show_reference_amplitude) {
         draw_vertical_left_axis_label(reference_plot,
-            (g_str==&kEn ? L"Mean ref. amplitude, " : L"Ср. опора, ") + vertical_axis_unit());
+            (g_str==&kEn ? L"Mean ref. amplitude, " : L"Ср. сигнал, ") + vertical_axis_unit());
     }
     // The shared outer rows also stay clear of the FRF legend and divider.
     draw_user_axis_names(dc, p, AnalysisMode::FRF);

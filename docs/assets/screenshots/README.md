@@ -12,6 +12,12 @@ The rendering procedure and build information below apply to the synthetic demon
 
 ## Build / Сборка
 
+Exception: `frf-ru.png` was regenerated on 2026-10-24 from the local `v0.17.13-dirty` working code after the Russian reference-channel terminology changed to «Узлы крепления». The same native scene recipe and synthetic input were used, with N=32768, L=2048 and K=31. The other images retain the snapshot described below. This is a local documentation rendering, not verification of a published release.
+
+Исключение: `frf-ru.png` заново получен 24.10.2026 из локального рабочего кода `v0.17.13-dirty` после переименования каналов в «Узлы крепления». Сохранены нативный способ отрисовки, синтетические данные и параметры N=32768, L=2048, K=31. Остальные изображения относятся к описанному ниже снимку. Это локальная отрисовка документации, а не проверка опубликованного релиза.
+
+SHA-256: renderer / EXE `b0486cce029d954ca3807d5231e7f9de08760804e7e78e13cbd06576bff4ed93`; `frf-ru.png` `f5ee5aebff57731f9f45d7c3e18c75934232531eb46714054887b2a314b87e52`.
+
 Local working snapshot based on `v0.17.5-1-g2660b65-dirty`, captured 2026-10-17. This is a documentation rendering of the working code, not a capture or verification of the published v0.17.5 executable. No production source was changed for these images.
 
 Локальный рабочий снимок на основе `v0.17.5-1-g2660b65-dirty`, изображения от 17.10.2026. Это отрисовка рабочего кода для документации, а не съёмка или проверка опубликованного EXE v0.17.5. Для кадров производственные исходники не менялись.
@@ -32,7 +38,7 @@ SHA-256 of the compiled `gui_render.cpp` source / исходника отрис�
 
 [`examples/demo-signals.txt`](../../../examples/demo-signals.txt): 32,768 samples, Fs=1024 Hz, two references and two responses. The references measure common broadband/multitone excitation with separate small noise additions; response models use their arithmetic mean. [Generator and scene recipe](../../../examples/README.md).
 
-32 768 отсчётов, Fs=1024 Гц, две опоры и два отклика. Опоры измеряют общее широкополосное/многотональное возбуждение с отдельными малыми добавками шума; вход моделей отклика — их арифметическое среднее. [Генератор и рецепт сцен](../../../examples/README_RU.md).
+32 768 отсчётов, Fs=1024 Гц, два канала узлов крепления и два отклика. Каналы узлов крепления содержат общее широкополосное/многотональное возбуждение с отдельными малыми добавками шума; вход моделей отклика — арифметическое среднее этих сигналов. [Генератор и рецепт сцен](../../../examples/README_RU.md).
 
 SHA-256:
 
@@ -49,7 +55,7 @@ Each scene has matching `-en.png` and `-ru.png` versions / Каждая сцен
 | `signal` | Dark, all four channels, 1–1.5 s / Тёмная тема, четыре канала, 1–1,5 с |
 | `light` | Same source and view, light theme / Тот же источник и вид, светлая тема |
 | `fft` | Entire recording, 0–210 Hz / Вся запись, 0–210 Гц |
-| `frf` | Two references, two responses, H1, L=2048, K=31, 50% overlap, 0.5 Hz spacing, no smoothing, view 5–210 Hz / Две опоры, два отклика, те же параметры |
+| `frf` | Two references, two responses, H1, L=2048, K=31, 50% overlap, 0.5 Hz spacing, no smoothing, view 5–210 Hz / Два узла крепления, два отклика, те же параметры |
 | `measurements` | Response B, three sample points, one marker, t=1.10 s and U=0.5 V guides / Три точки на отсчётах, маркер и две направляющие |
 | `processing` | Enabled 45 Hz Butterworth low-pass / Включён ФНЧ Баттерворта 45 Гц |
 | `interval` | Selected 1.15–1.35 s inside a 1–1.5 s view / Участок 1,15–1,35 с внутри вида 1–1,5 с |
@@ -60,7 +66,7 @@ Each scene has matching `-en.png` and `-ru.png` versions / Каждая сцен
 
 FRF export metadata confirmed N=32768, L=2048, K=31, two reference indices and two response indices. The recording is synthetic; these images do not constitute a physical experiment, release certification or a performance benchmark.
 
-Метаданные экспорта FRF подтверждают N=32768, L=2048, K=31, два индекса опор и два индекса откликов. Запись синтетическая; изображения не являются физическим экспериментом, аттестацией выпуска или замером производительности.
+Метаданные экспорта FRF подтверждают N=32768, L=2048, K=31, два индекса узлов крепления и два индекса откликов. Запись синтетическая; изображения не являются физическим экспериментом, аттестацией выпуска или замером производительности.
 
 ## Open-document menu / Меню открытых документов
 

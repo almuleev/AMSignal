@@ -22,7 +22,7 @@
 | Участок анализа | `gui_analysis_source`: общий вход FFT/FRF; `gui_analysis_range`: границы, drag, Snap и Undo |
 | FFT | `analysis`, `fft`, `sampling.hpp`, `disk_spectrum`; `spectrum_worker`, `gui_spectrum`: фон и кэш |
 | FRF | `frf_analysis`: H1/Direct/coherence; `frf_stream`: подготовленный RAM/дисковый вход; `frf_worker`: отменяемое задание |
-| Панель и графики FRF | `gui_frf`: роли, метод/L, запуск; `gui_frf_render`: КД, средняя опора, частотная навигация и Snap |
+| Панель и графики FRF | `gui_frf`: роли, метод/L, запуск; `gui_frf_render`: КД, средний сигнал узлов крепления, частотная навигация и Snap |
 | Формулы и фильтр | `formula_engine`, `filter_engine`; `gui_processing`: применение, ревизии и кэши |
 | Обработка источника | `gui_recording_processing`: блочная обработка; `gui_filter_state_cache`: постоянные continuation фильтра |
 | Графики и шкалы | `gui_render`, `gui_render_data`, `minmax_index.hpp`, `gui_time_axis`; `gap_details`, `gui_gap_details`: карточки разрывов |

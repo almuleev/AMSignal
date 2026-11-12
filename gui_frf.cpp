@@ -214,7 +214,7 @@ LRESULT CALLBACK FrfPanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 std::wstring frf_error_text(lvm::FrfError e) {
     if (e==lvm::FrfError::InvalidChannels) return tr(
         L"Select at least one Support and Response without shared channels.",
-        L"Выберите хотя бы одну опору и отклик без общих каналов.");
+        L"Выберите хотя бы один канал узла крепления и один отклик без общих каналов.");
     if (g_str == &kEn) return to_w(lvm::frf_error_text(e));
     switch (e) {
         case lvm::FrfError::None: return L"";
@@ -856,13 +856,13 @@ void layout_frf_panel() {
 void refresh_frf_controls(bool repopulate) {
     refresh_frf_channel_names();
     if (!g.frf_panel) return;
-    label(InputLabel, tr(L"Reference channels", L"Опоры"));
+    label(InputLabel, tr(L"Reference channels", L"Узлы крепления"));
     label(OutputLabel, tr(L"Responses", L"Отклики"));
     label(Processing, tr(L"Apply channel processing", L"Применять обработку каналов"));
     label(EstimatorLabel, tr(L"Estimator",L"Метод")); label(LengthLabel,tr(L"L (0 = Auto)", L"L (0 = Авто)"));
     label(SmoothingLabel, tr(L"Smoothing",L"Сглаживание"));
     label(AxisScaleLabel, tr(L"Frequency axis",L"Ось частоты"));
-    label(Reference, tr(L"Show mean reference",L"Показывать среднюю опору"));
+    label(Reference, tr(L"Show mean reference",L"Сигнал узлов крепления"));
     const auto& r=g.frf.result.common();
     wchar_t details[192]{};
     if (r.segment_length && !g.frf.pending) {
@@ -880,7 +880,7 @@ void refresh_frf_controls(bool repopulate) {
         label(Length,std::to_wstring(g.frf.options.segment_length).c_str());
     }
     const auto button_text=[&](const std::vector<int>& channels,bool reference) {
-        if (channels.empty()) return std::wstring(reference ? tr(L"Choose reference channels…",L"Выбрать опоры…") :
+        if (channels.empty()) return std::wstring(reference ? tr(L"Choose reference channels…",L"Выбрать узлы крепления…") :
             tr(L"Choose responses…",L"Выбрать отклики…"));
         std::wstring names;
         for (int channel:channels) {
