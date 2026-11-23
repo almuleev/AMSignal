@@ -1881,14 +1881,18 @@ void test_disk_spectrum() {
         check(actual.ok && actual.disk && actual.freqs.empty() && actual.amp.empty(),"disk FFT retains no full resident output");
         check(actual.n==expected.n && actual.sample_dt==expected.sample_dt && actual.source_start==expected.source_start && actual.source_end==expected.source_end &&
             actual.resampled==expected.resampled && actual.gaps_ignored==expected.gaps_ignored && actual.names==expected.names,"disk FFT exact sampling metadata");
-        double maximum=0;bool grid=true;std::vector<double> values;
+        double maximum=0,disk_peak=0;std::size_t disk_peak_bin=0;bool grid=true;std::vector<double> values;
         for(std::size_t c=0;c<channels;++c)for(std::size_t at=0;at<actual.bin_count();at+=8192){const auto count=std::min<std::size_t>(8192,actual.bin_count()-at);
             actual.read_amplitudes(c,at,count,values);
-            for(std::size_t k=0;k<count;++k){maximum=std::max(maximum,std::fabs(values[k]-expected.amp[c][at+k]));grid=grid && actual.frequency(at+k)==expected.freqs[at+k];}}
+            for(std::size_t k=0;k<count;++k){maximum=std::max(maximum,std::fabs(values[k]-expected.amp[c][at+k]));grid=grid && actual.frequency(at+k)==expected.freqs[at+k];
+                if(c==0 && values[k]>disk_peak){disk_peak=values[k];disk_peak_bin=at+k;}}}
         check(grid,"disk FFT exact frequency grid");check(maximum<=1e-12,"disk FFT amplitude error within measured bound");
         const auto points=actual.disk->display_points(0,0,actual.bin_count(),512);
         double peak=0;for(auto p:points)peak=std::max(peak,p.second);
-        check(peak==*std::max_element(expected.amp[0].begin(),expected.amp[0].end()),"disk display preserves the exact peak");
+        // Display must preserve its own stored peak exactly; independent FFT paths
+        // are compared with the numerical tolerance above, not bitwise equality.
+        check(peak==disk_peak && std::find(points.begin(),points.end(),std::make_pair(disk_peak_bin,disk_peak))!=points.end(),
+              "disk display preserves the exact peak and bin");
         check(resources.budget->reserved()<2ULL*1024*1024,"disk FFT releases scratch and keeps only bounded overview allowance");
         std::printf("disk FFT N=%d, channels=%zu: %.3f s, max abs error %.17g\n",n,channels,
             std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count(),maximum);
